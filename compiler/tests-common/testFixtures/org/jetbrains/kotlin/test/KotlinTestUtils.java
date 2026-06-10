@@ -59,6 +59,7 @@ import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import static com.intellij.util.CurrentJavaVersion.currentJavaVersion;
 import static org.jetbrains.kotlin.test.InTextDirectivesUtils.IGNORE_BACKEND_DIRECTIVE_PREFIXES;
 import static org.jetbrains.kotlin.test.InTextDirectivesUtils.isIgnoredTarget;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -191,7 +192,7 @@ public class KotlinTestUtils {
         else if (jdkKind == TestJdkKind.FULL_JDK_21) {
             configuration.put(JVMConfigurationKeys.JDK_HOME, KtTestUtil.getJdk21Home());
         }
-        else if (JavaVersion.current().compareTo(JavaVersion.compose(9)) >= 0) {
+        else if (currentJavaVersion().compareTo(JavaVersion.compose(9)) >= 0) {
             configuration.put(JVMConfigurationKeys.JDK_HOME, new File(System.getProperty("java.home")));
         }
 
