@@ -3,12 +3,15 @@ declare namespace JS_TESTS {
     function KtSingleton<T>(): T & (abstract new() => any);
     namespace foo {
         const exportedSuspendLambda: () => Promise<string>;
+        const nullableSuspendLambda: Nullable<() => Promise<string>>;
         function produceSuspendLambda(): (p0: number) => Promise<number>;
         function produceCapturingSuspendLambda(base: number): (p0: number) => Promise<number>;
         function runLambda(callback: (p0: number) => Promise<number>): Promise<number>;
         function runVoidLambda(callback: () => Promise<void>): Promise<void>;
         function chain(a: (p0: number) => Promise<number>, b: (p0: number) => Promise<number>, x: number): Promise<number>;
         function roundTrip(callback: (p0: number) => Promise<number>): (p0: number) => Promise<number>;
+        function genericRoundTrip<T>(callback: (p0: T) => Promise<T>): (p0: T) => Promise<T>;
+        function callNullableSuspendLambda(callback: Nullable<(p0: number) => Promise<string>>, x: number): Promise<Nullable<string>>;
         function callKotlinLambdaFromKotlin(): Promise<number>;
         function produceArrayOfSuspendLambdas(): Array<(p0: number) => Promise<number>>;
         function reduceArrayOfSuspendLambdas(lambdas: Array<(p0: number) => Promise<number>>, start: number): Promise<number>;
@@ -18,6 +21,12 @@ declare namespace JS_TESTS {
         function getSuspendIncRef(): (p0: number) => Promise<number>;
         function callHandlerFromInterface(holder: foo.InterfaceWithSuspendLambdaProp, x: number): Promise<string>;
         function callHandlerFromAbstractClass(holder: foo.AbstractClassWithSuspendLambdaProp, x: number): Promise<string>;
+        function callbackThatThrows(callback: () => Promise<string>): Promise<string>;
+        function throwingSuspendLambda(): Promise<string>;
+        function applyAll(start: number, callbacks: Array<(p0: number) => Promise<number>>): Promise<number>;
+        function withDefaultCallback(x: number, cb?: (p0: number) => Promise<number>): Promise<number>;
+        function produceNestedSuspendLambda(): () => Promise<() => Promise<string>>;
+        function callNestedSuspendLambda(maker: () => Promise<() => Promise<string>>): Promise<string>;
         class LambdaHolder {
             constructor(base: number);
             produceAdder(): (p0: number) => Promise<number>;
