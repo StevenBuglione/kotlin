@@ -1,7 +1,5 @@
 // DUMP_IR_DIFFERENCE: JVM
 //   K/JVM throws actualized java.lang.AssertionError instead of kotlin.AssertionError
-// DUMP_IR_DIFFERENCE: NATIVE
-//   kotlin.AssertionError has parameter `message: kotlin.Any?`, not `message: kotlin.String?`
 
 fun testBreakFor() {
     val xs = IntArray(10) { i -> i }
