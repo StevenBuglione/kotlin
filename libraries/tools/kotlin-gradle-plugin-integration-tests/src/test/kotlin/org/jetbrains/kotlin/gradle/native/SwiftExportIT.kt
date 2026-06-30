@@ -27,6 +27,7 @@ import kotlin.io.path.readText
 import kotlin.io.path.writeText
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 
 @OsCondition(supportedOn = [OS.MAC], enabledOnCI = [OS.MAC])
@@ -805,6 +806,125 @@ class SwiftExportIT : KGPBaseTest() {
                 assertTasksExecuted(":compileSwiftExportMainKotlinIosArm64")
                 assertTasksExecuted(":linkSwiftExportBinaryDebugStaticIosArm64")
                 assertTasksExecuted(":copyDebugSPMIntermediates")
+            }
+        }
+    }
+
+    @OptIn(ExperimentalKotlinGradlePluginApi::class, ExperimentalSwiftExportDsl::class)
+    @DisplayName("KT-80632: a SwiftPM-import cinterop klib is reexported through Swift Export")
+    @GradleTest
+    fun testSwiftPMImportCinteropIsReexportedThroughSwiftExport(
+        gradleVersion: GradleVersion,
+        @TempDir testBuildDir: Path,
+    ) {
+        // Use emptyxcode so that swiftPMDependencies can resolve the local Swift package via xcodebuild.
+        project("emptyxcode", gradleVersion) {
+            val localSwiftPackageRelativePath = "../localSwiftPackage"
+            val localPackageDir = projectPath.resolve(localSwiftPackageRelativePath)
+            val targetName = "LocalSwiftPackage"
+            createLocalSwiftPackage(localPackageDir, packageName = targetName)
+
+            plugins {
+                kotlin("multiplatform")
+            }
+            settingsBuildScriptInjection {
+                settings.rootProject.name = "shared"
+            }
+            buildScriptInjection {
+                project.applyMultiplatform {
+                    iosArm64()
+
+                    // Expose the imported package's Objective-C type in the exported API. This forces Swift Export
+                    // to reexport the `LocalSwiftPackage` module and emit `import LocalSwiftPackage`, which only
+                    // resolves if the generated SPM package depends on the SwiftPM-import synthetic package.
+                    sourceSets.appleMain.get().compileSource(
+                        """
+                            @file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+                            package producer
+                            import swiftPMImport.shared.LocalHelper
+                            fun roundTrip(helper: LocalHelper): LocalHelper = helper
+                        """.trimIndent()
+                    )
+
+                    with(swiftExport) {
+                        configure {
+                            freeCompilerArgs.add("-Xpartial-linkage-loglevel=error")
+                        }
+                    }
+
+                    with(swiftImport) {
+                        localSwiftPackage(
+                            directory = project.layout.projectDirectory.dir(localSwiftPackageRelativePath),
+                            products = listOf(targetName),
+                        )
+                    }
+                }
+            }
+
+            build(
+                ":embedSwiftExportForXcode",
+                environmentVariables = swiftExportEmbedAndSignEnvVariables(testBuildDir)
+            ) {
+                assertTasksExecuted(":cinteropSwiftPMImportIosArm64")
+                assertTasksExecuted(":linkSwiftExportBinaryDebugStaticIosArm64")
+                assertTasksExecuted(":copyDebugSPMIntermediates")
+
+                // The generated SPM manifest must depend on the SwiftPM-import synthetic package and pull in its
+                // umbrella product, so the reexported `import LocalSwiftPackage` resolves when the package is built.
+                val generatedManifest = projectPath.resolve("build/SPMPackage/iosArm64/debug/Package.swift").readText()
+                assertContains(generatedManifest, ".package(path:")
+                assertContains(
+                    generatedManifest,
+                    ".product(name: \"KotlinMultiplatformLinkedPackage\", package: \"swiftImport\")"
+                )
+            }
+        }
+    }
+
+    @OptIn(ExperimentalKotlinGradlePluginApi::class, ExperimentalSwiftExportDsl::class)
+    @DisplayName("KT-80632: Swift Export without swiftPMDependencies emits no cinterop package dependency")
+    @GradleTest
+    fun testSwiftExportWithoutSwiftPMImportHasNoCinteropDependency(
+        gradleVersion: GradleVersion,
+        @TempDir testBuildDir: Path,
+    ) {
+        project("emptyxcode", gradleVersion) {
+            plugins {
+                kotlin("multiplatform")
+            }
+            settingsBuildScriptInjection {
+                settings.rootProject.name = "shared"
+            }
+            buildScriptInjection {
+                project.applyMultiplatform {
+                    iosArm64()
+
+                    sourceSets.appleMain.get().compileSource(
+                        """
+                            package producer
+                            fun greeting(): String = "Hello"
+                        """.trimIndent()
+                    )
+
+                    with(swiftExport) {
+                        configure {
+                            freeCompilerArgs.add("-Xpartial-linkage-loglevel=error")
+                        }
+                    }
+                }
+            }
+
+            build(
+                ":embedSwiftExportForXcode",
+                environmentVariables = swiftExportEmbedAndSignEnvVariables(testBuildDir)
+            ) {
+                // No Swift package imported => the manifest must stay free of any package dependency, confirming the
+                // cinterop reexport wiring only engages for SwiftPM-import klibs.
+                val generatedManifest = projectPath.resolve("build/SPMPackage/iosArm64/debug/Package.swift").readText()
+                assertFalse(
+                    generatedManifest.contains(".package(path:"),
+                    "Expected no SPM package dependency without swiftPMDependencies, but the manifest had one:\n$generatedManifest"
+                )
             }
         }
     }

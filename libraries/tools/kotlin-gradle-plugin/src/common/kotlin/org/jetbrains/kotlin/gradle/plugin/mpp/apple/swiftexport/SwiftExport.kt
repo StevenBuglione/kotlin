@@ -24,6 +24,7 @@ import org.jetbrains.kotlin.gradle.plugin.mpp.apple.swiftexport.internal.SwiftEx
 import org.jetbrains.kotlin.gradle.plugin.mpp.apple.swiftexport.internal.exportedSwiftExportApiConfiguration
 import org.jetbrains.kotlin.gradle.plugin.mpp.apple.swiftexport.internal.normalizedSwiftExportModuleName
 import org.jetbrains.kotlin.gradle.plugin.mpp.apple.swiftexport.tasks.*
+import org.jetbrains.kotlin.gradle.plugin.mpp.apple.swiftimport.whenSwiftPMImportAvailable
 import org.jetbrains.kotlin.gradle.plugin.mpp.internal
 import org.jetbrains.kotlin.gradle.tasks.locateOrRegisterTask
 import org.jetbrains.kotlin.gradle.utils.*
@@ -90,6 +91,17 @@ internal fun Project.registerSwiftExportTask(
         swiftApiLibraryName = swiftApiLibraryName,
         swiftExportTask = swiftExportTask
     )
+
+    target.whenSwiftPMImportAvailable { products ->
+        swiftExportTask.configure { task ->
+            task.cinteropModuleName.set(products.cinteropModuleName)
+            task.cinteropModuleArtifact.fileProvider(products.cinteropKlib)
+        }
+        packageGenerationTask.configure { task ->
+            task.swiftPMImportProductName.set(products.umbrellaProductName)
+            task.swiftPMImportPackageRoot.set(products.syntheticPackageRoot)
+        }
+    }
     val packageBuild = registerSPMPackageBuild(
         taskNamePrefix = taskNamePrefix,
         taskGroup = taskGroup,

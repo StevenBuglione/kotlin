@@ -277,7 +277,7 @@ internal val SwiftImportSetupAction = KotlinProjectSetupAction {
             target.konanTarget,
         )
 
-        val cinteropName = "swiftPMImport"
+        val cinteropName = GenerateSyntheticLinkageImportProject.SWIFT_PM_IMPORT_CINTEROP_NAME
         val targetPlatform = target.konanTarget.applePlatform
         // use sdk for a more conventional name
         val targetSdk = target.konanTarget.appleTarget.sdk
