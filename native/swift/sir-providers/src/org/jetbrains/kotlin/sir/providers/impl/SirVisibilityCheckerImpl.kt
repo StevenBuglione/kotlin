@@ -106,10 +106,10 @@ public class SirVisibilityCheckerImpl(
                 }
             }
             is KaVariableSymbol -> {
-                if (ktSymbol.hasHiddenAccessors)
-                    return@withSessions SirAvailability.Hidden("Property declaration has hidden accessors")
-                else
-                    SirVisibility.PUBLIC
+                val exported = ktSymbol.isExported()
+                if (exported is SirAvailability.Available) {
+                    exported.visibility
+                } else return@withSessions exported
             }
             is KaTypeAliasSymbol -> ktSymbol.expandedType.fullyExpandedType.let {
                 if (it.isPrimitive || it.isNothingType || it.isFunctionType) {
@@ -141,6 +141,11 @@ public class SirVisibilityCheckerImpl(
         }
         if (isInline && typeParameters.any { it.isReified }) {
             unsupportedDeclarationReporter.report(this@isExported, "inline functions with reified type parameters are not supported yet.")
+            return@withSessions false
+        }
+        @OptIn(KaExperimentalApi::class)
+        if (isCompanion) {
+            unsupportedDeclarationReporter.report(this@isExported, "companion blocks and extensions are not supported yet")
             return@withSessions false
         }
         return@withSessions true
@@ -183,6 +188,17 @@ public class SirVisibilityCheckerImpl(
             return@withSessions SirAvailability.Hidden("Some super type isn't available")
         }
 
+        return@withSessions SirAvailability.Available(SirVisibility.PUBLIC)
+    }
+
+    private fun KaVariableSymbol.isExported(): SirAvailability = sirSession.withSessions {
+        if (hasHiddenAccessors) {
+            return@withSessions SirAvailability.Hidden("Property declaration has hidden accessors")
+        }
+        @OptIn(KaExperimentalApi::class)
+        if (isCompanion) {
+            return@withSessions SirAvailability.Hidden("companion blocks and extensions are not supported yet")
+        }
         return@withSessions SirAvailability.Available(SirVisibility.PUBLIC)
     }
 

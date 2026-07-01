@@ -310,6 +310,7 @@ abstract class AbstractSwiftExportTest : ExternalSourceTransformersProvider {
                     "kotlin.native.internal.InternalForKotlinNative", // for uninitialized object instance manipulation, and ExternalRCRef.
                     "-Xbinary=swiftExport=true",
                     "-Xdisable-ir-checkers=IrFieldVisibilityChecker", // triggered by kotlinx.coroutines 1.9.0
+                    "-XXLanguage:+CompanionBlocksAndExtensions",
                 )
             ),
             nominalPackageName = PackageName(testName),
@@ -363,6 +364,6 @@ private fun getUnsupportedDeclarationsReporterKind(configMap: Map<String, String
 }
 
 private fun TestCase.copyAndAddModules(givenModules: Set<TestModule.Given>?): TestCase = TestCase(
-    id = id, kind = kind, modules = modules, freeCompilerArgs = freeCompilerArgs, nominalPackageName = nominalPackageName, checks = checks,
+    id = id, kind = kind, modules = modules, freeCompilerArgs = freeCompilerArgs.plusCompilerArgs(listOf("-XXLanguage:+CompanionBlocksAndExtensions")), nominalPackageName = nominalPackageName, checks = checks,
     extras = extras, fileCheckStage = fileCheckStage, expectedFailure = expectedFailure
 ).apply { initialize(givenModules, null) }
