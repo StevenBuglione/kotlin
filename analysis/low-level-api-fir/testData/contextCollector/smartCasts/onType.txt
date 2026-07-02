@@ -36,7 +36,7 @@ FILE: [ResolvedTo(IMPORTS)] onType.kt
         call#<Unit>()
     }
     public final inline [ResolvedTo(STATUS)] fun <reified [ResolvedTo(STATUS)] T : R|kotlin/Any|> call(): R|kotlin/Unit| { LAZY_BLOCK }
-    public final? [ResolvedTo(SUPER_TYPES)] interface Foo : R|kotlin/Any| {
+    public abstract [ResolvedTo(STATUS)] interface Foo : R|kotlin/Any| {
         public? final? [ResolvedTo(RAW_FIR)] fun process(): Boolean
 
     }
