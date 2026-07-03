@@ -44,6 +44,7 @@ import org.jetbrains.kotlin.analysis.low.level.api.fir.api.resolveToFirSymbolOfT
 import org.jetbrains.kotlin.analysis.low.level.api.fir.resolver.AllCandidatesResolver
 import org.jetbrains.kotlin.analysis.low.level.api.fir.util.errorWithFirSpecificEntries
 import org.jetbrains.kotlin.analysis.low.level.api.fir.util.findStringPlusSymbol
+import org.jetbrains.kotlin.analysis.low.level.api.fir.util.doLookupLocally
 import org.jetbrains.kotlin.config.LanguageFeature
 import org.jetbrains.kotlin.fir.*
 import org.jetbrains.kotlin.fir.analysis.diagnostics.FirErrors
@@ -173,6 +174,10 @@ internal class KaFirResolver(
                 else -> KaContextSensitiveResolutionNotAvailableImpl
             }
         }
+
+    override fun lookupLocally(simpleNameExpression: KtSimpleNameExpression): KtNamedDeclaration? {
+        return simpleNameExpression.doLookupLocally()
+    }
 
     private fun FirElement.isResolvedThroughContextSensitiveResolution(): Boolean = when (this) {
         is FirResolvedTypeRef -> resolvedSymbolOrigin == FirResolvedSymbolOrigin.ContextSensitive

@@ -128,4 +128,6 @@ public interface KaInternalsResolver {
     public fun usesContextSensitiveResolution(reference: KtReference): Boolean
 
     public fun usesContextSensitiveResolution(simpleNameExpression: KtSimpleNameExpression): Boolean
+
+    public fun lookupLocally(simpleNameExpression: KtSimpleNameExpression): KtNamedDeclaration?
 }

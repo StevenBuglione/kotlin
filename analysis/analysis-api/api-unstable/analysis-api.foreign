@@ -53,6 +53,7 @@ org/jetbrains/kotlin/psi/KtFunctionType
 org/jetbrains/kotlin/psi/KtInstanceExpressionWithLabel
 org/jetbrains/kotlin/psi/KtLabelReferenceExpression
 org/jetbrains/kotlin/psi/KtNameReferenceExpression
+org/jetbrains/kotlin/psi/KtNamedDeclaration
 org/jetbrains/kotlin/psi/KtNamedFunction
 org/jetbrains/kotlin/psi/KtNullableType
 org/jetbrains/kotlin/psi/KtObjectDeclaration

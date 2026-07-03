@@ -782,3 +782,20 @@ public fun KtDelegatedSuperTypeEntry.resolveSymbol(): KaClassifierSymbol? {
     @OptIn(KaImplementationDetail::class)
     return internals.resolver.resolveSymbol(this)
 }
+
+/**
+ * Performs local, PSI-only name lookups. This does not trigger any additional
+ * resolution steps.
+ *
+ * This method guarantees that if it returns a result, it will be the PSI corresponding to
+ * the same single symbol that [tryResolveSymbols] would return (ie. it is sound). It is, however,
+ * not guaranteed to always return a result (ie. it is not complete).
+ *
+ * @see tryResolveSymbols
+ */
+@KaExperimentalApi
+context(session: KaSession)
+public fun KtSimpleNameExpression.lookupLocally(): KtNamedDeclaration? {
+    @OptIn(KaImplementationDetail::class)
+    return internals.resolver.lookupLocally(this)
+}
