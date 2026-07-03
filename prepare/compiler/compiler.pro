@@ -378,6 +378,9 @@
 -keepclassmembers class com.intellij.util.messages.impl.PluginListenerDescriptor {
     public *;
 }
+-keepclassmembers class com.intellij.util.messages.impl.PluginListenerDescriptorKt {
+    public *;
+}
 -keep class com.intellij.openapi.extensions.ExtensionPointName {
     java.util.List getExtensionList(com.intellij.openapi.extensions.AreaInstance);
     **[] getExtensions();
