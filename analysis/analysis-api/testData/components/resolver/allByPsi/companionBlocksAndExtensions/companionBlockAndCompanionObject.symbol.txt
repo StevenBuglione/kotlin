@@ -7,6 +7,7 @@ KtPackageDirective(43,55): 'package test'
 KtNameReferenceExpression(51,55): 'test'
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: NotAvailable
+  managedLocalResolve: false
   KaSymbolResolutionSuccess:
     symbols = [
       test
@@ -81,6 +82,7 @@ KtDotQualifiedExpression(206,213): 'C.foo()'
 KtNameReferenceExpression(206,207): 'C'
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: NotAvailable
+  managedLocalResolve: false
   KaSymbolResolutionSuccess:
     symbols = [
       test/C
@@ -95,6 +97,7 @@ KtCallExpression(208,213): 'foo()'
 KtNameReferenceExpression(208,211): 'foo'
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: NotAvailable
+  managedLocalResolve: false
   KaSymbolResolutionSuccess:
     symbols = [
       test/C.foo(): kotlin.String
@@ -112,6 +115,7 @@ KtDotQualifiedExpression(218,223): 'C.bar'
 KtNameReferenceExpression(218,219): 'C'
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: NotAvailable
+  managedLocalResolve: false
   KaSymbolResolutionSuccess:
     symbols = [
       test/C
@@ -120,6 +124,7 @@ KtNameReferenceExpression(218,219): 'C'
 KtNameReferenceExpression(220,223): 'bar'
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: NotAvailable
+  managedLocalResolve: false
   KaSymbolResolutionSuccess:
     symbols = [
       val bar: kotlin.String
@@ -137,6 +142,7 @@ KtDotQualifiedExpression(229,240): 'C.Companion'
 KtNameReferenceExpression(229,230): 'C'
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: NotAvailable
+  managedLocalResolve: false
   KaSymbolResolutionSuccess:
     symbols = [
       test/C
@@ -145,6 +151,7 @@ KtNameReferenceExpression(229,230): 'C'
 KtNameReferenceExpression(231,240): 'Companion'
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: NotAvailable
+  managedLocalResolve: false
   KaSymbolResolutionSuccess:
     symbols = [
       test/C.Companion
@@ -159,6 +166,7 @@ KtCallExpression(241,246): 'foo()'
 KtNameReferenceExpression(241,244): 'foo'
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: NotAvailable
+  managedLocalResolve: false
   KaSymbolResolutionSuccess:
     symbols = [
       test/C.Companion.foo(<dispatch receiver>: test.C.Companion): kotlin.Int

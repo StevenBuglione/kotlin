@@ -1,6 +1,7 @@
 KtNameReferenceExpression(101,104): 'obj'
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: NotAvailable
+  managedLocalResolve: true
   KaSymbolResolutionSuccess:
     symbols = [
       obj: kotlin.Any

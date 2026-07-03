@@ -57,10 +57,19 @@ abstract class AbstractResolveSymbolTest : AbstractResolveByElementTest() {
             assertSpecificResolutionApi(testServices, symbolAttempt, mainElement)
         }
 
+        val localLookup = (mainElement as? KtSimpleNameExpression)?.lookupLocally()
+
+        if (localLookup != null) {
+            val symbolString = stringRepresentation(symbolAttempt?.successfulSymbols?.singleOrNull()?.psi)
+            val localLookupString = stringRepresentation(localLookup)
+            testServices.assertions.assertEquals(symbolString, localLookupString)
+        }
+
         prettyPrint {
             if (mainElement is KtSimpleNameExpression) {
                 appendLine("isImplicitReferenceToCompanion: ${mainElement.isImplicitReferenceToCompanion}")
                 appendLine("contextSensitiveResolutionStatus: ${mainElement.contextSensitiveResolutionStatus}")
+                appendLine("managedLocalResolve: ${localLookup != null}")
             }
 
             val representation = stringRepresentation(symbolAttempt)

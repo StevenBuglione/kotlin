@@ -1,6 +1,7 @@
 KtNameReferenceExpression(22,28): 'kotlin'
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: NotAvailable
+  managedLocalResolve: false
   KaSymbolResolutionSuccess:
     symbols = [
       kotlin

@@ -1,6 +1,7 @@
 KtNameReferenceExpression(114,123): 'compareTo'
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: NotAvailable
+  managedLocalResolve: false
   KaSymbolResolutionSuccess:
     symbols = [
       /compareTo(<extension receiver>: T, int: kotlin.Int): kotlin.Int

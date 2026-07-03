@@ -43,6 +43,7 @@ KtUserType(128,134): 'String'
 KtNameReferenceExpression(128,134): 'String'
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: NotAvailable
+  managedLocalResolve: false
   KaSymbolResolutionSuccess:
     symbols = [
       kotlin/String
@@ -72,6 +73,7 @@ KtUserType(137,145): 'MySealed'
 KtNameReferenceExpression(137,145): 'MySealed'
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: NotAvailable
+  managedLocalResolve: false
   KaSymbolResolutionSuccess:
     symbols = [
       /MySealed
@@ -104,6 +106,7 @@ KtUserType(169,175): 'String'
 KtNameReferenceExpression(169,175): 'String'
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: NotAvailable
+  managedLocalResolve: false
   KaSymbolResolutionSuccess:
     symbols = [
       kotlin/String
@@ -133,6 +136,7 @@ KtUserType(178,186): 'MySealed'
 KtNameReferenceExpression(178,186): 'MySealed'
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: NotAvailable
+  managedLocalResolve: false
   KaSymbolResolutionSuccess:
     symbols = [
       /MySealed
@@ -162,6 +166,7 @@ KtUserType(199,207): 'MySealed'
 KtNameReferenceExpression(199,207): 'MySealed'
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: NotAvailable
+  managedLocalResolve: false
   KaSymbolResolutionSuccess:
     symbols = [
       /MySealed
@@ -182,6 +187,7 @@ KtUserType(209,210): 'T'
 KtNameReferenceExpression(209,210): 'T'
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: NotAvailable
+  managedLocalResolve: false
   KaSymbolResolutionSuccess:
     symbols = [
       T
@@ -222,6 +228,7 @@ KtThisExpression(232,236): 'this'
 KtNameReferenceExpression(232,236): 'this'
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: NotAvailable
+  managedLocalResolve: false
   KaSymbolResolutionSuccess:
     symbols = [
       KaReceiverParameterSymbol:
@@ -268,6 +275,7 @@ KtUserType(247,251): 'Left'
 KtNameReferenceExpression(247,251): 'Left'
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: Used
+  managedLocalResolve: false
   KaSymbolResolutionSuccess:
     symbols = [
       /MySealed.Left
@@ -276,6 +284,7 @@ KtNameReferenceExpression(247,251): 'Left'
 KtNameReferenceExpression(255,256): 'x'
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: NotAvailable
+  managedLocalResolve: false
   KaSymbolResolutionSuccess:
     symbols = [
       val x: kotlin.String
@@ -302,6 +311,7 @@ KtUserType(264,269): 'Right'
 KtNameReferenceExpression(264,269): 'Right'
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: Used
+  managedLocalResolve: false
   KaSymbolResolutionSuccess:
     symbols = [
       /MySealed.Right
@@ -310,6 +320,7 @@ KtNameReferenceExpression(264,269): 'Right'
 KtNameReferenceExpression(273,274): 'y'
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: NotAvailable
+  managedLocalResolve: false
   KaSymbolResolutionSuccess:
     symbols = [
       val y: kotlin.String
@@ -339,6 +350,7 @@ KtUserType(286,287): 'T'
 KtNameReferenceExpression(286,287): 'T'
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: NotAvailable
+  managedLocalResolve: false
   KaSymbolResolutionSuccess:
     symbols = [
       T
@@ -356,6 +368,7 @@ KtTypeConstraint(307,319): 'T : MySealed'
 KtNameReferenceExpression(307,308): 'T'
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: NotAvailable
+  managedLocalResolve: false
   KaSymbolResolutionSuccess:
     symbols = [
       T
@@ -376,6 +389,7 @@ KtUserType(311,319): 'MySealed'
 KtNameReferenceExpression(311,319): 'MySealed'
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: NotAvailable
+  managedLocalResolve: false
   KaSymbolResolutionSuccess:
     symbols = [
       /MySealed
@@ -387,6 +401,7 @@ KtTypeConstraint(321,337): 'T : CharSequence'
 KtNameReferenceExpression(321,322): 'T'
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: NotAvailable
+  managedLocalResolve: false
   KaSymbolResolutionSuccess:
     symbols = [
       T
@@ -407,6 +422,7 @@ KtUserType(325,337): 'CharSequence'
 KtNameReferenceExpression(325,337): 'CharSequence'
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: NotAvailable
+  managedLocalResolve: false
   KaSymbolResolutionSuccess:
     symbols = [
       kotlin/CharSequence
@@ -444,6 +460,7 @@ KtThisExpression(346,350): 'this'
 KtNameReferenceExpression(346,350): 'this'
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: NotAvailable
+  managedLocalResolve: false
   KaSymbolResolutionSuccess:
     symbols = [
       KaReceiverParameterSymbol:
@@ -488,6 +505,7 @@ KtUserType(361,365): 'Left'
 KtNameReferenceExpression(361,365): 'Left'
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: NotAvailable
+  managedLocalResolve: false
   KaSymbolResolutionError:
     candidateSymbols = []
     diagnostic = ERROR<UNRESOLVED_REFERENCE: Unresolved reference 'Left'.>
@@ -495,6 +513,7 @@ KtNameReferenceExpression(361,365): 'Left'
 KtNameReferenceExpression(369,370): 'x'
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: NotAvailable
+  managedLocalResolve: false
   KaSymbolResolutionError:
     candidateSymbols = []
     diagnostic = ERROR<UNRESOLVED_REFERENCE: Unresolved reference 'x'.>
@@ -518,6 +537,7 @@ KtUserType(378,383): 'Right'
 KtNameReferenceExpression(378,383): 'Right'
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: NotAvailable
+  managedLocalResolve: false
   KaSymbolResolutionError:
     candidateSymbols = []
     diagnostic = ERROR<UNRESOLVED_REFERENCE: Unresolved reference 'Right'.>
@@ -525,6 +545,7 @@ KtNameReferenceExpression(378,383): 'Right'
 KtNameReferenceExpression(387,388): 'y'
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: NotAvailable
+  managedLocalResolve: false
   KaSymbolResolutionError:
     candidateSymbols = []
     diagnostic = ERROR<UNRESOLVED_REFERENCE: Unresolved reference 'y'.>

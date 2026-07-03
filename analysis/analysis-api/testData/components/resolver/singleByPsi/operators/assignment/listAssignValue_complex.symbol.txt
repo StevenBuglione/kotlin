@@ -1,6 +1,7 @@
 KtOperationReferenceExpression(68,70): '+='
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: NotAvailable
+  managedLocalResolve: false
   KaSymbolResolutionSuccess:
     symbols = [
       /plus(<extension receiver>: R, other: P): R,

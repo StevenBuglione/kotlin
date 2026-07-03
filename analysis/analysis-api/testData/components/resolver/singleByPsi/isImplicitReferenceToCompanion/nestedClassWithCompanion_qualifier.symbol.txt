@@ -1,6 +1,7 @@
 KtNameReferenceExpression(81,83): 'AA'
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: NotAvailable
+  managedLocalResolve: false
   KaSymbolResolutionSuccess:
     symbols = [
       /AA

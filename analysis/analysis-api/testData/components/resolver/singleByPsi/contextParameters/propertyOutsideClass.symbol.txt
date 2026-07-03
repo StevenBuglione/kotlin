@@ -1,6 +1,7 @@
 KtNameReferenceExpression(245,259): 'propertyMember'
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: NotAvailable
+  managedLocalResolve: false
   KaSymbolResolutionSuccess:
     symbols = [
       val propertyMember: kotlin.String

@@ -1,6 +1,7 @@
 KtNameReferenceExpression(48,53): 'Value'
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: NotAvailable
+  managedLocalResolve: false
   KaSymbolResolutionSuccess:
     symbols = [
       Value

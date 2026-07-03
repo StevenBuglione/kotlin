@@ -1,6 +1,7 @@
 KtNameReferenceExpression(92,100): 'Conflict'
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: NotAvailable
+  managedLocalResolve: false
   KaSymbolResolutionSuccess:
     symbols = [
       Conflict

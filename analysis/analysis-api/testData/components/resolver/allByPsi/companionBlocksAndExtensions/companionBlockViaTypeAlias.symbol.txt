@@ -7,6 +7,7 @@ KtPackageDirective(43,55): 'package test'
 KtNameReferenceExpression(51,55): 'test'
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: NotAvailable
+  managedLocalResolve: false
   KaSymbolResolutionSuccess:
     symbols = [
       test
@@ -63,6 +64,7 @@ KtUserType(148,149): 'C'
 KtNameReferenceExpression(148,149): 'C'
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: NotAvailable
+  managedLocalResolve: true
   KaSymbolResolutionSuccess:
     symbols = [
       test/C
@@ -86,6 +88,7 @@ KtDotQualifiedExpression(169,177): 'TA.foo()'
 KtNameReferenceExpression(169,171): 'TA'
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: NotAvailable
+  managedLocalResolve: false
   KaSymbolResolutionSuccess:
     symbols = [
       test/TA
@@ -100,6 +103,7 @@ KtCallExpression(172,177): 'foo()'
 KtNameReferenceExpression(172,175): 'foo'
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: NotAvailable
+  managedLocalResolve: false
   KaSymbolResolutionSuccess:
     symbols = [
       test/C.foo(): kotlin.Unit
@@ -117,6 +121,7 @@ KtDotQualifiedExpression(182,188): 'TA.bar'
 KtNameReferenceExpression(182,184): 'TA'
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: NotAvailable
+  managedLocalResolve: false
   KaSymbolResolutionSuccess:
     symbols = [
       test/TA
@@ -125,6 +130,7 @@ KtNameReferenceExpression(182,184): 'TA'
 KtNameReferenceExpression(185,188): 'bar'
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: NotAvailable
+  managedLocalResolve: false
   KaSymbolResolutionSuccess:
     symbols = [
       val bar: kotlin.Int
@@ -139,6 +145,7 @@ KtCallableReferenceExpression(194,201): 'TA::foo'
 KtNameReferenceExpression(194,196): 'TA'
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: NotAvailable
+  managedLocalResolve: false
   KaSymbolResolutionSuccess:
     symbols = [
       test/TA
@@ -147,6 +154,7 @@ KtNameReferenceExpression(194,196): 'TA'
 KtNameReferenceExpression(198,201): 'foo'
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: NotAvailable
+  managedLocalResolve: false
   KaSymbolResolutionSuccess:
     symbols = [
       test/C.foo(): kotlin.Unit

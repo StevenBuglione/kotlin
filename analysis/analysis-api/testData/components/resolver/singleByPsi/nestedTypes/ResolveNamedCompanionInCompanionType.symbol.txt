@@ -1,6 +1,7 @@
 KtNameReferenceExpression(125,129): 'COMP'
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: NotAvailable
+  managedLocalResolve: false
   KaSymbolResolutionSuccess:
     symbols = [
       foo/bar/baz/X.COMP

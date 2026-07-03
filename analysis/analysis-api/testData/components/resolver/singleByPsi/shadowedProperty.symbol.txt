@@ -1,6 +1,7 @@
 KtNameReferenceExpression(107,115): 'property'
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: NotAvailable
+  managedLocalResolve: false
   KaSymbolResolutionSuccess:
     symbols = [
       val property: kotlin.String

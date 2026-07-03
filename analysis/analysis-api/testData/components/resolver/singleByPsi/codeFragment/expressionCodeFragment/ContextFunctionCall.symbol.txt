@@ -1,6 +1,7 @@
 KtNameReferenceExpression(136,140): 'test'
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: NotAvailable
+  managedLocalResolve: false
   KaSymbolResolutionSuccess:
     symbols = [
       /test(): kotlin.Unit
