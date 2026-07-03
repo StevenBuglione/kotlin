@@ -70,7 +70,7 @@ KtNameReferenceExpression(150,153): 'foo'
             name = <unused var>
             receiverType = null
             returnType = kotlin.Long
-            symbol = <unused var>: kotlin.Long
+            symbol = <unused var>: T
             contextParameters = []
             callableId = null,
           KaVariableSignature:

@@ -15,7 +15,7 @@ FAKE_OVERRIDE_ORIGINAL:
     location: LOCAL
     modality: FINAL
     name: xx
-    origin: SOURCE
+    origin: DELEGATED
     receiverParameter: null
     returnType: KaUsualClassType:
       annotations: []
