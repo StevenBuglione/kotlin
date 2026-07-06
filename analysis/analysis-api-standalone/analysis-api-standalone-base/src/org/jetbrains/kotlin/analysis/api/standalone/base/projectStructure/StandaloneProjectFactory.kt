@@ -30,7 +30,6 @@ import com.intellij.psi.search.ProjectScope
 import com.intellij.util.io.URLUtil.JAR_PROTOCOL
 import com.intellij.util.io.URLUtil.JAR_SEPARATOR
 import com.intellij.util.messages.impl.PluginListenerDescriptor
-import com.intellij.util.messages.impl.listenerClassName
 import org.jetbrains.kotlin.CoreEnvironmentDeprecation
 import org.jetbrains.kotlin.analysis.api.KaExperimentalApi
 import org.jetbrains.kotlin.analysis.api.KaImplementationDetail
@@ -101,7 +100,7 @@ object StandaloneProjectFactory {
                 return object : MockProject(parent, parentDisposable) {
                     @Suppress("UnstableApiUsage")
                     override fun createListener(descriptor: PluginListenerDescriptor): Any {
-                        val listenerClass = loadClass<Any>(descriptor.listenerClassName, descriptor.pluginDescriptor)
+                        val listenerClass = loadClass<Any>(descriptor.descriptor.listenerClassName, descriptor.pluginDescriptor)
                         val listener = listenerClass.getDeclaredConstructor(Project::class.java).newInstance(this)
                         return listener
                     }
