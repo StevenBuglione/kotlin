@@ -73,13 +73,13 @@ object FirDefaultComplementarySymbolsCalculator : FirComplementarySymbolsCalcula
         getSuperTypes(holder.session, recursive = false)
             .mapNotNullTo(mutableSetOf()) { it.toRegularClassSymbol() }
 
-    private val relevantSealedUniverseCache = mutableMapOf<FirClassSymbol<*>, Set<FirClassSymbol<*>>>()
-
     context(holder: SessionHolder)
-    fun FirRegularClassSymbol.collectRelevantSealedUniverse(): Set<FirClassSymbol<*>> =
+    fun FirRegularClassSymbol.collectRelevantSealedUniverse(
+        relevantSealedUniverseCache: MutableMap<FirClassSymbol<*>, Set<FirClassSymbol<*>>> = mutableMapOf(),
+    ): Set<FirClassSymbol<*>> =
         relevantSealedUniverseCache.getOrPut(this) {
             getImmediateSuperTypes()
-                .map { it.collectRelevantSealedUniverse() + collectAllSubclassesFor(it, holder.session) }
+                .map { it.collectRelevantSealedUniverse(relevantSealedUniverseCache) + collectAllSubclassesFor(it, holder.session) }
                 .flattenTo(mutableSetOf())
         }
 
