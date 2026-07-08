@@ -1807,7 +1807,8 @@ private fun KaDiagnosticConverterBuilder.addConversions35() {
     }
     add(FirErrors.POSSIBLY_UNINITIALIZED_ENUM_ENTRY) { firDiagnostic ->
         PossiblyUninitializedEnumEntryImpl(
-            firDiagnostic.a.map { fqName ->
+            firSymbolBuilder.buildSymbol(firDiagnostic.a),
+            firDiagnostic.b.map { fqName ->
                 fqName
             },
             firDiagnostic as KtPsiDiagnostic,
@@ -4996,7 +4997,8 @@ private fun KaDiagnosticConverterBuilder.addConversions109() {
     }
     add(FirErrors.POSSIBLY_UNINITIALIZED_PROPERTY) { firDiagnostic ->
         PossiblyUninitializedPropertyImpl(
-            firDiagnostic.a.map { fqName ->
+            firDiagnostic.a,
+            firDiagnostic.b.map { fqName ->
                 fqName
             },
             firDiagnostic as KtPsiDiagnostic,
