@@ -5,60 +5,10 @@
 
 package org.jetbrains.kotlin.analysis.low.level.api.fir.util
 
-import com.intellij.openapi.diagnostic.Logger
 import com.intellij.psi.PsiElement
-import com.intellij.psi.util.parentOfType
 import org.jetbrains.kotlin.analysis.api.KaImplementationDetail
 import org.jetbrains.kotlin.name.Name
 import org.jetbrains.kotlin.psi.*
-import org.jetbrains.kotlin.psi.psiUtil.isActualDeclaration
-import org.jetbrains.kotlin.psi.psiUtil.isExpectDeclaration
-import kotlin.contracts.ExperimentalContracts
-import kotlin.contracts.InvocationKind
-import kotlin.contracts.contract
-
-/**
- * A local PSI-based utility that checks if this [KtSimpleNameExpression] **CAN** be a reference to [candidateTarget].
- *
- * @return `false` when this [KtSimpleNameExpression] **CANNOT** be a reference to [candidateTarget], `true` if it definitely is,
- * and `null` if unsure.
- */
-@KaImplementationDetail
-fun KtSimpleNameExpression.canBeReferenceToLocalCheck(candidateTarget: PsiElement): Boolean? {
-    if (!isValidForLocalLookup) return null
-
-    when (candidateTarget) {
-        is KtProperty -> {
-            if (!candidateTarget.isLocal) return null
-        }
-
-        is KtParameter -> {
-            if (parent is KtValueArgumentName) {
-                return null
-            }
-            candidateTarget.parentOfType<KtFunction>()?.let { f ->
-                // primary constructor parameters can have more usages (see destructuring assignments)
-                if (f is KtPrimaryConstructor && f.valueParameters.any { it == candidateTarget })
-                    return null
-            }
-        }
-
-        is KtClass -> {
-            if (candidateTarget is KtEnumEntry)
-                return null
-
-            if (candidateTarget.isExpectDeclaration() || candidateTarget.isActualDeclaration())
-                return null
-        }
-        is KtTypeAlias -> {}
-
-        else -> return null
-    }
-
-    val localLookupResult = doLookupLocally() ?: return null
-
-    return localLookupResult.isEquivalentTo(candidateTarget)
-}
 
 /**
  * Performs a local PSI-based lookup.
@@ -67,7 +17,7 @@ fun KtSimpleNameExpression.canBeReferenceToLocalCheck(candidateTarget: PsiElemen
  */
 @KaImplementationDetail
 fun KtSimpleNameExpression.doLookupLocally(): KtNamedDeclaration? {
-    if (!isValidForLocalLookup) return null
+    val contextKind = contextKind ?: return null
 
     return LightContextLookupUtil(this, contextKind).lookup()
 }
@@ -81,31 +31,37 @@ private val KtElement.nonContainerParent: KtElement?
         return e as? KtElement
     }
 
-private val KtSimpleNameExpression.isValidForLocalLookup: Boolean
-    get() = this !is KtOperationReferenceExpression && when (val p = nonContainerParent) {
-        is KtCallExpression, is KtImportDirective, is KtPackageDirective, is KtCallableReferenceExpression, is KtValueArgumentName -> false
-        // for DQE's we can only resolve them if we are resolving the receiver
-        is KtDotQualifiedExpression -> p.receiverExpression == this@isValidForLocalLookup
-        is KtUserType -> p.qualifier == null && (p.referenceExpression == this@isValidForLocalLookup)
-        else -> true
-    }
+private fun KtSimpleNameExpression.typeIsValidForLocalLookup(): Boolean =
+    this !is KtOperationReferenceExpression
 
-private val KtSimpleNameExpression.contextKind: LightContextLookupUtil.ContextKind
-    get() = when (nonContainerParent) {
-        is KtClassLiteralExpression -> LightContextLookupUtil.ContextKind.VALUE_OR_TYPE
-        is KtValueArgument,
-        is KtExpression,
-        is KtExpressionCodeFragment,
-        is KtWhenConditionInRange,
-        is KtSimpleNameStringTemplateEntry,
-        is KtWhenConditionWithExpression,
-        is KtWhenEntry,
-            -> LightContextLookupUtil.ContextKind.VALUE
-        is KtUserType, is KtTypeConstraint, is KtDelegatedSuperTypeEntry -> LightContextLookupUtil.ContextKind.TYPE
-        else -> TODO("Unknown context type: ${parent::class.qualifiedName}")
-    }
+private val KtSimpleNameExpression.contextKind: LightContextLookupUtil.ContextKind?
+    get() =
+        if (!typeIsValidForLocalLookup()) null
+        else when (val p = nonContainerParent) {
+            is KtCallExpression,
+            is KtImportDirective,
+            is KtPackageDirective,
+            is KtCallableReferenceExpression,
+            is KtValueArgumentName,
+                -> null
+            is KtDotQualifiedExpression -> {
+                LightContextLookupUtil.ContextKind.VALUE.takeIf { p.receiverExpression == this@contextKind }
+            }
+            is KtUserType -> LightContextLookupUtil.ContextKind.TYPE.takeIf { p.qualifier == null && (p.referenceExpression == this@contextKind) }
+            is KtClassLiteralExpression -> LightContextLookupUtil.ContextKind.VALUE_OR_TYPE
+            is KtValueArgument,
+            is KtExpression,
+            is KtExpressionCodeFragment,
+            is KtWhenConditionInRange,
+            is KtSimpleNameStringTemplateEntry,
+            is KtWhenConditionWithExpression,
+            is KtWhenEntry,
+                -> LightContextLookupUtil.ContextKind.VALUE
+            is KtTypeConstraint, is KtDelegatedSuperTypeEntry -> LightContextLookupUtil.ContextKind.TYPE
+            else -> null
+        }
 
-private class LightContextLookupUtil(val element: KtSimpleNameExpression, val contextKind: ContextKind) {
+private class LightContextLookupUtil(val element: KtSimpleNameExpression, val contextKind: ContextKind) : KtVisitorVoid() {
     enum class ContextKind {
         VALUE,
         TYPE,
@@ -116,15 +72,8 @@ private class LightContextLookupUtil(val element: KtSimpleNameExpression, val co
         var current: KtElement = element
 
         while (true) {
-            try {
-                visit(current)
-            } catch (_: FoundEnd) {
-                LOGGER.debug("Resolved ${element.parent.text} -> ${_found?.text}")
-                return requireNotNull(_found)
-            } catch (_: PsiUnresolvable) {
-                return null
-            }
-            require(_found == null) { "_found is not null but no FoundEnd was thrown" }
+            current.accept(this)
+            _found?.let { return it }
 
             previousElement = current
             current = next(current) ?: return null
@@ -135,9 +84,6 @@ private class LightContextLookupUtil(val element: KtSimpleNameExpression, val co
     private var _found: KtNamedDeclaration? = null
     private var previousElement: KtElement? = null
     private val name: Name = element.getReferencedNameAsName()
-
-    private class FoundEnd : Throwable()
-    private class PsiUnresolvable : Throwable()
 
     private val resolveIgnore: MutableSet<KtElement> = mutableSetOf()
 
@@ -168,7 +114,6 @@ private class LightContextLookupUtil(val element: KtSimpleNameExpression, val co
     private enum class LastDirection {
         BACKWARDS,
         PARENT,
-        CONTEXT_COLLECT,
         UNKNOWN,
         ;
     }
@@ -262,61 +207,29 @@ private class LightContextLookupUtil(val element: KtSimpleNameExpression, val co
         param.destructuringDeclaration?.entries?.forEach(::ignore)
     }
 
-    private fun visit(element: KtElement) {
-        when (element) {
-            is KtFile -> visitFile(element)
-            is KtProperty -> visitProperty(element)
-            is KtWhenExpression -> visitWhenExpression(element)
-            is KtForExpression -> visitForExpression(element)
-            is KtClassOrObject -> visitClassOrObject(element)
-            is KtDestructuringDeclaration -> visitDestructuringDeclaration(element)
-            is KtTypeAlias -> visitTypeAlias(element)
-            is KtNamedFunction -> visitFunction(element)
-            is KtLambdaExpression -> visitLambda(element)
-        }
-    }
-
-    private fun visitFile(element: KtFile) {
-        collectingContext {
-            for (decl in element.declarations) {
-                visit(decl)
-            }
-        }
-    }
-
-    private fun visitForExpression(element: KtForExpression) {
+    override fun visitForExpression(element: KtForExpression) {
         val loopParameter = element.loopParameter ?: return
 
         processParameter(loopParameter)
     }
 
-    private fun visitWhenExpression(element: KtWhenExpression) {
+    override fun visitWhenExpression(element: KtWhenExpression) {
         element.subjectVariable?.let(::visitProperty)
     }
 
-    private fun visitProperty(element: KtProperty) {
+    override fun visitProperty(element: KtProperty) {
         foundIfNameMatches(element)
 
         if (lastDirectionIs(LastDirection.PARENT)) {
-            for (contextParam in element.contextParameters) {
-                processParameter(contextParam)
-            }
+            element.contextParameters.processingMany(::processParameter)
         }
     }
 
-    private fun visitFunction(element: KtNamedFunction) {
+    override fun visitNamedFunction(element: KtNamedFunction) {
         if (lastDirectionIs(LastDirection.PARENT)) {
-            for (param in element.valueParameters) {
-                processParameter(param)
-            }
-
-            for (contextParam in element.contextParameters) {
-                processParameter(contextParam)
-            }
-
-            for (tyParam in element.typeParameters) {
-                processTypeParameter(tyParam)
-            }
+            element.valueParameters.processingMany(::processParameter)
+            element.contextParameters.processingMany(::processParameter)
+            element.typeParameters.processingMany(::processTypeParameter)
         }
 
         // functions cannot be referenced via simple references unless
@@ -328,12 +241,10 @@ private class LightContextLookupUtil(val element: KtSimpleNameExpression, val co
         foundIfNameMatches(tyParam)
     }
 
-    private fun visitLambda(element: KtLambdaExpression) {
+    override fun visitLambdaExpression(element: KtLambdaExpression) {
         require(lastDirectionIs(LastDirection.PARENT))
 
-        for (param in element.valueParameters) {
-            processParameter(param)
-        }
+        element.valueParameters.processingMany(::processParameter)
     }
 
     private fun processParameter(parameter: KtParameter) {
@@ -347,8 +258,8 @@ private class LightContextLookupUtil(val element: KtSimpleNameExpression, val co
     }
 
     private fun found(element: KtNamedDeclaration) {
+        if (_found != null) return
         _found = element
-        throw FoundEnd()
     }
 
     private fun nameMatchesAndIsValidCandidate(element: KtNamedDeclaration): Boolean =
@@ -360,49 +271,28 @@ private class LightContextLookupUtil(val element: KtSimpleNameExpression, val co
         }
     }
 
-    private fun unresolvableIfNameMatches(element: KtNamedDeclaration) {
-        if (nameMatchesAndIsValidCandidate(element)) {
-            throw PsiUnresolvable()
-        }
-    }
-
-    private fun visitClassOrObject(element: KtClassOrObject) {
-        if (element.isActualDeclaration() || element.isExpectDeclaration())
-            unresolvableIfNameMatches(element)
-
+    override fun visitClassOrObject(element: KtClassOrObject) {
         foundIfNameMatches(element)
     }
 
-    @OptIn(ExperimentalContracts::class)
-    private fun collectingContext(f: () -> Unit) {
-        contract {
-            callsInPlace(f, InvocationKind.EXACTLY_ONCE)
-        }
-
-        val oldLastDirection = myLastDirection
-        myLastDirection = LastDirection.CONTEXT_COLLECT
-        try {
-            f()
-        } finally {
-            myLastDirection = oldLastDirection
-        }
-    }
-
-    private fun visitDestructuringDeclaration(decl: KtDestructuringDeclaration) {
+    override fun visitDestructuringDeclaration(decl: KtDestructuringDeclaration) {
         if (isIgnored(decl)) return
 
-        for (entry in decl.entries) {
-            foundIfNameMatches(entry)
-        }
+        decl.entries.processingMany(::foundIfNameMatches)
     }
 
-    private fun visitTypeAlias(decl: KtTypeAlias) {
+    override fun visitTypeAlias(decl: KtTypeAlias) {
         foundIfNameMatches(decl)
     }
 
     private val PsiElement.kt: KtElement? get() = this as? KtElement
 
-    companion object {
-        private val LOGGER = Logger.getInstance(LightContextLookupUtil::class.java)
+    private inline fun <T> List<T>.processingMany(f: (T) -> Unit) {
+        if (_found != null) return
+
+        for (element in this) {
+            f(element)
+            if (_found != null) return
+        }
     }
 }

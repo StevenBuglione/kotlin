@@ -6,6 +6,7 @@
 package org.jetbrains.kotlin.analysis.api.resolution
 
 import org.jetbrains.kotlin.analysis.api.KaExperimentalApi
+import org.jetbrains.kotlin.analysis.api.KaIdeApi
 import org.jetbrains.kotlin.analysis.api.KaImplementationDetail
 import org.jetbrains.kotlin.analysis.api.KaSession
 import org.jetbrains.kotlin.analysis.api.internals.internals
@@ -793,7 +794,7 @@ public fun KtDelegatedSuperTypeEntry.resolveSymbol(): KaClassifierSymbol? {
  *
  * @see tryResolveSymbols
  */
-@KaExperimentalApi
+@KaIdeApi
 context(session: KaSession)
 public fun KtSimpleNameExpression.lookupLocally(): KtNamedDeclaration? {
     @OptIn(KaImplementationDetail::class)
