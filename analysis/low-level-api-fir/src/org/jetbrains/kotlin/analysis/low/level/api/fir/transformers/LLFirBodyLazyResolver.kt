@@ -686,12 +686,15 @@ private class LLFirBodyTargetResolver(target: LLFirResolveTarget) : LLFirAbstrac
 
         val dataFlowAnalyzer = transformer.declarationsTransformer.dataFlowAnalyzer
         dataFlowAnalyzer.enterClass(target, buildGraph = true)
-        val controlFlowGraph = dataFlowAnalyzer.exitClass()
-            ?: errorWithAttachment("CFG should not be 'null' as 'buildGraph' is specified") {
-                withFirEntry("firClass", target)
-            }
+        val [controlFlowGraph, staticControlFlowGraph] = dataFlowAnalyzer.exitClass()
+        controlFlowGraph ?: errorWithAttachment("CFG should not be 'null' as 'buildGraph' is specified") {
+            withFirEntry("firClass", target)
+        }
 
         target.replaceControlFlowGraphReference(FirControlFlowGraphReferenceImpl(controlFlowGraph))
+        if (staticControlFlowGraph != null) {
+            target.replaceStaticControlFlowGraphReference(FirControlFlowGraphReferenceImpl(staticControlFlowGraph))
+        }
     }
 
     private inline fun <T : FirElementWithResolveState> resolveMembersForControlFlowGraph(

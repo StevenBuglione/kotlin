@@ -116,8 +116,15 @@ open class FirDeclarationsResolveTransformer(
 
     override fun transformEnumEntry(enumEntry: FirEnumEntry, data: ResolutionMode): FirEnumEntry {
         if (implicitTypeOnly) return enumEntry
+
+        dataFlowAnalyzer.enterEnumEntry(enumEntry)
         return context.withEnumEntry(enumEntry) {
-            (enumEntry.transformChildren(this, data) as FirEnumEntry)
+            val result = (enumEntry.transformChildren(this, data) as FirEnumEntry)
+
+            val controlFlowGraph = dataFlowAnalyzer.exitEnumEntry()
+            result.replaceControlFlowGraphReference(FirControlFlowGraphReferenceImpl(controlFlowGraph))
+
+            result
         }
     }
 
@@ -965,9 +972,12 @@ open class FirDeclarationsResolveTransformer(
             action()
         }
 
-        val controlFlowGraph = dataFlowAnalyzer.exitClass()
-        if (controlFlowGraph != null) {
-            result.replaceControlFlowGraphReference(FirControlFlowGraphReferenceImpl(controlFlowGraph))
+        val [graph, staticGraph] = dataFlowAnalyzer.exitClass()
+        if (graph != null) {
+            result.replaceControlFlowGraphReference(FirControlFlowGraphReferenceImpl(graph))
+        }
+        if (staticGraph != null) {
+            result.replaceStaticControlFlowGraphReference(FirControlFlowGraphReferenceImpl(staticGraph))
         }
 
         return result
@@ -988,7 +998,7 @@ open class FirDeclarationsResolveTransformer(
             val result = context.withAnonymousObject(anonymousObject, components) {
                 transformDeclarationContent(anonymousObject, data) as FirAnonymousObject
             }
-            val graph = dataFlowAnalyzer.exitClass()
+            val [graph, _] = dataFlowAnalyzer.exitClass()
             if (graph != null) {
                 result.replaceControlFlowGraphReference(FirControlFlowGraphReferenceImpl(graph))
             }

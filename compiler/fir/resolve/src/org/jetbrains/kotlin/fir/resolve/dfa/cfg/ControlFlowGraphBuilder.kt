@@ -7,11 +7,12 @@ package org.jetbrains.kotlin.fir.resolve.dfa.cfg
 
 import org.jetbrains.kotlin.KtFakeSourceElementKind
 import org.jetbrains.kotlin.contracts.description.*
-import org.jetbrains.kotlin.descriptors.ClassKind
 import org.jetbrains.kotlin.descriptors.Visibilities
 import org.jetbrains.kotlin.fir.FirElement
 import org.jetbrains.kotlin.fir.declarations.*
+import org.jetbrains.kotlin.fir.declarations.FirDeclaration
 import org.jetbrains.kotlin.fir.declarations.utils.hasExplicitBackingField
+import org.jetbrains.kotlin.fir.declarations.utils.isCompanionBlockMember
 import org.jetbrains.kotlin.fir.expressions.*
 import org.jetbrains.kotlin.fir.expressions.builder.buildUnitExpression
 import org.jetbrains.kotlin.fir.expressions.impl.FirSingleExpressionBlock
@@ -616,11 +617,11 @@ class ControlFlowGraphBuilder private constructor(
             return null to null
         }
 
-        val localClassEnterNode = when {
-            klass is FirAnonymousObject && klass.classKind != ClassKind.ENUM_ENTRY -> createAnonymousObjectEnterNode(klass)
+        val localClassEnterNode = when (klass) {
+            is FirAnonymousObject -> createAnonymousObjectEnterNode(klass)
             // Local classes are only initialized on first use, so they look pretty much like named functions:
             // control flow enters here and never leaves, and assignments invalidate smart casts.
-            klass is FirRegularClass && klass.isLocal && bodyBuildingMode -> createLocalClassExitNode(klass)
+            is FirRegularClass if klass.isLocal && bodyBuildingMode -> createLocalClassExitNode(klass)
             else -> null
         }?.also { addNewSimpleNode(it) }
 
@@ -658,7 +659,7 @@ class ControlFlowGraphBuilder private constructor(
         return localClassEnterNode to enterNode
     }
 
-    fun exitClass(): Pair<ClassExitNode?, ControlFlowGraph?> {
+    fun exitClass(): Pair<ControlFlowGraph?, ControlFlowGraph?> {
         assert(currentGraph.kind == ControlFlowGraph.Kind.Class)
         if (currentGraph.declaration == null) {
             graphs.pop()
@@ -668,7 +669,6 @@ class ControlFlowGraphBuilder private constructor(
         // Members of a class can be visited in any order, so data flow between them is unordered,
         // and we have to recreate the control flow after the fact.
         val enterNode = lastNodes.pop() as ClassEnterNode
-        val exitNode = currentGraph.exitNode as ClassExitNode
         val klass = enterNode.fir
         if ((klass as FirControlFlowGraphOwner).controlFlowGraphReference != null) {
             graphs.pop()
@@ -680,6 +680,7 @@ class ControlFlowGraphBuilder private constructor(
         val secondaryConstructors = mutableMapOf<FirConstructor, ControlFlowGraph>()
         val calledInPlace = mutableListOf<ControlFlowGraph>()
         val calledLater = mutableListOf<ControlFlowGraph>()
+        val statics = mutableListOf<ControlFlowGraph>()
         klass.declarations.forEachGraphOwner {
             val graph = it.controlFlowGraphReference?.controlFlowGraph ?: return@forEachGraphOwner
             when (it) {
@@ -693,6 +694,10 @@ class ControlFlowGraphBuilder private constructor(
                     else -> secondaryConstructors[it] = graph
                 }
 
+                is FirProperty if it.isCompanionBlockMember -> statics.add(graph)
+                is FirClass if it.status.isCompanion -> statics.add(graph)
+                is FirEnumEntry -> statics.add(graph)
+
                 is FirPropertyAccessor, is FirFunction, is FirClass -> if (isLocalClass) {
                     calledLater.add(graph)
                 }
@@ -700,6 +705,22 @@ class ControlFlowGraphBuilder private constructor(
                 else -> calledInPlace.add(graph)
             }
         }
+
+        val classGraph = createClassGraph(primaryConstructor, secondaryConstructors, calledInPlace, calledLater)
+        val staticGraph = createStaticGraph(klass, statics)
+        return classGraph to staticGraph
+    }
+
+    private fun createClassGraph(
+        primaryConstructor: FirConstructor?,
+        secondaryConstructors: Map<FirConstructor, ControlFlowGraph>,
+        calledInPlace: List<ControlFlowGraph>,
+        calledLater: List<ControlFlowGraph>,
+    ): ControlFlowGraph {
+        val enterNode = currentGraph.enterNode as ClassEnterNode
+        val exitNode = currentGraph.exitNode as ClassExitNode
+
+        val isLocalClass = enterNode.fir.isLocal
 
         // Link in-place initializers into a chain.
         val firstInPlaceEnter = calledInPlace.firstOrNull()?.enterNode
@@ -797,13 +818,52 @@ class ControlFlowGraphBuilder private constructor(
         // Make sure constructor graphs are visited in an order such that delegated constructors go before delegating ones.
         enterNode.subGraphs = calledInPlace + secondaryConstructors.entries.sortedBy { it.key.computeDelegationLevel() }.map { it.value }
         exitNode.subGraphs = calledLater
-        return exitNode.takeIf { it.isUnion } to popGraph()
+        return popGraph()
+    }
+
+    private fun createStaticGraph(klass: FirClass, statics: List<ControlFlowGraph>): ControlFlowGraph? {
+        if (klass.classKind.isSingleton) return null
+
+        val graph = ControlFlowGraph(klass as? FirDeclaration, "<static>", ControlFlowGraph.Kind.Static)
+        graphs.push(graph)
+        val enterNode = createStaticEnterNode(klass)
+        val exitNode = createStaticExitNode(klass)
+        graph.enterNode = enterNode
+        graph.exitNode = exitNode
+
+        val lastExitNode = statics.fold<_, CFGNode<*>>(enterNode) { lastNode, graph ->
+            addEdgeToSubGraph(lastNode, graph.enterNode)
+            graph.exitNode
+        }
+        addEdge(lastExitNode, exitNode, preferredKind = EdgeKind.CfgForward)
+
+        if (lastExitNode != enterNode) {
+            // Add a fake edge to enforce ordering.
+            addEdge(enterNode, exitNode, preferredKind = EdgeKind.DeadForward, propagateDeadness = false)
+        }
+
+        enterNode.subGraphs = statics
+        exitNode.subGraphs = emptyList()
+        return popGraph()
+    }
+
+    fun enterEnumEntry(enumEntry: FirEnumEntry): EnumEntryEnterNode {
+        return enterGraph(enumEntry, enumEntry.name.asString(), ControlFlowGraph.Kind.EnumEntry) {
+            createEnumEntryEnterNode(it) to createEnumEntryExitNode(it)
+        }
+    }
+
+    fun exitEnumEntry(): Pair<EnumEntryExitNode, ControlFlowGraph> {
+        require(currentGraph.kind == ControlFlowGraph.Kind.EnumEntry)
+
+        val exitNode = currentGraph.exitNode as EnumEntryExitNode
+        addEdge(lastNodes.pop(), exitNode, preferredKind = EdgeKind.Forward)
+
+        return exitNode to popGraph()
     }
 
     fun exitAnonymousObjectExpression(anonymousObjectExpression: FirAnonymousObjectExpression): AnonymousObjectExpressionExitNode? {
         val klass = anonymousObjectExpression.anonymousObject
-        if (klass.classKind == ClassKind.ENUM_ENTRY) return null
-
         return createAnonymousObjectExpressionExitNode(anonymousObjectExpression).also {
             val exitNode = klass.controlFlowGraphReference?.controlFlowGraph?.exitNode
             if (exitNode != null && lastNode is AnonymousObjectEnterNode) {
@@ -1781,9 +1841,10 @@ private val FirControlFlowGraphOwner.memberShouldHaveGraph: Boolean
  */
 val FirControlFlowGraphOwner.isUsedInControlFlowGraphBuilderForClass: Boolean
     get() = when (this) {
-        is FirProperty, is FirField -> memberShouldHaveGraph
+        is FirProperty, is FirField, is FirEnumEntry -> memberShouldHaveGraph
         is FirConstructor, is FirAnonymousInitializer -> true
-        is FirFunction, is FirClass -> false
+        is FirClass -> status.isCompanion
+        is FirFunction -> false
         else -> true
     }
 
