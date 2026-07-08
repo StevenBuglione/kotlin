@@ -6,7 +6,6 @@
 package org.jetbrains.kotlin.backend.common.extensions
 
 import org.jetbrains.kotlin.backend.common.linkage.IrDeserializer
-import org.jetbrains.kotlin.cli.common.messages.MessageCollector
 import org.jetbrains.kotlin.config.LanguageVersionSettings
 import org.jetbrains.kotlin.descriptors.ClassDescriptor
 import org.jetbrains.kotlin.descriptors.ModuleDescriptor
@@ -36,11 +35,6 @@ open class IrPluginContextImpl(
     private val st: ReferenceSymbolTable,
     override val irBuiltIns: IrBuiltIns,
     val linker: IrProvider,
-    @property:Deprecated(
-        "Consider using diagnosticReporter instead. See https://youtrack.jetbrains.com/issue/KT-78277 for more details",
-        level = DeprecationLevel.WARNING
-    )
-    override val messageCollector: MessageCollector,
     diagnosticReporter: DiagnosticReporter = DiagnosticsCollectorImpl(),
 ) : IrPluginContext {
     override val afterK2: Boolean = false

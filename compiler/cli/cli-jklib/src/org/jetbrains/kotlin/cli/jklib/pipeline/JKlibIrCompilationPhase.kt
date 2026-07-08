@@ -162,10 +162,6 @@ object JKlibIrCompilationPhase :
             symbolTable,
             irBuiltIns,
             linker = linker,
-            messageCollector = 
-            @OptIn(MessageCollectorAccess::class) /* deprecated in IrPluginContext */ 
-            configuration.messageCollector,
-            
         )
 
         linker.init(null)

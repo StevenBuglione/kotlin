@@ -14,7 +14,6 @@ import org.jetbrains.kotlin.builtins.KotlinBuiltIns
 import org.jetbrains.kotlin.config.AnalysisFlags
 import org.jetbrains.kotlin.config.IrVerificationMode
 import org.jetbrains.kotlin.config.LanguageFeature
-import org.jetbrains.kotlin.config.MessageCollectorAccess
 import org.jetbrains.kotlin.diagnostics.impl.BaseDiagnosticsCollector
 import org.jetbrains.kotlin.fir.FirModuleData
 import org.jetbrains.kotlin.fir.FirSession
@@ -48,8 +47,8 @@ import org.jetbrains.kotlin.ir.validation.checkers.expression.IrCallTypeArgument
 import org.jetbrains.kotlin.ir.validation.checkers.expression.IrCallValueArgumentCountChecker
 import org.jetbrains.kotlin.ir.validation.checkers.expression.IrCrossFileFieldUsageChecker
 import org.jetbrains.kotlin.ir.validation.checkers.expression.IrValueAccessScopeChecker
-import org.jetbrains.kotlin.ir.validation.checkers.type.IrTypeParameterScopeChecker
 import org.jetbrains.kotlin.ir.validation.checkers.symbol.IrVisibilityChecker
+import org.jetbrains.kotlin.ir.validation.checkers.type.IrTypeParameterScopeChecker
 import org.jetbrains.kotlin.ir.visitors.IrVisitorVoid
 import org.jetbrains.kotlin.ir.visitors.acceptChildrenVoid
 import org.jetbrains.kotlin.ir.visitors.acceptVoid
@@ -246,8 +245,6 @@ private class Fir2IrPipeline(
 
         val pluginContext = Fir2IrPluginContext(
             componentsStorage, irBuiltIns, componentsStorage.moduleDescriptor, symbolTable,
-            @OptIn(MessageCollectorAccess::class) // deprecated in IrPluginContext
-            fir2IrConfiguration.messageCollector,
             fir2IrConfiguration.diagnosticReporter
         )
         if (fir2IrConfiguration.diagnosticReporter.hasErrors) {
