@@ -34,6 +34,7 @@ import org.jetbrains.kotlin.ir.declarations.*
 import org.jetbrains.kotlin.ir.declarations.impl.IrFactoryImpl
 import org.jetbrains.kotlin.ir.declarations.impl.IrModuleFragmentImpl
 import org.jetbrains.kotlin.ir.declarations.lazy.IrLazyDeclarationBase
+import org.jetbrains.kotlin.ir.evaluation.IrConstFieldInliner
 import org.jetbrains.kotlin.ir.overrides.IrFakeOverrideBuilder
 import org.jetbrains.kotlin.ir.symbols.UnsafeDuringIrConstructionAPI
 import org.jetbrains.kotlin.ir.types.IrTypeSystemContext
@@ -368,7 +369,7 @@ private class Fir2IrPipeline(
         val inlineConstTracker = componentsStorage.configuration.inlineConstTracker
 
         mainIrFragment.files.forEach { irFile ->
-            irFile.transform(ConstInliner(irFile, inlineConstTracker), null)
+            irFile.transform(IrConstFieldInliner(irFile, inlineConstTracker), null)
         }
     }
 
