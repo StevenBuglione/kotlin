@@ -47,7 +47,6 @@ import org.jetbrains.kotlin.ir.util.isEffectivelyExternal
 import org.jetbrains.kotlin.ir.util.isInterface
 import org.jetbrains.kotlin.ir.util.isReal
 import org.jetbrains.kotlin.ir.util.setDeclarationsParent
-import org.jetbrains.kotlin.ir.util.superClass
 import org.jetbrains.kotlin.ir.visitors.IrVisitorVoid
 import org.jetbrains.kotlin.ir.visitors.acceptChildrenVoid
 import org.jetbrains.kotlin.ir.visitors.acceptVoid
@@ -136,22 +135,25 @@ class WebStaticInitializersDeclarationLowering(private val context: JsCommonBack
         // This is needed for 2 reasons:
         // 1. To create a call to a parent static_init in the child static_init body.
         // 2. To create child static_init even if the child doesn't have any initializers, but super class has.
-        var hasSuperClassWithStaticInitializer = false
-        container.dependencySuperClasses.forEach {
+        var hasSuperTypeWithStaticInitializer = false
+        container.dependencySuperTypes.forEach {
             processDeclarationContainer(it)
-            if (it.staticInitFunction != null) hasSuperClassWithStaticInitializer = true
+            if (it.staticInitFunction != null) hasSuperTypeWithStaticInitializer = true
         }
 
-        val hasStaticFieldInitializer = container.declarations.any {
+        val needsStaticInitFunction = container.declarations.any {
             when (it) {
                 is IrEnumEntry -> it.correspondingField?.isStatic == true && it.initializerExpression != null
                 is IrField -> it.isStatic && it.initializer != null
                 is IrProperty -> it.backingField?.isStatic == true && it.backingField?.initializer != null
+                // We always generate static_init function if class has companion object even without explicit companion block initializers
+                // to preserve correct order of super companion objects initialization
+                is IrClass if it.isCompanion -> true
                 else -> false
             }
         }
 
-        if (!hasStaticFieldInitializer && !hasSuperClassWithStaticInitializer) return
+        if (!needsStaticInitFunction && !hasSuperTypeWithStaticInitializer) return
 
         val initializers = buildList {
             for (declaration in container.declarations) {
@@ -253,7 +255,7 @@ class WebStaticInitializersDeclarationLowering(private val context: JsCommonBack
                 }
 
                 val [dependencySuperInterfaces, dependencySuperClasses] =
-                    container.dependencySuperClasses.partition { it.isInterface }
+                    container.dependencySuperTypes.partition { it.isInterface }
 
                 // Super class should be initialized before super interfaces, regardless of class placement in the super type list
                 (dependencySuperClasses + dependencySuperInterfaces)
@@ -268,7 +270,7 @@ class WebStaticInitializersDeclarationLowering(private val context: JsCommonBack
         }
     }
 
-    private val IrClass.dependencySuperClasses: List<IrClass>
+    private val IrClass.dependencySuperTypes: List<IrClass>
         get() = superTypes
             .filter { !it.isAny() }
             .mapNotNull { it.classOrNull?.owner }
