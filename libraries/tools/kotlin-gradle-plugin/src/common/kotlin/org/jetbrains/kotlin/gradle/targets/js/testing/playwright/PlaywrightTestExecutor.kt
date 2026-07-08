@@ -76,7 +76,7 @@ internal class PwRunnerSpec(
  * within a single test task invocation.
  */
 internal class PwExecutionSpec(
-    val createClient: (TestResultProcessor, Logger) -> TCServiceMessagesClient,
+    val createClient: (TestResultProcessor, Logger) -> PlaywrightTCServiceMessagesClient,
     val runners: List<PwRunnerSpec>,
     val nodeExecutable: String,
     val playwrightCli: String,
@@ -112,6 +112,7 @@ internal class PlaywrightTestExecutor() : TestExecuter<PwExecutionSpec> {
                         for (runner in spec.runners) {
                             suite(id = runner.name) {
                                 try {
+                                    client.currentRunnerName = runner.name
                                     executeRunner(playwright, runner, handler)
                                 } catch (t: Throwable) {
                                     val tsEnd = System.currentTimeMillis()
