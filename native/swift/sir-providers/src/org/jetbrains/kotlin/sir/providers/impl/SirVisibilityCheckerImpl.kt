@@ -144,7 +144,7 @@ public class SirVisibilityCheckerImpl(
             return@withSessions false
         }
         @OptIn(KaExperimentalApi::class)
-        if (isCompanion) {
+        if (isCompanion && !isValueOfOnEnum(this@isExported)) {
             unsupportedDeclarationReporter.report(this@isExported, "companion blocks and extensions are not supported yet")
             return@withSessions false
         }
@@ -196,7 +196,7 @@ public class SirVisibilityCheckerImpl(
             return@withSessions SirAvailability.Hidden("Property declaration has hidden accessors")
         }
         @OptIn(KaExperimentalApi::class)
-        if (isCompanion) {
+        if (isCompanion && this !is KaEnumEntrySymbol) {
             return@withSessions SirAvailability.Hidden("companion blocks and extensions are not supported yet")
         }
         return@withSessions SirAvailability.Available(SirVisibility.PUBLIC)
