@@ -16,9 +16,11 @@ import org.jetbrains.kotlin.fir.isJavaNonAbstractSealed
 import org.jetbrains.kotlin.fir.resolve.getSuperTypes
 import org.jetbrains.kotlin.fir.resolve.isSubclassOf
 import org.jetbrains.kotlin.fir.resolve.providers.symbolProvider
+import org.jetbrains.kotlin.fir.resolve.toClassSymbol
 import org.jetbrains.kotlin.fir.resolve.toRegularClassSymbol
 import org.jetbrains.kotlin.fir.symbols.impl.FirClassSymbol
 import org.jetbrains.kotlin.fir.symbols.impl.FirRegularClassSymbol
+import org.jetbrains.kotlin.fir.types.ConeClassLikeLookupTag
 import org.jetbrains.kotlin.utils.addToStdlib.flattenTo
 
 interface FirComplementarySymbolsCalculator : FirSessionComponent {
@@ -29,10 +31,10 @@ interface FirComplementarySymbolsCalculator : FirSessionComponent {
 }
 
 object FirDefaultComplementarySymbolsCalculator : FirComplementarySymbolsCalculator {
-    private val allSubclassesCache = mutableMapOf<FirClassSymbol<*>, Set<FirClassSymbol<*>>>()
+    private val allSubclassesCache = mutableMapOf<ConeClassLikeLookupTag, Set<ConeClassLikeLookupTag>>()
 
     override fun collectAllSubclassesFor(symbol: FirClassSymbol<*>, session: FirSession): Set<FirClassSymbol<*>> =
-        collectAllSubclassesFor(symbol, session, visited = mutableSetOf())
+        collectAllSubclassesFor(symbol, session, visited = mutableSetOf()).mapNotNullTo(mutableSetOf()) { it.toClassSymbol(session) }
 
     private fun collectAllSubclassesFor(
         symbol: FirClassSymbol<*>,
@@ -42,13 +44,13 @@ object FirDefaultComplementarySymbolsCalculator : FirComplementarySymbolsCalcula
          * See: `inheritorNameClashesWithBase.kt`.
          */
         visited: MutableSet<FirClassSymbol<*>>,
-    ): Set<FirClassSymbol<*>> = allSubclassesCache.getOrPut(symbol) {
+    ): Set<ConeClassLikeLookupTag> = allSubclassesCache.getOrPut(symbol.toLookupTag()) {
         when {
             !visited.add(symbol) -> emptySet()
-            symbol !is FirRegularClassSymbol -> setOf(symbol)
+            symbol !is FirRegularClassSymbol -> setOf(symbol.toLookupTag())
             symbol.fir.modality == Modality.SEALED -> buildSet {
                 if (symbol.fir.isJavaNonAbstractSealed == true) {
-                    add(symbol)
+                    add(symbol.toLookupTag())
                 }
 
                 symbol.fir.getSealedClassInheritors(session).forEach {
@@ -56,7 +58,7 @@ object FirDefaultComplementarySymbolsCalculator : FirComplementarySymbolsCalcula
                     this += collectAllSubclassesFor(symbol, session, visited)
                 }
             }
-            else -> setOf(symbol)
+            else -> setOf(symbol.toLookupTag())
         }
     }
 
