@@ -151,10 +151,6 @@ abstract class FirDefaultVisitorVoid : FirVisitorVoid() {
         visitReceiverParameter(scriptReceiverParameter)
     }
 
-    override fun visitEnumEntry(enumEntry: FirEnumEntry) {
-        visitVariable(enumEntry)
-    }
-
     override fun visitCodeFragment(codeFragment: FirCodeFragment) {
         visitDeclaration(codeFragment)
     }

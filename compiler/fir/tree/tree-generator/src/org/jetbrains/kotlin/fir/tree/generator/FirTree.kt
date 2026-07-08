@@ -933,6 +933,7 @@ object FirTree : AbstractFirTreeBuilder() {
 
     val enumEntry: Element by element(Declaration) {
         parent(variable)
+        parent(controlFlowGraphOwner)
 
         +declaredSymbol(enumEntrySymbolType)
     }

@@ -119,9 +119,6 @@ abstract class FirDefaultVisitor<out R, in D> : FirVisitor<R, D>() {
     override fun visitScriptReceiverParameter(scriptReceiverParameter: FirScriptReceiverParameter, data: D): R =
         visitReceiverParameter(scriptReceiverParameter, data)
 
-    override fun visitEnumEntry(enumEntry: FirEnumEntry, data: D): R =
-        visitVariable(enumEntry, data)
-
     override fun visitCodeFragment(codeFragment: FirCodeFragment, data: D): R =
         visitDeclaration(codeFragment, data)
 
