@@ -9,7 +9,7 @@ abstract class Outer<X> {
 
         inner class Innermost {
             fun foo() {
-                val refX: Inner.() -> X <!INITIALIZER_TYPE_MISMATCH!>=<!> <!WRONG_NUMBER_OF_TYPE_ARGUMENTS!>Inner<!>::x
+                val refX: Inner.() -> X = <!WRONG_NUMBER_OF_TYPE_ARGUMENTS!>Inner<!>::<!INITIALIZER_TYPE_MISMATCH!>x<!>
                 val kRefX = <!WRONG_NUMBER_OF_TYPE_ARGUMENTS!>Inner<!>::x
             }
         }
@@ -17,7 +17,7 @@ abstract class Outer<X> {
 
     val refFoo: Inner.() -> Unit = <!WRONG_NUMBER_OF_TYPE_ARGUMENTS!>Inner<!>::foo
     val refBar: Inner.() -> Int = <!WRONG_NUMBER_OF_TYPE_ARGUMENTS!>Inner<!>::bar
-    val refX: Inner.() -> X <!INITIALIZER_TYPE_MISMATCH!>=<!> <!WRONG_NUMBER_OF_TYPE_ARGUMENTS!>Inner<!>::x
+    val refX: Inner.() -> X = <!WRONG_NUMBER_OF_TYPE_ARGUMENTS!>Inner<!>::<!INITIALIZER_TYPE_MISMATCH!>x<!>
     val kRefFoo = <!WRONG_NUMBER_OF_TYPE_ARGUMENTS!>Inner<!>::foo
     val kRefBar = <!WRONG_NUMBER_OF_TYPE_ARGUMENTS!>Inner<!>::bar
     val kRefX = <!WRONG_NUMBER_OF_TYPE_ARGUMENTS!>Inner<!>::x
