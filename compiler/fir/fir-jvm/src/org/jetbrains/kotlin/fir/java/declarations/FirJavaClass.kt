@@ -97,6 +97,7 @@ class FirJavaClass @FirImplementationDetail internal constructor(
 
     override val hasLazyNestedClassifiers: Boolean get() = true
     override val controlFlowGraphReference: FirControlFlowGraphReference? get() = null
+    override val staticControlFlowGraphReference: FirControlFlowGraphReference? get() = null
 
     override val contextParameters: List<FirValueParameter>
         get() = emptyList()
@@ -190,6 +191,7 @@ class FirJavaClass @FirImplementationDetail internal constructor(
     }
 
     override fun replaceControlFlowGraphReference(newControlFlowGraphReference: FirControlFlowGraphReference?) {}
+    override fun replaceStaticControlFlowGraphReference(newStaticControlFlowGraphReference: FirControlFlowGraphReference?) {}
 
     override val companionObjectSymbol: FirRegularClassSymbol?
         get() = null
