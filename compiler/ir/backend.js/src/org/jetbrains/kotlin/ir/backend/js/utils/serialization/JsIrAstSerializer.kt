@@ -589,6 +589,12 @@ private class JsIrAstSerializer {
                 writeExpression(spread.expression)
             }
 
+            override fun visitDestructuringAssignment(x: JsDestructuringAssignment) {
+                writeByte(ExpressionIds.DESTRUCTURING_ASSIGNMENT)
+                writeAssignable(x.target)
+                writeExpression(x.value)
+            }
+
             override fun visitNamedAssignable(assignable: JsAssignable.Named) {
                 writeByte(AssignableIds.NAMED)
                 writeInt(internalizeName(assignable.name))

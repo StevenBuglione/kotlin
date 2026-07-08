@@ -74,6 +74,10 @@ public abstract class JsVisitorWithContext {
         endVisit((JsExpression) x, ctx);
     }
 
+    public void endVisit(@NotNull JsDestructuringAssignment x, @NotNull JsContext ctx) {
+        endVisit((JsExpression) x, ctx);
+    }
+
     public void endVisit(@NotNull JsBlock x, @NotNull JsContext ctx) {
     }
 
@@ -292,6 +296,10 @@ public abstract class JsVisitorWithContext {
     }
 
     public boolean visit(@NotNull JsBinaryOperation x, @NotNull JsContext ctx) {
+        return true;
+    }
+
+    public boolean visit(@NotNull JsDestructuringAssignment x, @NotNull JsContext ctx) {
         return true;
     }
 

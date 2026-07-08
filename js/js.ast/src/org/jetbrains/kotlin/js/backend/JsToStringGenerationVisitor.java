@@ -311,6 +311,21 @@ public class JsToStringGenerationVisitor extends JsVisitor {
     }
 
     @Override
+    public void visitDestructuringAssignment(@NotNull JsDestructuringAssignment x) {
+        printCommentsBeforeNode(x);
+        pushSourceInfo(x.getSource());
+
+        x.getTarget().accept(this);
+        space();
+        assignment();
+        space();
+        accept(x.getValue());
+
+        printCommentsAfterNode(x);
+        popSourceInfo();
+    }
+
+    @Override
     public void visitBlock(@NotNull JsBlock x) {
         printJsBlock(x, true, null);
     }

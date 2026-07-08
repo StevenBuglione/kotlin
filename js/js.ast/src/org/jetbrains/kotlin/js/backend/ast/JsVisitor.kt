@@ -210,6 +210,9 @@ abstract class JsVisitor {
     open fun visitSpread(spread: JsSpread): Unit =
         visitElement(spread)
 
+    open fun visitDestructuringAssignment(x: JsDestructuringAssignment): Unit =
+        visitElement(x)
+
     open fun visitAssignable(assignable: JsAssignable): Unit =
         visitElement(assignable)
 

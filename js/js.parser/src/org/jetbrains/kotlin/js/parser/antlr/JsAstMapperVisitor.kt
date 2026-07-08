@@ -675,7 +675,7 @@ internal class JsAstMapperVisitor(
         return JsBindingProperty(
             propertyName = null,
             JsBindingElement(
-                JsAssignable.Named(scopeContext.localNameFor(ctx.identifierName().text)),
+                JsAssignable.Named(bindingNameFor(ctx.identifierName().text)),
                 defaultValue = ctx.initializer()?.singleExpression()?.let { visitNode(it) },
                 isSpread = false
             ).applyLocation(ctx)
@@ -708,7 +708,7 @@ internal class JsAstMapperVisitor(
     }
 
     override fun visitRestBindingElement(ctx: JavaScriptParser.RestBindingElementContext): JsBindingElement {
-        val name = scopeContext.localNameFor(ctx.identifierName().text)
+        val name = bindingNameFor(ctx.identifierName().text)
         val target = JsAssignable.Named(name).applyLocation(ctx.identifierName())
         return JsBindingElement(target, null, isSpread = true).applyLocation(ctx)
     }
@@ -874,6 +874,26 @@ internal class JsAstMapperVisitor(
         val left = visitNode<JsExpression>(ctx.singleExpressionImpl(0))
         val right = visitNode<JsExpression>(ctx.singleExpressionImpl(1))
         return JsBinaryOperation(JsBinaryOperator.ASG, left, right)
+            .applyLocation(ctx.Assign())
+            .applyComments(ctx)
+    }
+
+    override fun visitObjectDestructuringAssignmentExpression(
+        ctx: JavaScriptParser.ObjectDestructuringAssignmentExpressionContext
+    ): JsDestructuringAssignment {
+        val target = asAssignmentTarget { visitNode<JsAssignable.ObjectPattern>(ctx.objectBindingPattern()) }
+        val value = visitNode<JsExpression>(ctx.rhs)
+        return JsDestructuringAssignment(target, value)
+            .applyLocation(ctx.Assign())
+            .applyComments(ctx)
+    }
+
+    override fun visitArrayDestructuringAssignmentExpression(
+        ctx: JavaScriptParser.ArrayDestructuringAssignmentExpressionContext
+    ): JsDestructuringAssignment {
+        val target = asAssignmentTarget { visitNode<JsAssignable.ArrayPattern>(ctx.arrayBindingPattern()) }
+        val value = visitNode<JsExpression>(ctx.rhs)
+        return JsDestructuringAssignment(target, value)
             .applyLocation(ctx.Assign())
             .applyComments(ctx)
     }
@@ -1146,11 +1166,11 @@ internal class JsAstMapperVisitor(
 
     override fun visitAssignable(ctx: JavaScriptParser.AssignableContext): JsAssignable {
         ctx.identifier()?.let {
-            return JsAssignable.Named(scopeContext.localNameFor(it.text)).applyLocation(ctx)
+            return JsAssignable.Named(bindingNameFor(it.text)).applyLocation(ctx)
         }
 
         ctx.keyword()?.let {
-            return JsAssignable.Named(scopeContext.localNameFor(it.text)).applyLocation(ctx)
+            return JsAssignable.Named(bindingNameFor(it.text)).applyLocation(ctx)
         }
 
         ctx.arrayBindingPattern()?.let {
@@ -1418,6 +1438,23 @@ internal class JsAstMapperVisitor(
 
     private fun makeRefNode(identifier: String): JsNameRef {
         return scopeContext.globalNameFor(identifier).makeRef()
+    }
+
+    // Binding-pattern leaves declare fresh local names in a declaration context (`let { a } = ...`),
+    // but they must reference existing variables in an expression-level destructuring assignment (`({ a } = ...)`).
+    private var resolvePatternNamesAsReferences = false
+
+    private fun bindingNameFor(identifier: String): JsName =
+        if (resolvePatternNamesAsReferences) scopeContext.globalNameFor(identifier) else scopeContext.localNameFor(identifier)
+
+    private fun <T> asAssignmentTarget(block: () -> T): T {
+        val previous = resolvePatternNamesAsReferences
+        resolvePatternNamesAsReferences = true
+        try {
+            return block()
+        } finally {
+            resolvePatternNamesAsReferences = previous
+        }
     }
 
     private fun reportError(message: String, ctx: ParserRuleContext): Nothing {
