@@ -37,7 +37,7 @@ KtUserType(81,82): 'C'
 KtNameReferenceExpression(81,82): 'C'
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: NotAvailable
-  managedLocalResolve: true
+  managedLocalResolve: false
   KaSymbolResolutionSuccess:
     symbols = [
       test/C

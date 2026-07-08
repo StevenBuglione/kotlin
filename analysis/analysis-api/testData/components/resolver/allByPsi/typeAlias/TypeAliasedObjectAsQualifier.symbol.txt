@@ -76,7 +76,7 @@ KtUserType(105,113): 'MyObject'
 KtNameReferenceExpression(105,113): 'MyObject'
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: NotAvailable
-  managedLocalResolve: true
+  managedLocalResolve: false
   KaSymbolResolutionSuccess:
     symbols = [
       test/MyObject

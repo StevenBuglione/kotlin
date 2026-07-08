@@ -40,7 +40,7 @@ KtUserType(120,124): 'Some'
 KtNameReferenceExpression(120,124): 'Some'
   isImplicitReferenceToCompanion: false
   contextSensitiveResolutionStatus: NotAvailable
-  managedLocalResolve: true
+  managedLocalResolve: false
   KaSymbolResolutionSuccess:
     symbols = [
       /Some
