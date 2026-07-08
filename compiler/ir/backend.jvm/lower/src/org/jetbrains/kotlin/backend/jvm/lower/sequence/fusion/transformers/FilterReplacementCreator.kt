@@ -29,8 +29,8 @@ internal class FilterReplacementCreator(val filter: SequenceTransformer.Filter) 
                         context.irBuiltIns.unitType,
                         irNot(filter.predicateCall(builderWithParent)(sequenceVariable)),
                         IrReturnImpl(
-                            startOffset = startOffset,
-                            endOffset = endOffset,
+                            startOffset = filter.startOffset,
+                            endOffset = filter.endOffset,
                             type = context.irBuiltIns.nothingType,
                             returnTargetSymbol = returnableBlockSymbol,
                             value = irTrue()

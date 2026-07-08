@@ -261,7 +261,15 @@ internal class SequenceDataGatherer(val context: JvmBackendContext) : IrVisitorV
         } else {
             MapPredicateCall.NonIndexed(nonIndexedPredicateCall)
         }
-        val transformers = listOf(SequenceTransformer.Map(predicateCall, isIndexed, isNotNull)) + receiverData.transformers
+        val transformers = listOf(
+            SequenceTransformer.Map(
+                predicateCall,
+                isIndexed,
+                isNotNull,
+                expression.startOffset,
+                expression.endOffset
+            )
+        ) + receiverData.transformers
         expression.sequenceDataOfExpression = SequenceData(receiverData.sequenceSource, transformers)
     }
 
@@ -272,7 +280,8 @@ internal class SequenceDataGatherer(val context: JvmBackendContext) : IrVisitorV
         val argumentExpression = call.arguments.getOrNull(1) ?: return
         val receiverData = receiver.sequenceDataOfExpression ?: return
         if (!isSafeToLower(argumentExpression)) return
-        val transformers = listOf(SequenceTransformer.Take(argumentExpression)) + receiverData.transformers
+        val transformers =
+            listOf(SequenceTransformer.Take(argumentExpression, call.startOffset, call.endOffset)) + receiverData.transformers
         call.sequenceDataOfExpression = SequenceData(receiverData.sequenceSource, transformers)
     }
 
@@ -365,7 +374,7 @@ internal class SequenceDataGatherer(val context: JvmBackendContext) : IrVisitorV
                 }
             }
         }
-        val transformers = listOf(SequenceTransformer.Filter(filterFunction)) + receiverData.transformers
+        val transformers = listOf(SequenceTransformer.Filter(filterFunction, call.startOffset, call.endOffset)) + receiverData.transformers
         call.sequenceDataOfExpression = SequenceData(receiverData.sequenceSource, transformers)
     }
 

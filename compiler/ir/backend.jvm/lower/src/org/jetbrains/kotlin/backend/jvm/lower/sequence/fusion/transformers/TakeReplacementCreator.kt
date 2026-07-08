@@ -5,6 +5,7 @@
 
 package org.jetbrains.kotlin.backend.jvm.lower.sequence.fusion.transformers
 
+import org.jetbrains.kotlin.backend.common.lower.irThrow
 import org.jetbrains.kotlin.backend.jvm.lower.sequence.fusion.IrBuilderWithParent
 import org.jetbrains.kotlin.backend.jvm.lower.sequence.fusion.SequenceReplacement
 import org.jetbrains.kotlin.backend.jvm.lower.sequence.fusion.SequenceTransformer
@@ -15,6 +16,7 @@ import org.jetbrains.kotlin.ir.builders.irIfThen
 import org.jetbrains.kotlin.ir.builders.irInt
 import org.jetbrains.kotlin.ir.builders.irReturnableBlock
 import org.jetbrains.kotlin.ir.builders.irSet
+import org.jetbrains.kotlin.ir.builders.irString
 import org.jetbrains.kotlin.ir.declarations.IrValueDeclaration
 import org.jetbrains.kotlin.ir.expressions.impl.IrReturnImpl
 import org.jetbrains.kotlin.ir.types.classifierOrNull
@@ -33,11 +35,32 @@ internal class TakeReplacementCreator(val take: SequenceTransformer.Take) : Tran
             isMutable = true,
             nameHint = "takeVar"
         )
+        val takeArgumentVariable = builder.scope.createTemporaryVariable(
+            take.argument.deepCopyWithSymbols(builderWithParent.second),
+            nameHint = "takeArgument",
+            startOffset = take.startOffset,
+            endOffset = take.endOffset,
+        )
+        val classifier = takeVariable.type.classifierOrNull
+        val lessThanSymbol = builder.context.irBuiltIns.lessFunByOperandType[classifier]
+            ?: error("No lessThan function found for type ${takeVariable.type}")
+        val exceptionClass = builder.context.irBuiltIns.illegalArgumentExceptionSymbol.owner
+
+        val throwExpression = builder.irThrow(
+            builder.irCall(exceptionClass).apply {
+                arguments[0] = builder.irString("Requested element count is less than zero.")
+            }
+        )
+        val checkIfNegative = builder.irIfThen(
+            type = builder.context.irBuiltIns.unitType,
+            builder.irCall(lessThanSymbol).apply {
+                arguments[0] = builder.irGet(takeArgumentVariable)
+                arguments[1] = builder.irInt(0)
+            },
+            throwExpression
+        )
         val mainBodyBuilder = { sequenceVariable: IrValueDeclaration ->
             with(builder) {
-                val classifier = takeVariable.type.classifierOrNull
-                val lessThanSymbol = context.irBuiltIns.lessFunByOperandType[classifier]
-                    ?: error("No lessThan function found for type ${takeVariable.type}")
                 val block = irReturnableBlock(context.irBuiltIns.booleanType) {
 
                     // takeVariable++
@@ -46,7 +69,7 @@ internal class TakeReplacementCreator(val take: SequenceTransformer.Take) : Tran
                         arguments[1] = irInt(1)
                     })
                     val condition = irCall(lessThanSymbol).apply {
-                        arguments[0] = take.argument.deepCopyWithSymbols(builderWithParent.second)
+                        arguments[0] = irGet(takeArgumentVariable)
                         arguments[1] = irGet(takeVariable)
                     }
                     // if (takeVariable > takeArgument) return false
@@ -65,7 +88,7 @@ internal class TakeReplacementCreator(val take: SequenceTransformer.Take) : Tran
                 addShortCircuitCheck(sequenceReplacement, shouldCheckShortCircuit, block, sequenceVariable, builder)
             }
         }
-        val initialDeclarations = sequenceReplacement.initialDeclarations + takeVariable
+        val initialDeclarations = sequenceReplacement.initialDeclarations + takeVariable + takeArgumentVariable + checkIfNegative
         val finalExpression = sequenceReplacement.finalExpression
         return SequenceReplacement(initialDeclarations, mainBodyBuilder, finalExpression)
     }

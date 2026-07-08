@@ -41,8 +41,10 @@ import org.jetbrains.kotlin.ir.expressions.IrBody
 import org.jetbrains.kotlin.ir.expressions.IrCall
 import org.jetbrains.kotlin.ir.expressions.IrContainerExpression
 import org.jetbrains.kotlin.ir.expressions.IrExpression
+import org.jetbrains.kotlin.ir.expressions.IrReturn
 import org.jetbrains.kotlin.ir.expressions.IrReturnableBlock
 import org.jetbrains.kotlin.ir.expressions.IrRichFunctionReference
+import org.jetbrains.kotlin.ir.symbols.IrSimpleFunctionSymbol
 import org.jetbrains.kotlin.ir.util.deepCopyWithSymbols
 import org.jetbrains.kotlin.ir.util.isSubtypeOfClass
 import org.jetbrains.kotlin.ir.util.statements
@@ -56,6 +58,7 @@ private class YieldReplacer(
     val builderWithParent: IrBuilderWithParent,
     val consumeFunction: IrFunction,
     val returnableBlock: IrReturnableBlock,
+    val oldLambdaSymbol: IrSimpleFunctionSymbol,
     val context: JvmBackendContext,
 ) : IrElementTransformerVoid() {
     var shouldTerminate = false
@@ -109,6 +112,13 @@ private class YieldReplacer(
                 super.visitCall(expression)
             }
         }
+    }
+
+    override fun visitReturn(expression: IrReturn): IrExpression {
+        if (expression.returnTargetSymbol == oldLambdaSymbol) {
+            expression.returnTargetSymbol = returnableBlock.symbol
+        }
+        return expression
     }
 
     private fun yieldReplacement(
@@ -254,11 +264,12 @@ internal class SequenceConstructorStrategy(
             +innerBlock
             +sequenceReplacement.finalExpression
         }
-
+        val oldLambdaSymbol = sequenceScope.invokeFunction.symbol
         val yieldReplacer = YieldReplacer(
             builderWithParent,
             localConsumerFunction,
             innerBlock,
+            oldLambdaSymbol,
             context,
         )
 

@@ -98,6 +98,8 @@ internal class SequenceOfStrategy(
                     +incrementStatement
                 }
             }
+
+
             +loop
             +sequenceReplacement.finalExpression
         }
@@ -107,13 +109,14 @@ internal class SequenceOfStrategy(
         builderWithParent: IrBuilderWithParent,
         elements: List<IrExpression>,
         returnedType: IrType,
-        takeIteratorVariable: IrVariable
+        iteratorVariable: IrVariable
     ): IrExpression {
         val builder = builderWithParent.first
         return with(builder) {
             val branches: MutableList<IrBranch> = elements.mapIndexed { index, element ->
                 val elementCopy = element.deepCopyWithSymbols(builderWithParent.second)
-                irBranch(irEquals(irGet(takeIteratorVariable), irInt(index)), elementCopy)
+                elementCopy.markAsSynthetic()
+                irBranch(irEquals(irGet(iteratorVariable), irInt(index)), elementCopy)
             }.toMutableList()
             branches.add(
                 irElseBranch(

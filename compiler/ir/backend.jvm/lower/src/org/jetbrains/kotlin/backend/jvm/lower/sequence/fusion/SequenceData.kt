@@ -31,12 +31,23 @@ internal sealed class SequenceTransformer {
     class Map(
         val predicateCall: MapPredicateCall,
         val isIndexed: Boolean,
-        val isNotNull: Boolean
+        val isNotNull: Boolean,
+        val startOffset: Int,
+        val endOffset: Int,
     ) :
         SequenceTransformer()
 
-    class Filter(val predicateCall: (IrBuilderWithParent) -> (IrValueDeclaration) -> IrExpression) : SequenceTransformer()
-    class Take(val argument: IrExpression) : SequenceTransformer()
+    class Filter(
+        val predicateCall: (IrBuilderWithParent) -> (IrValueDeclaration) -> IrExpression,
+        val startOffset: Int,
+        val endOffset: Int,
+    ) : SequenceTransformer()
+
+    class Take(
+        val argument: IrExpression,
+        val startOffset: Int,
+        val endOffset: Int
+    ) : SequenceTransformer()
 }
 
 internal class SequenceData(

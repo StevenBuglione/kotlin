@@ -32,7 +32,9 @@ internal class MapReplacementCreator(val map: SequenceTransformer.Map) :
         val mapIndexedVariable = builder.scope.createTemporaryVariable(
             builder.irInt(0),
             isMutable = true,
-            nameHint = "mapIndexedVariable"
+            nameHint = "mapIndexedVariable",
+            startOffset = map.startOffset,
+            endOffset = map.endOffset,
         )
         val mainBodyBuilder = { sequenceVariable: IrValueDeclaration ->
             with(builder) {

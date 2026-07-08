@@ -15,6 +15,10 @@ fun box(): String {
     val z = seq3.lastOrNull<Int>()
     if (z != null) return "failed expected null, but got $z"
 
+    val res = sequenceOf(null).last()
+    if (res != null) return "Fail: Expected null, got $res"
+    return "OK"
+
     val seq4 = generateSequence { null }
     try {
         seq4.last()

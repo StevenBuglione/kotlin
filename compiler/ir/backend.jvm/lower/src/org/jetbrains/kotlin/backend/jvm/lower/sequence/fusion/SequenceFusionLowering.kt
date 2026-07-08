@@ -13,10 +13,9 @@ import org.jetbrains.kotlin.backend.jvm.JvmBackendContext
 import org.jetbrains.kotlin.backend.jvm.lower.sequence.fusion.consumers.*
 import org.jetbrains.kotlin.backend.jvm.lower.sequence.fusion.transformers.TransformerReplacementCreator
 import org.jetbrains.kotlin.ir.IrElement
+import org.jetbrains.kotlin.ir.IrStatement
 import org.jetbrains.kotlin.ir.builders.IrBuilderWithScope
-import org.jetbrains.kotlin.ir.builders.irBlock
 import org.jetbrains.kotlin.ir.builders.irCall
-import org.jetbrains.kotlin.ir.builders.irTemporary
 import org.jetbrains.kotlin.ir.declarations.IrDeclarationParent
 import org.jetbrains.kotlin.ir.declarations.IrFile
 import org.jetbrains.kotlin.ir.declarations.IrVariable
@@ -74,7 +73,7 @@ import org.jetbrains.kotlin.utils.addToStdlib.assignFrom
 internal typealias ConsumerBodyBuilder = (IrValueDeclaration) -> IrContainerExpression
 
 internal data class SequenceReplacement(
-    val initialDeclarations: List<IrVariable>,
+    val initialDeclarations: List<IrStatement>,
     val mainBodyBuilder: ConsumerBodyBuilder,
     val finalExpression: IrExpression,
 )
@@ -99,19 +98,6 @@ internal typealias IrBuilderWithParent = Pair<IrBuilderWithScope, IrDeclarationP
 internal fun isCallFromKotlinSequences(expression: IrCall): Boolean {
     val packageFqName = expression.symbol.owner.getPackageFragment().packageFqName.asString()
     return packageFqName == "kotlin.sequences"
-}
-
-internal fun isSequenceTransformer(expression: IrExpression): Boolean {
-    return when (expression) {
-        is IrCall -> {
-            val name = expression.symbol.owner.name.asString()
-            when (name) {
-                MAP, MAP_INDEXED, MAP_NOT_NULL, MAP_NOT_NULL_INDEXED, FILTER, FILTER_NOT, FILTER_NOT_NULL, TAKE -> true
-                else -> false
-            }
-        }
-        else -> false
-    }
 }
 
 internal fun getGenericTypeFromExpression(sequence: IrExpression): IrType? =
@@ -231,15 +217,8 @@ private class SequenceFusionTransformer(val context: JvmBackendContext) : IrElem
             ) ?: return visitedExpression
         val producerStrategy = sequenceData.sequenceSource.createProducerStrategy(builder, context)
         val sequenceReplacement = deployStrategies(consumerStrategy, sequenceData, builder to parent) ?: return visitedExpression
-        val newExpression =
-            producerStrategy.fuseConsumer(builder to parent, sequenceData, sequenceReplacement)
-                ?: return visitedExpression
-        return if (isSequenceTransformer(receiver)) {
-            builder.irBlock {
-                irTemporary(receiver.deepCopyWithSymbols(parent))
-                +newExpression
-            }
-        } else newExpression
+        return producerStrategy.fuseConsumer(builder to parent, sequenceData, sequenceReplacement)
+            ?: visitedExpression
     }
 }
 

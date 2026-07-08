@@ -32,6 +32,11 @@ private const val LAST_OR_NULL = "lastOrNull"
 private const val FILTER_TO = "filterTo"
 private const val FILTER_NOT_TO = "filterNotTo"
 private const val FILTER_NOT_NULL_TO = "filterNotNullTo"
+private const val TO_LIST = "toList"
+private const val TO_MUTABLE_LIST = "toMutableList"
+private const val TO_SET = "toSet"
+private const val TO_MUTABLE_SET = "toMutableSet"
+private const val TO_COLLECTION = "toCollection"
 
 internal abstract class ConsumerStrategy(val data: ConsumerData, val expression: IrExpression) {
     abstract fun initializeState(): List<IrVariable>
@@ -70,6 +75,11 @@ internal fun createConsumerStrategy(
         FILTER_TO -> FilterToConsumerStrategy(data, expression, FilterVersion.Filter)
         FILTER_NOT_TO -> FilterToConsumerStrategy(data, expression, FilterVersion.FilterNot)
         FILTER_NOT_NULL_TO -> FilterToConsumerStrategy(data, expression, FilterVersion.FilterNotNull)
+        TO_LIST -> ToCollectionConsumerStrategy(data, expression, CollectionVersion.List)
+        TO_MUTABLE_LIST -> ToCollectionConsumerStrategy(data, expression, CollectionVersion.List)
+        TO_SET -> ToCollectionConsumerStrategy(data, expression, CollectionVersion.Set)
+        TO_MUTABLE_SET -> ToCollectionConsumerStrategy(data, expression, CollectionVersion.Set)
+        TO_COLLECTION -> ToCollectionConsumerStrategy(data, expression, CollectionVersion.Collection)
         else -> null
     }
 }
