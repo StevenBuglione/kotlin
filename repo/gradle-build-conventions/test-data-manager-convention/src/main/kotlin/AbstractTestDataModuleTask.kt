@@ -19,17 +19,23 @@ import javax.inject.Inject
  *
  * ## Why `-P` options instead of `@Option`
  *
- * CLI `@Option` values are part of Gradle's configuration-cache (CC) key, so iterating on, e.g.,
- * `--test-data-path` re-runs Gradle configuration (which can take 1–2 minutes on this project) for
- * each different value. Reading options as `-P` properties **only at execution time** keeps the CC
- * entry stable across different option values, so subsequent invocations skip reconfiguration entirely.
+ * Only values **consumed during the configuration phase** are part of Gradle's configuration-cache
+ * (CC) key. `@Option` CLI flags are applied while the task is *configured*, so iterating on, e.g.,
+ * `--test-data-path` via `--option` re-runs configuration (1–2 minutes on this project) for each
+ * distinct value. `-P` properties read **only at execution time** are not configuration inputs, so
+ * the CC entry stays stable across option values and subsequent invocations skip reconfiguration.
  *
- * ## Trade-off: opaque to Gradle's task cache
+ * ## Trade-off: options are not tracked inputs
  *
- * The same mechanism that keeps the CC stable — not exposing options as `@Input` properties — also
- * hides them from Gradle's task-identity machinery. As a result, these tasks are never UP-TO-DATE,
- * never restored from the build cache, and the test runner is invoked on every invocation. The choice
- * is permanent and intentional: input-tracking the options would undo the CC benefit.
+ * These tasks do not declare the options as `@Input` properties at all — [exec] reads the `-P` values
+ * directly. As a result Gradle cannot see the options as task inputs, so the tasks are never
+ * UP-TO-DATE, never restored from the build cache, and the runner is invoked on every invocation. This
+ * is acceptable because they are [JavaExec] tasks with no declared outputs that always re-run anyway.
+ *
+ * Note this is a deliberate simplification, **not** a requirement of CC-friendliness: `@Input` values
+ * feed task up-to-date/build-cache identity at *execution* time, not the CC key. The options could
+ * instead be exposed as `@Input` providers fed from `-P` and still keep the CC stable, as long as
+ * those providers are never resolved during configuration.
  *
  * ## Options
  *
