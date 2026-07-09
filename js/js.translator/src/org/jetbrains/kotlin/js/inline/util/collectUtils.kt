@@ -108,20 +108,18 @@ private fun collectNamedFunctionsAndMetadata(scope: JsNode): Map<JsName, Pair<Fu
     val namedFunctions = mutableMapOf<JsName, Pair<FunctionWithWrapper, JsExpression>>()
 
     scope.accept(object : RecursiveJsVisitor() {
-        override fun visitBinaryExpression(x: JsBinaryOperation) {
-            val assignment = JsAstUtils.decomposeAssignment(x)
-            if (assignment != null) {
-                val [left, right] = assignment
-                if (left is JsNameRef) {
-                    val name = left.name
-                    if (name != null) {
-                        extractFunction(right)?.let { (val function, val wrapper = wrapperBody) ->
-                            namedFunctions[name] = Pair(FunctionWithWrapper(function, wrapper), right)
-                        }
+        override fun visitSimpleAssignment(x: JsAssignmentOperation.Simple) {
+            val left = x.target
+            val right = x.value
+            if (left is JsNameRef) {
+                val name = left.name
+                if (name != null) {
+                    extractFunction(right)?.let { (val function, val wrapper = wrapperBody) ->
+                        namedFunctions[name] = Pair(FunctionWithWrapper(function, wrapper), right)
                     }
                 }
             }
-            super.visitBinaryExpression(x)
+            super.visitSimpleAssignment(x)
         }
 
         override fun visit(x: JsVars.JsVar) {

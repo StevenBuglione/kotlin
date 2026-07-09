@@ -167,7 +167,7 @@ class IrElementToJsStatementTransformer : BaseIrElementToJsNodeTransformer<JsSta
             val varRef = varName.makeRef()
             val transformer: (() -> JsStatement) -> JsStatement = {
                 val expr = (it() as JsExpressionStatement).expression
-                JsBinaryOperation(JsBinaryOperator.ASG, varRef, expr).makeStmt()
+                JsAssignmentOperation.Simple(varRef, expr).makeStmt()
             }
 
             SwitchOptimizer(context, isExpression = true, transformer).tryOptimize(value)?.let {

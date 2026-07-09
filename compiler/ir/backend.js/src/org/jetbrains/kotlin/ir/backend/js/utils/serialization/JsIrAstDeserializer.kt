@@ -446,8 +446,11 @@ private class JsIrAstDeserializer(private val source: ByteArray) {
                         SPREAD -> {
                             JsSpread(readExpression())
                         }
+                        SIMPLE_ASSIGNMENT -> {
+                            JsAssignmentOperation.Simple(readExpression(), readExpression())
+                        }
                         DESTRUCTURING_ASSIGNMENT -> {
-                            JsDestructuringAssignment(readAssignable(), readExpression())
+                            JsAssignmentOperation.Destructuring(readAssignable(), readExpression())
                         }
                         else -> error("Unknown expression id: $id")
                     }

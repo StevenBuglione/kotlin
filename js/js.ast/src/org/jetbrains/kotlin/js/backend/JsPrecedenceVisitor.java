@@ -61,8 +61,13 @@ class JsPrecedenceVisitor extends JsVisitor {
     }
 
     @Override
-    public void visitDestructuringAssignment(@NotNull JsDestructuringAssignment x) {
-        answer = JsBinaryOperator.ASG.getPrecedence();
+    public void visitSimpleAssignment(@NotNull JsAssignmentOperation.Simple x) {
+        answer = JsAssignmentOperation.PRECEDENCE;
+    }
+
+    @Override
+    public void visitDestructuringAssignment(@NotNull JsAssignmentOperation.Destructuring x) {
+        answer = JsAssignmentOperation.PRECEDENCE;
     }
 
     @Override

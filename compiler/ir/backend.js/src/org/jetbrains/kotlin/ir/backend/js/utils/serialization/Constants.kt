@@ -80,6 +80,7 @@ object ExpressionIds {
     const val TEMPLATE_ELEMENT_INTERPOLATION = 29
     const val SPREAD = 30
     const val DESTRUCTURING_ASSIGNMENT = 31
+    const val SIMPLE_ASSIGNMENT = 32
 }
 
 object PropertyInitializerKinds {

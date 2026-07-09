@@ -74,8 +74,16 @@ public abstract class JsVisitorWithContext {
         endVisit((JsExpression) x, ctx);
     }
 
-    public void endVisit(@NotNull JsDestructuringAssignment x, @NotNull JsContext ctx) {
+    public void endVisit(@NotNull JsAssignmentOperation x, @NotNull JsContext ctx) {
         endVisit((JsExpression) x, ctx);
+    }
+
+    public void endVisit(@NotNull JsAssignmentOperation.Simple x, @NotNull JsContext ctx) {
+        endVisit((JsAssignmentOperation) x, ctx);
+    }
+
+    public void endVisit(@NotNull JsAssignmentOperation.Destructuring x, @NotNull JsContext ctx) {
+        endVisit((JsAssignmentOperation) x, ctx);
     }
 
     public void endVisit(@NotNull JsBlock x, @NotNull JsContext ctx) {
@@ -299,8 +307,16 @@ public abstract class JsVisitorWithContext {
         return true;
     }
 
-    public boolean visit(@NotNull JsDestructuringAssignment x, @NotNull JsContext ctx) {
+    public boolean visit(@NotNull JsAssignmentOperation x, @NotNull JsContext ctx) {
         return true;
+    }
+
+    public boolean visit(@NotNull JsAssignmentOperation.Simple x, @NotNull JsContext ctx) {
+        return visit((JsAssignmentOperation) x, ctx);
+    }
+
+    public boolean visit(@NotNull JsAssignmentOperation.Destructuring x, @NotNull JsContext ctx) {
+        return visit((JsAssignmentOperation) x, ctx);
     }
 
     public boolean visit(@NotNull JsBlock x, @NotNull JsContext ctx) {

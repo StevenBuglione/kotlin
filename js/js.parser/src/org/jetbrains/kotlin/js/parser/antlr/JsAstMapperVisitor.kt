@@ -871,30 +871,30 @@ internal class JsAstMapperVisitor(
         return JsPrefixOperation(JsUnaryOperator.NEG, expression).applyLocation(ctx.Minus())
     }
 
-    override fun visitAssignmentExpression(ctx: JavaScriptParser.AssignmentExpressionContext): JsBinaryOperation {
+    override fun visitAssignmentExpression(ctx: JavaScriptParser.AssignmentExpressionContext): JsAssignmentOperation.Simple {
         val left = visitNode<JsExpression>(ctx.singleExpressionImpl(0))
         val right = visitNode<JsExpression>(ctx.singleExpressionImpl(1))
-        return JsBinaryOperation(JsBinaryOperator.ASG, left, right)
+        return JsAssignmentOperation.Simple(left, right)
             .applyLocation(ctx.Assign())
             .applyComments(ctx)
     }
 
     override fun visitObjectDestructuringAssignmentExpression(
         ctx: JavaScriptParser.ObjectDestructuringAssignmentExpressionContext
-    ): JsDestructuringAssignment {
+    ): JsAssignmentOperation.Destructuring {
         val target = asAssignmentTarget { visitNode<JsAssignable.ObjectPattern>(ctx.objectBindingPattern()) }
         val value = visitNode<JsExpression>(ctx.rhs)
-        return JsDestructuringAssignment(target, value)
+        return JsAssignmentOperation.Destructuring(target, value)
             .applyLocation(ctx.Assign())
             .applyComments(ctx)
     }
 
     override fun visitArrayDestructuringAssignmentExpression(
         ctx: JavaScriptParser.ArrayDestructuringAssignmentExpressionContext
-    ): JsDestructuringAssignment {
+    ): JsAssignmentOperation.Destructuring {
         val target = asAssignmentTarget { visitNode<JsAssignable.ArrayPattern>(ctx.arrayBindingPattern()) }
         val value = visitNode<JsExpression>(ctx.rhs)
-        return JsDestructuringAssignment(target, value)
+        return JsAssignmentOperation.Destructuring(target, value)
             .applyLocation(ctx.Assign())
             .applyComments(ctx)
     }

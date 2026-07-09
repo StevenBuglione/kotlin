@@ -311,11 +311,47 @@ public class JsToStringGenerationVisitor extends JsVisitor {
     }
 
     @Override
-    public void visitDestructuringAssignment(@NotNull JsDestructuringAssignment x) {
+    public void visitSimpleAssignment(@NotNull JsAssignmentOperation.Simple x) {
         printCommentsBeforeNode(x);
         pushSourceInfo(x.getSource());
 
-        x.getTarget().accept(this);
+        // Assignment is right-associative, so the left-hand side is parenthesized only when it has
+        // strictly lower precedence (wrongAssoc), matching the former JsBinaryOperator.ASG rendering.
+        JsExpression target = x.getTarget();
+        boolean isTargetEnclosed = parenPush(x, target, true);
+        accept(target);
+        if (isTargetEnclosed) {
+            rightParen();
+        }
+        space();
+        assignment();
+
+        JsExpression value = x.getValue();
+        boolean isValueEnclosed;
+        if (value instanceof JsBinaryOperation && ((JsBinaryOperation) value).getOperator() == JsBinaryOperator.AND) {
+            space();
+            leftParen();
+            isValueEnclosed = true;
+        }
+        else {
+            space();
+            isValueEnclosed = parenPush(x, value, false);
+        }
+        accept(value);
+        if (isValueEnclosed) {
+            rightParen();
+        }
+
+        printCommentsAfterNode(x);
+        popSourceInfo();
+    }
+
+    @Override
+    public void visitDestructuringAssignment(@NotNull JsAssignmentOperation.Destructuring x) {
+        printCommentsBeforeNode(x);
+        pushSourceInfo(x.getSource());
+
+        x.getPattern().accept(this);
         space();
         assignment();
         space();

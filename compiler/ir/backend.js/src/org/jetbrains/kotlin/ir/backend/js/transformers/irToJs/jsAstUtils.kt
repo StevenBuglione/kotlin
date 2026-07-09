@@ -105,7 +105,7 @@ fun jsElementAccess(name: JsName, receiver: JsExpression?): JsExpression =
         JsArrayAccess(receiver, JsStringLiteral(name.ident))
     }
 
-fun jsAssignment(left: JsExpression, right: JsExpression) = JsBinaryOperation(JsBinaryOperator.ASG, left, right)
+fun jsAssignment(left: JsExpression, right: JsExpression) = JsAssignmentOperation.Simple(left, right)
 
 fun prototypeOf(classNameRef: JsExpression, context: JsStaticContext) =
     JsInvocation(
@@ -588,8 +588,8 @@ object JsAstUtils {
         return JsBinaryOperation(JsBinaryOperator.REF_EQ, arg1, arg2)
     }
 
-    fun assignment(left: JsExpression, right: JsExpression): JsBinaryOperation {
-        return JsBinaryOperation(JsBinaryOperator.ASG, left, right)
+    fun assignment(left: JsExpression, right: JsExpression): JsAssignmentOperation.Simple {
+        return JsAssignmentOperation.Simple(left, right)
     }
 
     fun sum(left: JsExpression, right: JsExpression): JsBinaryOperation {

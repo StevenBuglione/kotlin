@@ -589,9 +589,15 @@ private class JsIrAstSerializer {
                 writeExpression(spread.expression)
             }
 
-            override fun visitDestructuringAssignment(x: JsDestructuringAssignment) {
+            override fun visitSimpleAssignment(x: JsAssignmentOperation.Simple) {
+                writeByte(ExpressionIds.SIMPLE_ASSIGNMENT)
+                writeExpression(x.target)
+                writeExpression(x.value)
+            }
+
+            override fun visitDestructuringAssignment(x: JsAssignmentOperation.Destructuring) {
                 writeByte(ExpressionIds.DESTRUCTURING_ASSIGNMENT)
-                writeAssignable(x.target)
+                writeAssignable(x.pattern)
                 writeExpression(x.value)
             }
 
