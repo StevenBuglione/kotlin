@@ -344,6 +344,7 @@ This works like '--enable-preview' in Java. All class files are marked as compil
         valueDescription = "<path>",
         description = "Paths to cross-platform libraries in the .klib format.",
         delimiter = Argument.Delimiters.pathSeparator,
+        removedVersion = "2.5.0",
     )
     var klibLibraries: String? = null
         set(value) {

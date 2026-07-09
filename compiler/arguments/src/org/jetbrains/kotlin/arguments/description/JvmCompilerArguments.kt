@@ -724,6 +724,7 @@ The default value is 'indy' if language version is 2.0+, and 'class' otherwise."
 
         lifecycle(
             introducedVersion = KotlinReleaseVersion.v1_4_0,
+            removedVersion = KotlinReleaseVersion.v2_5_0,
         )
     }
 
