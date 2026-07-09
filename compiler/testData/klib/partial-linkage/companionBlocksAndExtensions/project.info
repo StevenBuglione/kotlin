@@ -1,0 +1,9 @@
+MODULES: lib1, lib2, main
+
+STEP 0:
+    arguments: -Xcompanion-blocks-and-extensions
+    libs: lib1, lib2
+
+STEP 1:
+    arguments: -Xcompanion-blocks-and-extensions
+    libs: lib1, main
