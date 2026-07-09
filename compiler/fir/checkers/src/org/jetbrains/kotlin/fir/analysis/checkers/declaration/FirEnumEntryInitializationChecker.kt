@@ -16,11 +16,9 @@ import org.jetbrains.kotlin.fir.analysis.checkers.MppCheckerKind
 import org.jetbrains.kotlin.fir.analysis.checkers.context.CheckerContext
 import org.jetbrains.kotlin.fir.analysis.diagnostics.FirErrors
 import org.jetbrains.kotlin.fir.declarations.FirClass
-import org.jetbrains.kotlin.fir.declarations.FirEnumEntry
 import org.jetbrains.kotlin.fir.declarations.FirRegularClass
 import org.jetbrains.kotlin.fir.declarations.collectEnumEntries
 import org.jetbrains.kotlin.fir.declarations.utils.isEnumClass
-import org.jetbrains.kotlin.fir.expressions.FirAnonymousObjectExpression
 import org.jetbrains.kotlin.fir.expressions.FirQualifiedAccessExpression
 import org.jetbrains.kotlin.fir.isDisabled
 import org.jetbrains.kotlin.fir.resolve.dfa.cfg.CFGNode
@@ -40,7 +38,6 @@ object FirEnumEntryInitializationChecker : FirRegularClassChecker(MppCheckerKind
         if (enumEntries.isEmpty()) return
         val enumEntrySymbols = enumEntries.mapTo(mutableSetOf()) { it.symbol }
         checkClass(declaration, enumEntrySymbols)
-        checkEnumEntries(enumEntries)
     }
 
     context(context: CheckerContext, reporter: DiagnosticReporter)
@@ -51,16 +48,6 @@ object FirEnumEntryInitializationChecker : FirRegularClassChecker(MppCheckerKind
         val graph = klass.controlFlowGraphReference?.controlFlowGraph ?: return
         val data = EnumEntryInitializationInfoData(enumEntrySymbols, klass.symbol, graph)
         EnumEntryInitializationCheckProcessor.check(data, isForInitialization = true)
-    }
-
-    context(context: CheckerContext, reporter: DiagnosticReporter)
-    private fun checkEnumEntries(enumEntries: List<FirEnumEntry>) {
-        val enumEntrySymbols = enumEntries.mapTo(mutableSetOf()) { it.symbol }
-        for (enumEntry in enumEntries) {
-            val entryObject = (enumEntry.initializer as? FirAnonymousObjectExpression)?.anonymousObject ?: continue
-            checkClass(entryObject, enumEntrySymbols)
-            enumEntrySymbols.remove(enumEntry.symbol)
-        }
     }
 }
 

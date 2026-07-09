@@ -6,6 +6,7 @@
 package org.jetbrains.kotlin.fir.analysis.checkers.declaration
 
 import org.jetbrains.kotlin.KtFakeSourceElementKind
+import org.jetbrains.kotlin.config.LanguageFeature
 import org.jetbrains.kotlin.contracts.description.isDefinitelyVisited
 import org.jetbrains.kotlin.descriptors.Visibilities
 import org.jetbrains.kotlin.diagnostics.DiagnosticReporter
@@ -19,62 +20,69 @@ import org.jetbrains.kotlin.fir.analysis.checkers.contains
 import org.jetbrains.kotlin.fir.analysis.checkers.context.CheckerContext
 import org.jetbrains.kotlin.fir.analysis.checkers.getModifierList
 import org.jetbrains.kotlin.fir.analysis.diagnostics.FirErrors
-import org.jetbrains.kotlin.fir.declarations.DirectDeclarationsAccess
-import org.jetbrains.kotlin.fir.declarations.FirAnonymousInitializer
-import org.jetbrains.kotlin.fir.declarations.FirClass
-import org.jetbrains.kotlin.fir.declarations.FirConstructor
-import org.jetbrains.kotlin.fir.declarations.FirControlFlowGraphOwner
-import org.jetbrains.kotlin.fir.declarations.FirProperty
-import org.jetbrains.kotlin.fir.declarations.FirRegularClass
-import org.jetbrains.kotlin.fir.declarations.processAllDeclaredCallables
-import org.jetbrains.kotlin.fir.declarations.utils.canHaveAbstractDeclaration
-import org.jetbrains.kotlin.fir.declarations.utils.isAbstract
-import org.jetbrains.kotlin.fir.declarations.utils.isInterface
-import org.jetbrains.kotlin.fir.declarations.utils.isLateInit
-import org.jetbrains.kotlin.fir.declarations.utils.visibility
+import org.jetbrains.kotlin.fir.declarations.*
+import org.jetbrains.kotlin.fir.declarations.utils.*
+import org.jetbrains.kotlin.fir.isEnabled
+import org.jetbrains.kotlin.fir.resolve.dfa.cfg.ControlFlowGraph
 import org.jetbrains.kotlin.fir.resolve.dfa.cfg.NormalPath
 import org.jetbrains.kotlin.fir.resolve.dfa.controlFlowGraph
-import org.jetbrains.kotlin.fir.symbols.impl.FirCallableSymbol
-import org.jetbrains.kotlin.fir.symbols.impl.FirClassSymbol
-import org.jetbrains.kotlin.fir.symbols.impl.FirErrorPropertySymbol
-import org.jetbrains.kotlin.fir.symbols.impl.FirPropertySymbol
+import org.jetbrains.kotlin.fir.symbols.impl.*
 import org.jetbrains.kotlin.lexer.KtTokens
 
 // See old FE's [DeclarationsChecker]
 object FirMemberPropertiesChecker : FirClassChecker(MppCheckerKind.Common) {
     context(context: CheckerContext, reporter: DiagnosticReporter)
     override fun check(declaration: FirClass) {
-        val info = declaration.collectInitializationInfo()
-        var reachedDeadEnd = declaration.controlFlowGraphReference?.controlFlowGraph?.enterNode?.isDead == true
-        // Order is important here, so we have to use declarations directly
-        @OptIn(DirectDeclarationsAccess::class)
-        for (innerDeclaration in declaration.declarations) {
-            if (innerDeclaration is FirProperty) {
-                val symbol = innerDeclaration.symbol
-                val isDefinitelyAssignedInConstructor = info?.get(symbol)
-                    .let { it?.range?.isDefinitelyVisited() == true && (!symbol.isLateInit || !it.mustBeLateinit) }
-                checkProperty(declaration, symbol, isDefinitelyAssignedInConstructor, !reachedDeadEnd)
-            }
+        val memberGraph = declaration.controlFlowGraphReference?.controlFlowGraph
+        if (memberGraph != null) {
+            checkGraph(declaration, memberGraph, static = false)
+        }
 
-            when (innerDeclaration) {
-                is FirProperty,
-                is FirAnonymousInitializer,
-                is FirConstructor -> {
-                    // Can't just look at each property's graph's enterNode because they may have no graph if there is no initializer.
-                    reachedDeadEnd = reachedDeadEnd || innerDeclaration.controlFlowGraphReference?.controlFlowGraph?.exitNode?.isDead == true
+        val staticGraph = declaration.staticControlFlowGraphReference?.controlFlowGraph
+        if (staticGraph != null && LanguageFeature.ProperUninitializedEnumEntryAccessAnalysis.isEnabled()) {
+            checkGraph(declaration, staticGraph, static = true)
+        }
+    }
+
+    context(context: CheckerContext, reporter: DiagnosticReporter)
+    private fun checkGraph(declaration: FirClass, graph: ControlFlowGraph, static: Boolean) {
+        val info = declaration.collectInitializationInfo(graph, static)
+
+        if (!static) {
+            var reachedDeadEnd = graph.enterNode.isDead
+            // Order is important here, so we have to use declarations directly
+            @OptIn(DirectDeclarationsAccess::class)
+            for (innerDeclaration in declaration.declarations) {
+                if (innerDeclaration is FirProperty) {
+                    val symbol = innerDeclaration.symbol
+                    val isDefinitelyAssignedInConstructor = info?.get(symbol)
+                        .let { it?.range?.isDefinitelyVisited() == true && (!symbol.isLateInit || !it.mustBeLateinit) }
+                    checkProperty(declaration, symbol, isDefinitelyAssignedInConstructor, !reachedDeadEnd)
                 }
-                else -> {}
+
+                when (innerDeclaration) {
+                    is FirProperty,
+                    is FirAnonymousInitializer,
+                    is FirConstructor,
+                        -> {
+                        // Can't just look at each property's graph's enterNode because they may have no graph if there is no initializer.
+                        reachedDeadEnd = reachedDeadEnd ||
+                                innerDeclaration.controlFlowGraphReference?.controlFlowGraph?.exitNode?.isDead == true
+                    }
+                    else -> {}
+                }
             }
         }
     }
 
     context(context: CheckerContext, reporter: DiagnosticReporter)
     private fun FirClass.collectInitializationInfo(
+        graph: ControlFlowGraph,
+        static: Boolean,
     ): VariableInitializationInfo? {
-        val graph = (this as? FirControlFlowGraphOwner)?.controlFlowGraphReference?.controlFlowGraph ?: return null
-        val memberPropertySymbols = mutableSetOf<FirPropertySymbol>()
+        val memberPropertySymbols = mutableSetOf<FirVariableSymbol<*>>()
         symbol.processAllDeclaredCallables(context.session) { symbol ->
-            if (symbol is FirPropertySymbol && symbol.requiresInitialization(isForInitialization = true)) {
+            if (symbol is FirVariableSymbol && symbol.isCompanionBlockMember == static && symbol.requiresInitialization(isForInitialization = true)) {
                 memberPropertySymbols += symbol
             }
         }
