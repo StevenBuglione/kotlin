@@ -48,10 +48,21 @@ public enum JsBinaryOperator implements JsOperator {
 
   // These compound assignment operators are right-associative. The plain `=` assignment is not a
   // binary operator; it is represented by JsAssignmentOperation instead.
-  ASG_ADD("+=", 2, INFIX), ASG_SUB("-=", 2, INFIX), ASG_MUL(
-      "*=", 2, INFIX), ASG_DIV("/=", 2, INFIX), ASG_MOD("%=", 2, INFIX), ASG_SHL(
-      "<<=", 2, INFIX), ASG_SHR(">>=", 2, INFIX), ASG_SHRU(">>>=", 2, INFIX), ASG_BIT_AND(
-      "&=", 2, INFIX), ASG_BIT_OR("|=", 2, INFIX), ASG_BIT_XOR("^=", 2, INFIX),
+  ASG_ADD("+=", JsAssignmentOperation.PRECEDENCE, INFIX),
+  ASG_SUB("-=", JsAssignmentOperation.PRECEDENCE, INFIX),
+
+  ASG_MUL("*=", JsAssignmentOperation.PRECEDENCE, INFIX),
+  ASG_DIV("/=", JsAssignmentOperation.PRECEDENCE, INFIX),
+
+  ASG_MOD("%=", JsAssignmentOperation.PRECEDENCE, INFIX),
+
+  ASG_SHL("<<=", JsAssignmentOperation.PRECEDENCE, INFIX),
+  ASG_SHR(">>=", JsAssignmentOperation.PRECEDENCE, INFIX),
+  ASG_SHRU(">>>=", JsAssignmentOperation.PRECEDENCE, INFIX),
+
+  ASG_BIT_AND("&=", JsAssignmentOperation.PRECEDENCE, INFIX),
+  ASG_BIT_OR("|=", JsAssignmentOperation.PRECEDENCE, INFIX),
+  ASG_BIT_XOR("^=", JsAssignmentOperation.PRECEDENCE, INFIX),
 
   COMMA(",", 1, LEFT | INFIX);
 
@@ -76,7 +87,7 @@ public enum JsBinaryOperator implements JsOperator {
   }
 
   public boolean isAssignment() {
-    return getPrecedence() == ASG_ADD.getPrecedence();
+    return getPrecedence() == JsAssignmentOperation.PRECEDENCE;
   }
 
   @Override

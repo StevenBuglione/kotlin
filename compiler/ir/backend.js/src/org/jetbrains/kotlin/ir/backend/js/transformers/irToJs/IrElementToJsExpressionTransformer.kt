@@ -312,7 +312,7 @@ class IrElementToJsExpressionTransformer : BaseIrElementToJsNodeTransformer<JsEx
             IrDynamicOperator.OROR -> binaryOperation(JsBinaryOperator.OR, expression, data)
 
             IrDynamicOperator.EQ -> JsAssignmentOperation.Simple(
-                expression.left.accept(this, data),
+                expression.left.accept(this, data) as JsAssignableExpression,
                 expression.right.accept(this, data)
             )
             IrDynamicOperator.PLUSEQ -> binaryOperation(JsBinaryOperator.ASG_ADD, expression, data)

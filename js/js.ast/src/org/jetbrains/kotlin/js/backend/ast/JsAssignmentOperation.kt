@@ -22,8 +22,8 @@ sealed class JsAssignmentOperation : JsExpression() {
      * A regular assignment `target = value`, where [target] is an arbitrary l-value expression
      * (a name reference, property access, array access, ...).
      */
-    class Simple(target: JsExpression, value: JsExpression) : JsAssignmentOperation() {
-        var target: JsExpression = target
+    class Simple(target: JsAssignableExpression, value: JsExpression) : JsAssignmentOperation() {
+        var target: JsAssignableExpression = target
             private set
         var value: JsExpression = value
             private set
@@ -42,7 +42,8 @@ sealed class JsAssignmentOperation : JsExpression() {
             ctx: JsContext<*>,
         ) {
             if (visitor.visit(this, ctx)) {
-                target = visitor.acceptLvalue(target)
+                // The left-hand side stays an assignable expression across transformations.
+                target = visitor.acceptLvalue(target) as JsAssignableExpression
                 value = visitor.accept(value)
             }
             visitor.endVisit(this, ctx)
@@ -55,10 +56,10 @@ sealed class JsAssignmentOperation : JsExpression() {
 
     /**
      * A destructuring assignment `pattern = value`, where the left-hand side is a destructuring
-     * [JsAssignable] pattern (which is not a [JsExpression]).
+     * [JsDeclarable] pattern (which is not a [JsExpression]).
      */
-    class Destructuring(pattern: JsAssignable, value: JsExpression) : JsAssignmentOperation() {
-        var pattern: JsAssignable = pattern
+    class Destructuring(pattern: JsDeclarable, value: JsExpression) : JsAssignmentOperation() {
+        var pattern: JsDeclarable = pattern
             private set
         var value: JsExpression = value
             private set

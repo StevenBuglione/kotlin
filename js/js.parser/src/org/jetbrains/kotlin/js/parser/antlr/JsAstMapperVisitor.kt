@@ -138,7 +138,7 @@ internal class JsAstMapperVisitor(
     }
 
     override fun visitVariableDeclaration(ctx: JavaScriptParser.VariableDeclarationContext): JsVars.JsVar {
-        val assignable = visitNode<JsAssignable>(ctx.assignable())
+        val assignable = visitNode<JsDeclarable>(ctx.assignable())
         val initialization = ctx.singleExpression()?.let { visitNode<JsExpression>(it) }
 
         return JsVars.JsVar(assignable, initialization).applyLocation(ctx)
@@ -216,7 +216,7 @@ internal class JsAstMapperVisitor(
                     "Invalid binding variable declaration: ${namedDeclaration.text}",
                     ctx
                 ),
-                bindingVarName = declaration.assignable as? JsAssignable.Named
+                bindingVarName = declaration.declarable as? JsDeclarable.Named
                     ?: raiseParserException(
                         "Single named assignable expected, got '${
                             namedDeclaration.variableDeclaration().assignable().text
@@ -240,7 +240,7 @@ internal class JsAstMapperVisitor(
         ctx.singleExpression()?.let { unnamedExpression ->
             return JsForOf(
                 bindingVarVariant = null,
-                bindingAssignable = null,
+                bindingDeclarable = null,
                 bindingExpression = visitNode<JsExpression>(unnamedExpression),
                 iterableExpression = iterableExpression,
                 body = bodyStatement
@@ -255,7 +255,7 @@ internal class JsAstMapperVisitor(
                     "Invalid binding variable declaration: ${namedDeclaration.text}",
                     ctx
                 ),
-                bindingAssignable = declaration.assignable,
+                bindingDeclarable = declaration.declarable,
                 bindingExpression = declaration.initExpression,
                 iterableExpression = iterableExpression,
                 body = bodyStatement
@@ -385,7 +385,7 @@ internal class JsAstMapperVisitor(
     }
 
     override fun visitCatchProduction(ctx: JavaScriptParser.CatchProductionContext): JsCatch {
-        val jsCatchAssignable = visitNode<JsAssignable>(ctx.assignable())
+        val jsCatchAssignable = visitNode<JsDeclarable>(ctx.assignable())
 
         return scopeContext.enterCatch(jsCatchAssignable).apply {
             body = visitNode<JsBlock>(ctx.block())
@@ -524,7 +524,7 @@ internal class JsAstMapperVisitor(
     }
 
     override fun visitFormalParameterArg(ctx: JavaScriptParser.FormalParameterArgContext): JsParameter {
-        val assignable = visitNode<JsAssignable>(ctx.assignable())
+        val assignable = visitNode<JsDeclarable>(ctx.assignable())
         val defaultValue = ctx.singleExpression()?.let { visitNode<JsExpression>(it) }
 
         return JsParameter(assignable, defaultValue)
@@ -537,7 +537,7 @@ internal class JsAstMapperVisitor(
             ?: reportError("Only identifier rest parameters are supported yet", ctx)
         val paramName = scopeContext.localNameFor(identifier.text)
 
-        return JsParameter(JsAssignable.Named(paramName).applyLocation(identifier), isRest = true)
+        return JsParameter(JsDeclarable.Named(paramName).applyLocation(identifier), isRest = true)
             .applyLocation(ctx)
             .applyComments(ctx)
     }
@@ -643,7 +643,7 @@ internal class JsAstMapperVisitor(
         ).applyLocation(ctx)
     }
 
-    override fun visitArrayBindingPattern(ctx: JavaScriptParser.ArrayBindingPatternContext): JsAssignable.ArrayPattern {
+    override fun visitArrayBindingPattern(ctx: JavaScriptParser.ArrayBindingPatternContext): JsDeclarable.ArrayPattern {
         val items = buildList {
             ctx.arrayItemList()?.let { items ->
                 when (val firstElement = items.bindingElement()) {
@@ -662,21 +662,21 @@ internal class JsAstMapperVisitor(
             }
         }
 
-        return JsAssignable.ArrayPattern(items).applyLocation(ctx)
+        return JsDeclarable.ArrayPattern(items).applyLocation(ctx)
     }
 
-    override fun visitObjectBindingPattern(ctx: JavaScriptParser.ObjectBindingPatternContext): JsAssignable.ObjectPattern {
+    override fun visitObjectBindingPattern(ctx: JavaScriptParser.ObjectBindingPatternContext): JsDeclarable.ObjectPattern {
         check(ctx.restBindingElement() == null) { "Rest object patterns are not supported yet" }
 
         val properties = visitAll<JsBindingProperty>(ctx.propertyBindingPattern())
-        return JsAssignable.ObjectPattern(properties).applyLocation(ctx)
+        return JsDeclarable.ObjectPattern(properties).applyLocation(ctx)
     }
 
     override fun visitRegularPropertyBindingPattern(ctx: JavaScriptParser.RegularPropertyBindingPatternContext): JsBindingProperty {
         return JsBindingProperty(
             propertyName = null,
             JsBindingElement(
-                JsAssignable.Named(bindingNameFor(ctx.identifierName().text)),
+                JsDeclarable.Named(bindingNameFor(ctx.identifierName().text)),
                 defaultValue = ctx.initializer()?.singleExpression()?.let { visitNode(it) },
                 isSpread = false
             ).applyLocation(ctx)
@@ -703,14 +703,14 @@ internal class JsAstMapperVisitor(
     }
 
     override fun visitBindingElement(ctx: JavaScriptParser.BindingElementContext): JsBindingElement {
-        val target = visitNode<JsAssignable>(ctx.assignable())
+        val target = visitNode<JsDeclarable>(ctx.assignable())
         val defaultValue = ctx.initializer()?.let { visitNode<JsExpression>(it.singleExpression()) }
         return JsBindingElement(target, defaultValue, isSpread = false).applyLocation(ctx)
     }
 
     override fun visitRestBindingElement(ctx: JavaScriptParser.RestBindingElementContext): JsBindingElement {
         val name = bindingNameFor(ctx.identifierName().text)
-        val target = JsAssignable.Named(name).applyLocation(ctx.identifierName())
+        val target = JsDeclarable.Named(name).applyLocation(ctx.identifierName())
         return JsBindingElement(target, null, isSpread = true).applyLocation(ctx)
     }
 
@@ -872,7 +872,7 @@ internal class JsAstMapperVisitor(
     }
 
     override fun visitAssignmentExpression(ctx: JavaScriptParser.AssignmentExpressionContext): JsAssignmentOperation.Simple {
-        val left = visitNode<JsExpression>(ctx.singleExpressionImpl(0))
+        val left = visitNode<JsExpression>(ctx.singleExpressionImpl(0)) as JsAssignableExpression
         val right = visitNode<JsExpression>(ctx.singleExpressionImpl(1))
         return JsAssignmentOperation.Simple(left, right)
             .applyLocation(ctx.Assign())
@@ -882,7 +882,7 @@ internal class JsAstMapperVisitor(
     override fun visitObjectDestructuringAssignmentExpression(
         ctx: JavaScriptParser.ObjectDestructuringAssignmentExpressionContext
     ): JsAssignmentOperation.Destructuring {
-        val target = asAssignmentTarget { visitNode<JsAssignable.ObjectPattern>(ctx.objectBindingPattern()) }
+        val target = asAssignmentTarget { visitNode<JsDeclarable.ObjectPattern>(ctx.objectBindingPattern()) }
         val value = visitNode<JsExpression>(ctx.rhs)
         return JsAssignmentOperation.Destructuring(target, value)
             .applyLocation(ctx.Assign())
@@ -892,7 +892,7 @@ internal class JsAstMapperVisitor(
     override fun visitArrayDestructuringAssignmentExpression(
         ctx: JavaScriptParser.ArrayDestructuringAssignmentExpressionContext
     ): JsAssignmentOperation.Destructuring {
-        val target = asAssignmentTarget { visitNode<JsAssignable.ArrayPattern>(ctx.arrayBindingPattern()) }
+        val target = asAssignmentTarget { visitNode<JsDeclarable.ArrayPattern>(ctx.arrayBindingPattern()) }
         val value = visitNode<JsExpression>(ctx.rhs)
         return JsAssignmentOperation.Destructuring(target, value)
             .applyLocation(ctx.Assign())
@@ -1165,21 +1165,21 @@ internal class JsAstMapperVisitor(
         reportError("Classes are not supported yet", ctx)
     }
 
-    override fun visitAssignable(ctx: JavaScriptParser.AssignableContext): JsAssignable {
+    override fun visitAssignable(ctx: JavaScriptParser.AssignableContext): JsDeclarable {
         ctx.identifier()?.let {
-            return JsAssignable.Named(bindingNameFor(it.text)).applyLocation(ctx)
+            return JsDeclarable.Named(bindingNameFor(it.text)).applyLocation(ctx)
         }
 
         ctx.keyword()?.let {
-            return JsAssignable.Named(bindingNameFor(it.text)).applyLocation(ctx)
+            return JsDeclarable.Named(bindingNameFor(it.text)).applyLocation(ctx)
         }
 
         ctx.arrayBindingPattern()?.let {
-            return visitNode<JsAssignable.ArrayPattern>(it)
+            return visitNode<JsDeclarable.ArrayPattern>(it)
         }
 
         ctx.objectBindingPattern()?.let {
-            return visitNode<JsAssignable.ObjectPattern>(it)
+            return visitNode<JsDeclarable.ObjectPattern>(it)
         }
 
         raiseParserException("Invalid assignable '${ctx.text}'", ctx)

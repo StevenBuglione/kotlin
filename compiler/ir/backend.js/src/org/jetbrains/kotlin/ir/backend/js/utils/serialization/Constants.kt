@@ -93,7 +93,7 @@ object ArrayPatternItemKinds {
     const val HOLE = 1
 }
 
-object AssignableIds {
+object DeclarableIds {
     const val NAMED = 0
     const val ARRAY_PATTERN = 1
     const val OBJECT_PATTERN = 2

@@ -106,7 +106,7 @@ public final class JsAstUtils {
     }
 
     @NotNull
-    public static JsAssignmentOperation.Simple assignment(@NotNull JsExpression left, @NotNull JsExpression right) {
+    public static JsAssignmentOperation.Simple assignment(@NotNull JsAssignableExpression left, @NotNull JsExpression right) {
         return new JsAssignmentOperation.Simple(left, right);
     }
 
@@ -117,7 +117,7 @@ public final class JsAstUtils {
     }
 
     @Nullable
-    public static Pair<JsExpression, JsExpression> decomposeAssignment(@NotNull JsExpression expr) {
+    public static Pair<JsAssignableExpression, JsExpression> decomposeAssignment(@NotNull JsExpression expr) {
         if (!(expr instanceof JsAssignmentOperation.Simple)) return null;
 
         JsAssignmentOperation.Simple assignment = (JsAssignmentOperation.Simple) expr;
@@ -126,7 +126,7 @@ public final class JsAstUtils {
 
     @Nullable
     public static Pair<JsName, JsExpression> decomposeAssignmentToVariable(@NotNull JsExpression expr) {
-        Pair<JsExpression, JsExpression> assignment = decomposeAssignment(expr);
+        Pair<JsAssignableExpression, JsExpression> assignment = decomposeAssignment(expr);
         if (assignment == null || !(assignment.getFirst() instanceof JsNameRef)) return null;
 
         JsNameRef nameRef = (JsNameRef) assignment.getFirst();

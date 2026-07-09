@@ -202,7 +202,7 @@ class RedundantStatementElimination(private val root: JsFunction) {
                 }
             }
 
-            is JsLiteral.JsValueLiteral -> listOf()
+            is JsLiteral.JsValueLiteral, is JsThisRef -> listOf()
 
             is JsArrayLiteral -> replaceMany(expression.expressions)
 

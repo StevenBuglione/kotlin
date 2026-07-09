@@ -505,7 +505,7 @@ public class JsToStringGenerationVisitor extends JsVisitor {
         p.print(CHARS_CATCH);
         space();
         leftParen();
-        accept(x.getParameter().getAssignable());
+        accept(x.getParameter().getDeclarable());
 
         rightParen();
         space();
@@ -737,7 +737,7 @@ public class JsToStringGenerationVisitor extends JsVisitor {
         space();
         leftParen();
 
-        JsAssignable assignable = x.getBindingAssignable();
+        JsDeclarable assignable = x.getBindingDeclarable();
         JsVars.Variant variant = x.getBindingVarVariant();
         JsExpression bindingExpression = x.getBindingExpression();
         JsExpression iterableExpression = x.getIterableExpression();
@@ -1251,7 +1251,7 @@ public class JsToStringGenerationVisitor extends JsVisitor {
             ellipsis();
         }
 
-        accept(x.getAssignable());
+        accept(x.getDeclarable());
 
         JsExpression defaultValue = x.getDefaultValue();
         if (defaultValue != null) {
@@ -1471,7 +1471,7 @@ public class JsToStringGenerationVisitor extends JsVisitor {
         pushSourceInfo(var.getSource());
         printCommentsBeforeNode(var);
 
-        accept(var.getAssignable());
+        accept(var.getDeclarable());
         JsExpression initExpr = var.getInitExpression();
         if (initExpr != null) {
             space();
@@ -1697,12 +1697,12 @@ public class JsToStringGenerationVisitor extends JsVisitor {
     }
 
     @Override
-    public void visitNamedAssignable(@NotNull JsAssignable.Named assignable) {
-        nameDef(assignable.getName());
+    public void visitNamedDeclarable(@NotNull JsDeclarable.Named declarable) {
+        nameDef(declarable.getName());
     }
 
     @Override
-    public void visitArrayPatternAssignable(@NotNull JsAssignable.ArrayPattern pattern) {
+    public void visitArrayPatternDeclarable(@NotNull JsDeclarable.ArrayPattern pattern) {
         pushSourceInfo(pattern.getSource());
         printCommentsBeforeNode(pattern);
 
@@ -1727,7 +1727,7 @@ public class JsToStringGenerationVisitor extends JsVisitor {
     }
 
     @Override
-    public void visitObjectPatternAssignable(@NotNull JsAssignable.ObjectPattern pattern) {
+    public void visitObjectPatternDeclarable(@NotNull JsDeclarable.ObjectPattern pattern) {
         pushSourceInfo(pattern.getSource());
         printCommentsBeforeNode(pattern);
 

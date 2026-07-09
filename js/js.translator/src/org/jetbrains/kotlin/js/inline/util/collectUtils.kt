@@ -62,7 +62,7 @@ fun collectDefinedNames(scope: JsNode, skipLabelsAndCatches: Boolean): Set<JsNam
             if (initializer != null) {
                 accept(initializer)
             }
-            names += x.assignable.names
+            names += x.declarable.names
         }
 
         override fun visitExpressionStatement(x: JsExpressionStatement) {
@@ -85,7 +85,7 @@ fun collectDefinedNames(scope: JsNode, skipLabelsAndCatches: Boolean): Set<JsNam
 
         override fun visitCatch(x: JsCatch) {
             if (!skipLabelsAndCatches) {
-                names += x.parameter.assignable.names
+                names += x.parameter.declarable.names
             }
             super.visitCatch(x)
         }
