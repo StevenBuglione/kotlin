@@ -17,6 +17,7 @@ import org.jetbrains.kotlin.config.forcesPreReleaseBinariesIfEnabled
 import org.jetbrains.kotlin.io.propertyList
 import org.jetbrains.kotlin.library.KLIB_PROPERTY_MANUALLY_ALTERED_LANGUAGE_FEATURES
 import org.jetbrains.kotlin.library.KLIB_PROPERTY_MANUALLY_ENABLED_POISONING_LANGUAGE_FEATURES
+import org.jetbrains.kotlin.library.KLIB_PROPERTY_METADATA_FLAGS
 import org.jetbrains.kotlin.test.CompilerTestUtil
 import org.jetbrains.kotlin.test.TestCaseWithTmpdir
 import org.jetbrains.kotlin.test.services.JUnit5Assertions
@@ -60,6 +61,11 @@ class JsManifestWritingTest : TestCaseWithTmpdir() {
                 enabledLanguageFeature.name
             )
             checkPropertyAndValue(manifestProperties, KLIB_PROPERTY_MANUALLY_ENABLED_POISONING_LANGUAGE_FEATURES, poisoningFeature.name, null)
+
+            JUnit5Assertions.assertEquals(
+                listOf("pre_release"),
+                manifestProperties.propertyList(KLIB_PROPERTY_METADATA_FLAGS)
+            ) { "Enabling a poisoning feature must set `pre_release` in `$KLIB_PROPERTY_METADATA_FLAGS`" }
         }
     }
 

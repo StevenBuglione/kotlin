@@ -204,6 +204,11 @@ class ManifestWritingTest : AbstractNativeSimpleTest() {
             enabledLanguageFeature.name
         )
         checkPropertyAndValue(manifestProperties, KLIB_PROPERTY_MANUALLY_ENABLED_POISONING_LANGUAGE_FEATURES, poisoningFeature.name, null)
+
+        JUnit5Assertions.assertEquals(
+            listOf("pre_release"),
+            manifestProperties.propertyList(KLIB_PROPERTY_METADATA_FLAGS)
+        ) { "Enabling a poisoning feature must set `pre_release` in `$KLIB_PROPERTY_METADATA_FLAGS`" }
     }
 
     @Test
