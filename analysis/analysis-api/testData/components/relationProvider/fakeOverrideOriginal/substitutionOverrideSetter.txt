@@ -38,7 +38,7 @@ FAKE_OVERRIDE_ORIGINAL:
       location: LOCAL
       modality: FINAL
       name: value
-      origin: SOURCE
+      origin: SUBSTITUTION_OVERRIDE
       primaryConstructorProperty: null
       receiverParameter: null
       returnType: KaUsualClassType:
@@ -73,7 +73,7 @@ FAKE_OVERRIDE_ORIGINAL:
         location: LOCAL
         modality: FINAL
         name: value
-        origin: SOURCE
+        origin: SUBSTITUTION_OVERRIDE
         primaryConstructorProperty: null
         receiverParameter: null
         returnType: KaUsualClassType:
