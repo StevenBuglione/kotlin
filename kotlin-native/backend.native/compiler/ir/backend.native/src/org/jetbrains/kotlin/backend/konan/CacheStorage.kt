@@ -15,10 +15,16 @@ import org.jetbrains.kotlin.backend.konan.serialization.TrivialGettersSerializer
 import org.jetbrains.kotlin.backend.konan.util.compilerFingerprint
 import org.jetbrains.kotlin.backend.konan.util.runtimeFingerprint
 import org.jetbrains.kotlin.konan.config.cachedLibraryDependenciesFingerprint
-import org.jetbrains.kotlin.konan.file.File
-import org.jetbrains.kotlin.konan.library.javaFile
 import org.jetbrains.kotlin.konan.target.HostManager
 import org.jetbrains.kotlin.library.isNativeStdlib
+import kotlin.io.path.ExperimentalPathApi
+import kotlin.io.path.Path
+import kotlin.io.path.bufferedWriter
+import kotlin.io.path.deleteRecursively
+import kotlin.io.path.exists
+import kotlin.io.path.moveTo
+import kotlin.io.path.writeBytes
+import kotlin.io.path.writeLines
 import kotlin.random.Random
 
 private fun NativeGenerationState.generateCacheMetadata(): CacheMetadata {
@@ -41,21 +47,21 @@ internal class CacheStorage(private val generationState: NativeGenerationState) 
     private val outputFiles = generationState.outputFiles
 
     companion object {
+        @OptIn(ExperimentalPathApi::class)
         fun renameOutput(outputFiles: OutputFiles, overwrite: Boolean) {
-            if (outputFiles.mainFile.exists) {
+            if (outputFiles.mainFile.exists()) {
                 if (!overwrite) {
                     outputFiles.tempCacheDirectory!!.deleteRecursively()
                     return
                 }
                 // For caches the output file is a directory. It might be already created,
                 // we have to delete it in order for the next renaming operation to succeed.
-                val tempDirectoryForRemoval = File(outputFiles.mainFileName + "-to-remove" + Random.nextLong())
-                if (!outputFiles.mainFile.renameTo(tempDirectoryForRemoval))
-                    return
+                val tempDirectoryForRemoval = Path(outputFiles.mainFileName + "-to-remove" + Random.nextLong())
+                outputFiles.mainFile.moveTo(tempDirectoryForRemoval)
                 tempDirectoryForRemoval.deleteRecursively()
             }
-            if (!outputFiles.tempCacheDirectory!!.renameTo(outputFiles.mainFile))
-                outputFiles.tempCacheDirectory.deleteRecursively()
+            outputFiles.tempCacheDirectory!!.moveTo(outputFiles.mainFile)
+            outputFiles.tempCacheDirectory.deleteRecursively()
         }
     }
 
@@ -72,7 +78,7 @@ internal class CacheStorage(private val generationState: NativeGenerationState) 
     }
 
     private fun saveMetadata() {
-        outputFiles.cacheMetadata!!.javaFile().bufferedWriter().use {
+        outputFiles.cacheMetadata!!.bufferedWriter().use {
             CacheMetadataSerializer.serialize(it, generationState.generateCacheMetadata())
         }
     }
