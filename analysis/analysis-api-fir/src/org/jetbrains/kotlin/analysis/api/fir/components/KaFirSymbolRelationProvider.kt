@@ -561,20 +561,20 @@ internal class KaFirSymbolRelationProvider(
                 original.receiverParameter
             }
             is KaValueParameterSymbol -> {
-                val owner = containingDeclaration(symbol) as KaFunctionSymbol
+                val owner = containingDeclaration(symbol) as? KaFunctionSymbol ?: return symbol
                 val index = owner.valueParameters.indexOf(symbol)
-                val original = fakeOverrideOriginal(owner) as KaFunctionSymbol
-                original.valueParameters.getOrNull(index)
+                val original = fakeOverrideOriginal(owner) as? KaFunctionSymbol
+                original?.valueParameters?.getOrNull(index)
             }
             is KaContextParameterSymbol -> {
-                val owner = containingDeclaration(symbol) as KaCallableSymbol
+                val owner = containingDeclaration(symbol) as? KaCallableSymbol ?: return symbol
                 val index = owner.contextParameters.indexOf(symbol)
                 val original = fakeOverrideOriginal(owner)
                 original.contextParameters.getOrNull(index)
             }
             is KaPropertyAccessorSymbol -> {
-                val owner = containingDeclaration(symbol) as KaPropertySymbol
-                val original = fakeOverrideOriginal(owner) as KaPropertySymbol
+                val owner = containingDeclaration(symbol) as? KaPropertySymbol ?: return symbol
+                val original = fakeOverrideOriginal(owner) as? KaPropertySymbol ?: return symbol
                 if (symbol is KaPropertyGetterSymbol) {
                     original.getter
                 } else {
