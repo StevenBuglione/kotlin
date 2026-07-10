@@ -27,7 +27,8 @@ option optimize_for = LITE_RUNTIME;
 message Header {
   required string module_name = 1;
   /*
-    Possible values are listed in KlibMetadataHeaderFlags class.
+    Possible values are listed in KlibMetadataFlag class.
+    Flags are also stored in the manifest.
   */
   optional int32 flags = 2;
 

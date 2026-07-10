@@ -8,7 +8,9 @@ package org.jetbrains.kotlin.cli.metadata
 import org.jetbrains.kotlin.config.CommonConfigurationKeys
 import org.jetbrains.kotlin.config.CompilerConfiguration
 import org.jetbrains.kotlin.config.KotlinCompilerVersion
+import org.jetbrains.kotlin.config.languageVersionSettings
 import org.jetbrains.kotlin.library.KotlinAbiVersion
+import org.jetbrains.kotlin.library.metadata.addMetadataFlagsToManifest
 import org.jetbrains.kotlin.library.KotlinLibraryVersioning
 import org.jetbrains.kotlin.library.SerializedMetadata
 import org.jetbrains.kotlin.library.impl.BuiltInsPlatform
@@ -33,6 +35,9 @@ fun buildKotlinMetadataLibrary(
             moduleName(configuration[CommonConfigurationKeys.MODULE_NAME]!!)
             versions(versions)
             platformAndTargets(BuiltInsPlatform.COMMON)
+            customProperties {
+                addMetadataFlagsToManifest(this, configuration.languageVersionSettings)
+            }
         }
         includeMetadata(serializedMetadata)
     }.writeTo(destDir.absolutePath)

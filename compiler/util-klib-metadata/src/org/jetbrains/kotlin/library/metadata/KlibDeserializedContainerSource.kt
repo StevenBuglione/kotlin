@@ -7,6 +7,7 @@ package org.jetbrains.kotlin.library.metadata
 
 import org.jetbrains.kotlin.descriptors.SourceFile
 import org.jetbrains.kotlin.io.propertyList
+import org.jetbrains.kotlin.library.KLIB_PROPERTY_METADATA_FLAGS
 import org.jetbrains.kotlin.library.KLIB_PROPERTY_MANUALLY_ENABLED_POISONING_LANGUAGE_FEATURES
 import org.jetbrains.kotlin.library.KotlinLibrary
 import org.jetbrains.kotlin.library.metadata.KlibMetadataProtoBuf.Header
@@ -31,7 +32,7 @@ class KlibDeserializedContainerSource(
         incompatibility: IncompatibleVersionErrorData<*>?,
     ) : this(
         preReleaseInfo = PreReleaseInfo(
-            isInvisible = configuration.reportErrorsOnPreReleaseDependencies && (header.flags and KlibMetadataHeaderFlags.PRE_RELEASE) != 0,
+            isInvisible = configuration.reportErrorsOnPreReleaseDependencies && isPreReleaseKlib(klib, header),
             poisoningFeatures = klib.manifestProperties.propertyList(KLIB_PROPERTY_MANUALLY_ENABLED_POISONING_LANGUAGE_FEATURES).map { it.trimStart('+') }
         ),
         presentableString = "Package '$packageFqName'",
@@ -44,4 +45,12 @@ class KlibDeserializedContainerSource(
 
     // TODO: move [CallableMemberDescriptor.findSourceFile] here.
     override fun getContainingFile(): SourceFile = SourceFile.NO_SOURCE_FILE
+}
+
+private fun isPreReleaseKlib(klib: KotlinLibrary, header: Header): Boolean {
+    val manifestProperties = klib.manifestProperties
+    if (manifestProperties.containsKey(KLIB_PROPERTY_METADATA_FLAGS)) {
+        return KlibMetadataFlag.PRE_RELEASE.nameInManifest in manifestProperties.propertyList(KLIB_PROPERTY_METADATA_FLAGS)
+    }
+    return (header.flags and KlibMetadataFlag.PRE_RELEASE.mask) != 0
 }
