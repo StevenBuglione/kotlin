@@ -29,4 +29,9 @@ abstract class FirArgumentList : FirPureAbstractElement(), FirElement {
         transformer.transformArgumentList(this, data) as E
 
     abstract fun <D> transformArguments(transformer: FirTransformer<D>, data: D): FirArgumentList
+
+    override fun <D> transformChildren(transformer: FirTransformer<D>, data: D): FirElement {
+        transformArguments(transformer, data)
+        return this
+    }
 }

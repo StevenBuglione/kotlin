@@ -26,11 +26,6 @@ internal class FirArgumentListImpl(
         arguments.forEach { it.accept(visitor, data) }
     }
 
-    override fun <D> transformChildren(transformer: FirTransformer<D>, data: D): FirArgumentListImpl {
-        transformArguments(transformer, data)
-        return this
-    }
-
     override fun <D> transformArguments(transformer: FirTransformer<D>, data: D): FirArgumentListImpl {
         arguments.transformInplace(transformer, data)
         return this
