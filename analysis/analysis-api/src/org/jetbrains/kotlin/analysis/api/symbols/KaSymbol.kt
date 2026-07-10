@@ -124,26 +124,35 @@ public val KaSymbol.name: Name?
     get() = if (this is KaNamedSymbol) name else null
 
 /**
+ * **The API is obsolete and will be deprecated soon. Use [realPsi] or [anchorPsi] instead.**
+ *
  * Returns the symbol's [PsiElement] if its type is [PSI], and otherwise throws a [ClassCastException].
  *
- * @see KaSymbol.psi
+ * @see realPsi
+ * @see anchorPsi
  */
 public inline fun <reified PSI : PsiElement> KaSymbol.psi(): PSI =
     psi as PSI
 
 /**
+ * **The API is obsolete and will be deprecated soon. Use [realPsi] or [anchorPsi] instead.**
+ *
  * Returns the symbol's [PsiElement] if its type is [PSI], or `null` otherwise.
  *
- * @see KaSymbol.psi
+ * @see realPsi
+ * @see anchorPsi
  */
 public inline fun <reified PSI : PsiElement> KaSymbol.psiSafe(): PSI? =
     psi as? PSI
 
 /**
+ * **The API is obsolete and will be deprecated soon. Use [realPsi] or [anchorPsi] instead.**
+ *
  * Returns the symbol's [PsiElement]. Returns `null` if its [KaSymbol.origin] is not [KaSymbolOrigin.SOURCE]. Throws a [ClassCastException]
  * if its type is not [PSI].
  *
- * @see KaSymbol.psi
+ * @see realPsi
+ * @see anchorPsi
  */
 public inline fun <reified PSI : PsiElement> KaSymbol.sourcePsi(): PSI? {
     // TODO: support Java sources after KT-53669
@@ -153,10 +162,13 @@ public inline fun <reified PSI : PsiElement> KaSymbol.sourcePsi(): PSI? {
 }
 
 /**
+ * **The API is obsolete and will be deprecated soon. Use [realPsi] or [anchorPsi] instead.**
+ *
  * Returns the symbol's [PsiElement] if its type is [PSI] and [KaSymbol.origin] is [KaSymbolOrigin.SOURCE] or [KaSymbolOrigin.JAVA_SOURCE],
  * and `null` otherwise.
  *
- * @see KaSymbol.psiSafe
+ * @see realPsi
+ * @see anchorPsi
  */
 public inline fun <reified PSI : PsiElement> KaSymbol.sourcePsiSafe(): PSI? {
     if (origin != KaSymbolOrigin.SOURCE && origin != KaSymbolOrigin.JAVA_SOURCE) return null
