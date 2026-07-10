@@ -103,17 +103,6 @@ class IrConstFieldInliner(
         }
     }
 
-    private fun InlineConstTracker.reportOnIr(irFile: IrFile, field: IrField, value: IrConst) {
-        if (field.origin != IrDeclarationOrigin.IR_EXTERNAL_JAVA_DECLARATION_STUB) return
-
-        val path = irFile.path
-        val owner = field.parentAsClass.classId?.asString()?.replace(".", "$")?.replace("/", ".") ?: return
-        val name = field.name.asString()
-        val constType = value.kind.asString
-
-        report(path, owner, name, constType)
-    }
-
     private val IrField.property: IrProperty?
         get() = this.correspondingPropertySymbol?.owner
 
@@ -122,4 +111,17 @@ class IrConstFieldInliner(
 
     private val IrProperty?.isConst: Boolean
         get() = this?.isConst == true
+
+    companion object {
+        fun InlineConstTracker.reportOnIr(irFile: IrFile, field: IrField, value: IrConst) {
+            if (field.origin != IrDeclarationOrigin.IR_EXTERNAL_JAVA_DECLARATION_STUB) return
+
+            val path = irFile.path
+            val owner = field.parentAsClass.classId?.asString()?.replace(".", "$")?.replace("/", ".") ?: return
+            val name = field.name.asString()
+            val constType = value.kind.asString
+
+            report(path, owner, name, constType)
+        }
+    }
 }
