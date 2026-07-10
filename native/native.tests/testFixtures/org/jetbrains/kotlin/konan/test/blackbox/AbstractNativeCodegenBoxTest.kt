@@ -28,6 +28,7 @@ abstract class AbstractNativeCodegenBoxTest : AbstractNativeBlackBoxTest() {
         return listOf(
             jvmInlineTransformer,
             ReplacingSourceTransformer("BACKEND_UNDER_TEST", "\"NATIVE\""),
+            ReplacingSourceTransformer("JDK_MAJOR_VERSION", "999"),
         )
     }
 }

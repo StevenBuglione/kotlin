@@ -5,6 +5,7 @@
 
 package org.jetbrains.kotlin.compiler.nativeimage
 
+import com.intellij.util.lang.JavaVersion
 import org.jetbrains.kotlin.codeMetaInfo.clearTextFromDiagnosticMarkup
 import org.jetbrains.kotlin.codegen.forTestCompile.ForTestCompileRuntime
 import org.jetbrains.kotlin.test.InTextDirectivesUtils
@@ -206,6 +207,7 @@ abstract class AbstractNativeImageCodegenTest {
             val transformers = listOf(
                 JvmInlineSourceTransformer.computeModifier(BACKEND),
                 ReplacingSourceTransformer("BACKEND_UNDER_TEST", "\"$BACKEND\""),
+                ReplacingSourceTransformer("JDK_MAJOR_VERSION", "${JavaVersion.current().feature}"),
             )
             return clearTextFromDiagnosticMarkup(transformers.fold(source) { acc, transformer -> transformer.invokeForTestFile(acc) })
         }

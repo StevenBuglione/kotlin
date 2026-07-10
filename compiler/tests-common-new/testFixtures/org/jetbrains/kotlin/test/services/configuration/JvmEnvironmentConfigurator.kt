@@ -99,7 +99,7 @@ open class JvmEnvironmentConfigurator(testServices: TestServices) : EnvironmentC
 
         fun extractJdkKind(registeredDirectives: RegisteredDirectives): TestJdkKind {
             val fullJdkEnabled = JvmEnvironmentConfigurationDirectives.FULL_JDK in registeredDirectives
-            val jdkKinds = registeredDirectives[JDK_KIND]
+            val jdkKinds = registeredDirectives[JDK_KIND].distinct()
 
             if (fullJdkEnabled) {
                 if (jdkKinds.isNotEmpty()) {
