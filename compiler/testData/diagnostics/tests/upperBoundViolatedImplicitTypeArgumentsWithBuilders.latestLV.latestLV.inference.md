@@ -67,12 +67,124 @@ R|<local>/shape|.removeTraitIfPresent#()
     1. `TypeVariable(T) <: OperationShape`
 3. Combine `OperationShape <: TypeVariable(T)` with `TypeVariable(T) <: OperationShape`
     1. `TypeVariable(T) == OperationShape`
-4. Combine `TypeVariable(T) == OperationShape` with `TypeVariable(T) <: ToSmithyBuilder<TypeVariable(T)>`
-    1. `TypeVariable(T) <: ToSmithyBuilder<OperationShape>`
-5. Combine `TypeVariable(T) == OperationShape` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), TypeVariable(T)>`
+
+##### Call Completion:
+
+1. Choose `TypeVariable(T)` with `Readiness(
+   	 true ALLOWED
+   	 true HAS_PROPER_CONSTRAINTS
+   	 true HAS_NO_OUTER_TYPE_VARIABLE_DEPENDENCY
+   	false HAS_CAPTURED_UPPER_BOUND_WITH_SELF_TYPES
+   	 true HAS_PROPER_NON_SELF_TYPE_BASED_CONSTRAINT
+   	 true HAS_NO_DEPENDENCIES_TO_OTHER_VARIABLES
+   	 true HAS_PROPER_NON_TRIVIAL_CONSTRAINTS
+   	false HAS_PROPER_NON_TRIVIAL_CONSTRAINTS_OTHER_THAN_INCORPORATED_FROM_DECLARED_UPPER_BOUND
+   	false REIFIED
+   	false HAS_PROPER_FLEXIBLE_LOWER_CONSTRAINT
+   	 true HAS_PROPER_NON_ILT_CONSTRAINT
+   	 true HAS_NO_EXPLICIT_LOWER_NOTHING_CONSTRAINT
+   	 true HAS_PROPER_EQUALITY_CONSTRAINT
+   	 true HAS_PROPER_NON_NOTHING_NON_UPPER_CONSTRAINT
+   )`
+    1. `TypeVariable(B)` is `Readiness(
+       	 true ALLOWED
+       	false HAS_PROPER_CONSTRAINTS
+       	 true HAS_NO_OUTER_TYPE_VARIABLE_DEPENDENCY
+       	false HAS_CAPTURED_UPPER_BOUND_WITH_SELF_TYPES
+       	false HAS_PROPER_NON_SELF_TYPE_BASED_CONSTRAINT
+       	false HAS_NO_DEPENDENCIES_TO_OTHER_VARIABLES
+       	false HAS_PROPER_NON_TRIVIAL_CONSTRAINTS
+       	false HAS_PROPER_NON_TRIVIAL_CONSTRAINTS_OTHER_THAN_INCORPORATED_FROM_DECLARED_UPPER_BOUND
+       	false REIFIED
+       	false HAS_PROPER_FLEXIBLE_LOWER_CONSTRAINT
+       	false HAS_PROPER_NON_ILT_CONSTRAINT
+       	 true HAS_NO_EXPLICIT_LOWER_NOTHING_CONSTRAINT
+       	false HAS_PROPER_EQUALITY_CONSTRAINT
+       	false HAS_PROPER_NON_NOTHING_NON_UPPER_CONSTRAINT
+       )`
+2. `TypeVariable(T) == OperationShape` _from Fix variable T_
+3. Combine `TypeVariable(T) == OperationShape` with `TypeVariable(T) <: ToSmithyBuilder<TypeVariable(T)>`
+    1. `OperationShape <: TypeVariable(T)`
+    2. `TypeVariable(T) <: OperationShape`
+    3. `TypeVariable(T) <: ToSmithyBuilder<OperationShape>`
+4. Combine `TypeVariable(T) == OperationShape` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), TypeVariable(T)>`
     1. `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), OperationShape>`
-6. Combine `TypeVariable(T) == OperationShape` with `TypeVariable(B) <: SmithyBuilder<TypeVariable(T)>`
+5. Combine `TypeVariable(T) == OperationShape` with `TypeVariable(B) <: SmithyBuilder<TypeVariable(T)>`
     1. `TypeVariable(B) <: SmithyBuilder<OperationShape>`
+6. Combine `TypeVariable(B) <: SmithyBuilder<OperationShape>` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), TypeVariable(T)>`
+    1. `TypeVariable(B) <: AbstractShapeBuilder<out SmithyBuilder<OperationShape>, TypeVariable(T)>`
+7. Combine `TypeVariable(B) <: SmithyBuilder<OperationShape>` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), OperationShape>`
+    1. `TypeVariable(B) <: AbstractShapeBuilder<out SmithyBuilder<OperationShape>, OperationShape>`
+8. Choose `TypeVariable(B)` with `Readiness(
+   	 true ALLOWED
+   	 true HAS_PROPER_CONSTRAINTS
+   	 true HAS_NO_OUTER_TYPE_VARIABLE_DEPENDENCY
+   	false HAS_CAPTURED_UPPER_BOUND_WITH_SELF_TYPES
+   	 true HAS_PROPER_NON_SELF_TYPE_BASED_CONSTRAINT
+   	 true HAS_NO_DEPENDENCIES_TO_OTHER_VARIABLES
+   	 true HAS_PROPER_NON_TRIVIAL_CONSTRAINTS
+   	 true HAS_PROPER_NON_TRIVIAL_CONSTRAINTS_OTHER_THAN_INCORPORATED_FROM_DECLARED_UPPER_BOUND
+   	false REIFIED
+   	false HAS_PROPER_FLEXIBLE_LOWER_CONSTRAINT
+   	 true HAS_PROPER_NON_ILT_CONSTRAINT
+   	 true HAS_NO_EXPLICIT_LOWER_NOTHING_CONSTRAINT
+   	false HAS_PROPER_EQUALITY_CONSTRAINT
+   	false HAS_PROPER_NON_NOTHING_NON_UPPER_CONSTRAINT
+   )`
+9. `AbstractShapeBuilder<out SmithyBuilder<OperationShape>, OperationShape> <: TypeVariable(B)` _from SimpleConstraintSystemConstraintPosition_
+10. Combine `TypeVariable(B) <: AbstractShapeBuilder<out SmithyBuilder<OperationShape>, OperationShape>` with `AbstractShapeBuilder<out SmithyBuilder<OperationShape>, OperationShape> <: TypeVariable(B)`
+    1. `TypeVariable(B) == AbstractShapeBuilder<out SmithyBuilder<OperationShape>, OperationShape>`
+11. Combine `TypeVariable(B) == AbstractShapeBuilder<out SmithyBuilder<OperationShape>, OperationShape>` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), OperationShape>`
+    1. `SmithyBuilder<OperationShape> <: TypeVariable(B)`
+    2. `TypeVariable(B) <: kotlin/Nothing`
+12. Combine `TypeVariable(B) <: SmithyBuilder<OperationShape>` with `SmithyBuilder<OperationShape> <: TypeVariable(B)`
+    1. `TypeVariable(B) == SmithyBuilder<OperationShape>`
+13. __NewConstraintError: `SmithyBuilder<OperationShape> <: AbstractShapeBuilder<TypeVariable(B), OperationShape>`__
+14. __NewConstraintError: `SmithyBuilder<OperationShape> <: AbstractShapeBuilder<out SmithyBuilder<OperationShape>, OperationShape>`__
+15. __NewConstraintError: `AbstractShapeBuilder<out SmithyBuilder<OperationShape>, OperationShape> <: kotlin/Nothing`__
+16. __NewConstraintError: `SmithyBuilder<OperationShape> <: kotlin/Nothing`__
+17. Combine `TypeVariable(B) <: kotlin/Nothing` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), OperationShape>`
+    1. `TypeVariable(B) <: AbstractShapeBuilder<kotlin/Nothing, OperationShape>`
+18. __NewConstraintError: `AbstractShapeBuilder<out SmithyBuilder<OperationShape>, OperationShape> <: AbstractShapeBuilder<kotlin/Nothing, OperationShape>`__
+19. __NewConstraintError: `SmithyBuilder<OperationShape> <: AbstractShapeBuilder<kotlin/Nothing, OperationShape>`__
+20. `TypeVariable(B) == kotlin/Nothing` _from SimpleConstraintSystemConstraintPosition_
+21. `TypeVariable(B) == CapturedType(*)` _from Fix variable B_
+22. Combine `TypeVariable(B) == CapturedType(*)` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), OperationShape>`
+    1. `TypeVariable(B) <: AbstractShapeBuilder<CapturedType(*), OperationShape>`
+
+### Call 6
+
+```
+R|<local>/shape|.removeTraitIfPresent#<R|OperationShape|, R|AbstractShapeBuilder<SmithyBuilder<OperationShape>, OperationShape>|>()
+```
+
+#### Candidate 1: `FirNamedFunctionSymbol /removeTraitIfPresent` --- `fun <T : Shape, ToSmithyBuilder<T>, B : AbstractShapeBuilder<B, T>, SmithyBuilder<T>> T.removeTraitIfPresent(): T`
+##### Resolution Stages > CreateFreshTypeVariableSubstitutorStage:
+
+1. New `TypeVariable(T)` for `FirNamedFunctionSymbol /removeTraitIfPresent`s parameter 0
+2. New `TypeVariable(B)` for `FirNamedFunctionSymbol /removeTraitIfPresent`s parameter 1
+3. `TypeVariable(T) <: Shape` _from DeclaredUpperBound_
+4. `TypeVariable(T) <: ToSmithyBuilder<TypeVariable(T)>` _from DeclaredUpperBound_
+5. `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), TypeVariable(T)>` _from DeclaredUpperBound_
+6. `TypeVariable(B) <: SmithyBuilder<TypeVariable(T)>` _from DeclaredUpperBound_
+7. `TypeVariable(T) == OperationShape` _from TypeParameter R|OperationShape|_
+8. Combine `TypeVariable(T) == OperationShape` with `TypeVariable(T) <: ToSmithyBuilder<TypeVariable(T)>`
+    1. `OperationShape <: TypeVariable(T)`
+    2. `TypeVariable(T) <: OperationShape`
+9. `TypeVariable(B) == AbstractShapeBuilder<SmithyBuilder<OperationShape>, OperationShape>` _from TypeParameter R|AbstractShapeBuilder<SmithyBuilder<OperationShape>, OperationShape>|_
+10. Combine `TypeVariable(B) == AbstractShapeBuilder<SmithyBuilder<OperationShape>, OperationShape>` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), TypeVariable(T)>`
+    1. `SmithyBuilder<OperationShape> <: TypeVariable(B)`
+    2. `TypeVariable(B) <: SmithyBuilder<OperationShape>`
+11. __NewConstraintError: `SmithyBuilder<OperationShape> <: AbstractShapeBuilder<TypeVariable(B), TypeVariable(T)>`__
+12. __NewConstraintError: `SmithyBuilder<OperationShape> <: AbstractShapeBuilder<SmithyBuilder<OperationShape>, OperationShape>`__
+13. Combine `SmithyBuilder<OperationShape> <: TypeVariable(B)` with `TypeVariable(B) <: SmithyBuilder<OperationShape>`
+    1. `TypeVariable(B) == SmithyBuilder<OperationShape>`
+14. __NewConstraintError: `SmithyBuilder<OperationShape> <: AbstractShapeBuilder<TypeVariable(B), TypeVariable(T)>`__
+15. __NewConstraintError: `SmithyBuilder<OperationShape> <: AbstractShapeBuilder<SmithyBuilder<OperationShape>, OperationShape>`__
+
+##### Resolution Stages > CheckExtensionReceiver:
+
+1. `OperationShape <: TypeVariable(T)` _from Receiver R|<local>/shape|_
 
 ##### Call Completion:
 
@@ -105,8 +217,8 @@ R|<local>/shape|.removeTraitIfPresent#()
        	false HAS_PROPER_FLEXIBLE_LOWER_CONSTRAINT
        	 true HAS_PROPER_NON_ILT_CONSTRAINT
        	 true HAS_NO_EXPLICIT_LOWER_NOTHING_CONSTRAINT
-       	false HAS_PROPER_EQUALITY_CONSTRAINT
-       	false HAS_PROPER_NON_NOTHING_NON_UPPER_CONSTRAINT
+       	 true HAS_PROPER_EQUALITY_CONSTRAINT
+       	 true HAS_PROPER_NON_NOTHING_NON_UPPER_CONSTRAINT
        )`
 2. `TypeVariable(T) == OperationShape` _from Fix variable T_
 3. Combine `TypeVariable(T) == OperationShape` with `TypeVariable(T) <: ToSmithyBuilder<TypeVariable(T)>`
@@ -130,140 +242,16 @@ R|<local>/shape|.removeTraitIfPresent#()
    	false HAS_PROPER_FLEXIBLE_LOWER_CONSTRAINT
    	 true HAS_PROPER_NON_ILT_CONSTRAINT
    	 true HAS_NO_EXPLICIT_LOWER_NOTHING_CONSTRAINT
-   	false HAS_PROPER_EQUALITY_CONSTRAINT
-   	false HAS_PROPER_NON_NOTHING_NON_UPPER_CONSTRAINT
-   )`
-7. `SmithyBuilder<OperationShape> <: TypeVariable(B)` _from SimpleConstraintSystemConstraintPosition_
-8. Combine `TypeVariable(B) <: SmithyBuilder<OperationShape>` with `SmithyBuilder<OperationShape> <: TypeVariable(B)`
-    1. `TypeVariable(B) == SmithyBuilder<OperationShape>`
-9. __NewConstraintError: `SmithyBuilder<OperationShape> <: AbstractShapeBuilder<TypeVariable(B), OperationShape>`__
-10. Combine `TypeVariable(B) == SmithyBuilder<OperationShape>` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), OperationShape>`
-    1. `TypeVariable(B) <: AbstractShapeBuilder<SmithyBuilder<OperationShape>, OperationShape>`
-11. __NewConstraintError: `SmithyBuilder<OperationShape> <: AbstractShapeBuilder<SmithyBuilder<OperationShape>, OperationShape>`__
-12. `TypeVariable(B) == kotlin/Nothing` _from SimpleConstraintSystemConstraintPosition_
-13. Combine `TypeVariable(B) == kotlin/Nothing` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), OperationShape>`
-    1. `TypeVariable(B) <: AbstractShapeBuilder<kotlin/Nothing, OperationShape>`
-14. `TypeVariable(B) == CapturedType(*)` _from Fix variable B_
-15. Combine `TypeVariable(B) == CapturedType(*)` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), OperationShape>`
-    1. `TypeVariable(B) <: AbstractShapeBuilder<CapturedType(*), OperationShape>`
-
-### Call 6
-
-```
-R|<local>/shape|.removeTraitIfPresent#<R|OperationShape|, R|AbstractShapeBuilder<SmithyBuilder<OperationShape>, OperationShape>|>()
-```
-
-#### Candidate 1: `FirNamedFunctionSymbol /removeTraitIfPresent` --- `fun <T : Shape, ToSmithyBuilder<T>, B : AbstractShapeBuilder<B, T>, SmithyBuilder<T>> T.removeTraitIfPresent(): T`
-##### Resolution Stages > CreateFreshTypeVariableSubstitutorStage:
-
-1. New `TypeVariable(T)` for `FirNamedFunctionSymbol /removeTraitIfPresent`s parameter 0
-2. New `TypeVariable(B)` for `FirNamedFunctionSymbol /removeTraitIfPresent`s parameter 1
-3. `TypeVariable(T) <: Shape` _from DeclaredUpperBound_
-4. `TypeVariable(T) <: ToSmithyBuilder<TypeVariable(T)>` _from DeclaredUpperBound_
-5. `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), TypeVariable(T)>` _from DeclaredUpperBound_
-6. `TypeVariable(B) <: SmithyBuilder<TypeVariable(T)>` _from DeclaredUpperBound_
-7. `TypeVariable(T) == OperationShape` _from TypeParameter R|OperationShape|_
-8. Combine `TypeVariable(T) == OperationShape` with `TypeVariable(T) <: ToSmithyBuilder<TypeVariable(T)>`
-    1. `OperationShape <: TypeVariable(T)`
-    2. `TypeVariable(T) <: OperationShape`
-    3. `TypeVariable(T) <: ToSmithyBuilder<OperationShape>`
-9. Combine `TypeVariable(T) == OperationShape` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), TypeVariable(T)>`
-    1. `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), OperationShape>`
-10. Combine `TypeVariable(T) == OperationShape` with `TypeVariable(B) <: SmithyBuilder<TypeVariable(T)>`
-    1. `TypeVariable(B) <: SmithyBuilder<OperationShape>`
-11. `TypeVariable(B) == AbstractShapeBuilder<SmithyBuilder<OperationShape>, OperationShape>` _from TypeParameter R|AbstractShapeBuilder<SmithyBuilder<OperationShape>, OperationShape>|_
-12. Combine `TypeVariable(B) == AbstractShapeBuilder<SmithyBuilder<OperationShape>, OperationShape>` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), TypeVariable(T)>`
-    1. `SmithyBuilder<OperationShape> <: TypeVariable(B)`
-    2. `TypeVariable(B) <: AbstractShapeBuilder<AbstractShapeBuilder<SmithyBuilder<OperationShape>, OperationShape>, TypeVariable(T)>`
-13. Combine `TypeVariable(B) == AbstractShapeBuilder<SmithyBuilder<OperationShape>, OperationShape>` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), OperationShape>`
-    1. `TypeVariable(B) <: AbstractShapeBuilder<AbstractShapeBuilder<SmithyBuilder<OperationShape>, OperationShape>, OperationShape>`
-14. Combine `TypeVariable(B) <: SmithyBuilder<OperationShape>` with `SmithyBuilder<OperationShape> <: TypeVariable(B)`
-    1. `TypeVariable(B) == SmithyBuilder<OperationShape>`
-15. __NewConstraintError: `SmithyBuilder<OperationShape> <: AbstractShapeBuilder<TypeVariable(B), TypeVariable(T)>`__
-16. __NewConstraintError: `SmithyBuilder<OperationShape> <: AbstractShapeBuilder<TypeVariable(B), OperationShape>`__
-17. __NewConstraintError: `SmithyBuilder<OperationShape> <: AbstractShapeBuilder<SmithyBuilder<OperationShape>, OperationShape>`__
-18. Combine `TypeVariable(B) == SmithyBuilder<OperationShape>` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), TypeVariable(T)>`
-    1. `TypeVariable(B) <: AbstractShapeBuilder<SmithyBuilder<OperationShape>, TypeVariable(T)>`
-19. Combine `TypeVariable(B) == SmithyBuilder<OperationShape>` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), OperationShape>`
-    1. `TypeVariable(B) <: AbstractShapeBuilder<SmithyBuilder<OperationShape>, OperationShape>`
-20. __NewConstraintError: `AbstractShapeBuilder<SmithyBuilder<OperationShape>, OperationShape> <: AbstractShapeBuilder<AbstractShapeBuilder<SmithyBuilder<OperationShape>, OperationShape>, TypeVariable(T)>`__
-21. __NewConstraintError: `SmithyBuilder<OperationShape> <: AbstractShapeBuilder<AbstractShapeBuilder<SmithyBuilder<OperationShape>, OperationShape>, TypeVariable(T)>`__
-22. __NewConstraintError: `AbstractShapeBuilder<SmithyBuilder<OperationShape>, OperationShape> <: AbstractShapeBuilder<AbstractShapeBuilder<SmithyBuilder<OperationShape>, OperationShape>, OperationShape>`__
-23. __NewConstraintError: `SmithyBuilder<OperationShape> <: AbstractShapeBuilder<AbstractShapeBuilder<SmithyBuilder<OperationShape>, OperationShape>, OperationShape>`__
-24. __NewConstraintError: `SmithyBuilder<OperationShape> <: AbstractShapeBuilder<SmithyBuilder<OperationShape>, TypeVariable(T)>`__
-
-##### Resolution Stages > CheckExtensionReceiver:
-
-1. `OperationShape <: TypeVariable(T)` _from Receiver R|<local>/shape|_
-
-##### Call Completion:
-
-1. Choose `TypeVariable(T)` with `Readiness(
-   	 true ALLOWED
-   	 true HAS_PROPER_CONSTRAINTS
-   	 true HAS_NO_OUTER_TYPE_VARIABLE_DEPENDENCY
-   	false HAS_CAPTURED_UPPER_BOUND_WITH_SELF_TYPES
-   	 true HAS_PROPER_NON_SELF_TYPE_BASED_CONSTRAINT
-   	 true HAS_NO_DEPENDENCIES_TO_OTHER_VARIABLES
-   	 true HAS_PROPER_NON_TRIVIAL_CONSTRAINTS
-   	 true HAS_PROPER_NON_TRIVIAL_CONSTRAINTS_OTHER_THAN_INCORPORATED_FROM_DECLARED_UPPER_BOUND
-   	false REIFIED
-   	false HAS_PROPER_FLEXIBLE_LOWER_CONSTRAINT
-   	 true HAS_PROPER_NON_ILT_CONSTRAINT
-   	 true HAS_NO_EXPLICIT_LOWER_NOTHING_CONSTRAINT
    	 true HAS_PROPER_EQUALITY_CONSTRAINT
    	 true HAS_PROPER_NON_NOTHING_NON_UPPER_CONSTRAINT
    )`
-    1. `TypeVariable(B)` is `Readiness(
-       	 true ALLOWED
-       	 true HAS_PROPER_CONSTRAINTS
-       	 true HAS_NO_OUTER_TYPE_VARIABLE_DEPENDENCY
-       	false HAS_CAPTURED_UPPER_BOUND_WITH_SELF_TYPES
-       	 true HAS_PROPER_NON_SELF_TYPE_BASED_CONSTRAINT
-       	false HAS_NO_DEPENDENCIES_TO_OTHER_VARIABLES
-       	 true HAS_PROPER_NON_TRIVIAL_CONSTRAINTS
-       	 true HAS_PROPER_NON_TRIVIAL_CONSTRAINTS_OTHER_THAN_INCORPORATED_FROM_DECLARED_UPPER_BOUND
-       	false REIFIED
-       	false HAS_PROPER_FLEXIBLE_LOWER_CONSTRAINT
-       	 true HAS_PROPER_NON_ILT_CONSTRAINT
-       	 true HAS_NO_EXPLICIT_LOWER_NOTHING_CONSTRAINT
-       	 true HAS_PROPER_EQUALITY_CONSTRAINT
-       	 true HAS_PROPER_NON_NOTHING_NON_UPPER_CONSTRAINT
-       )`
-2. `TypeVariable(T) == OperationShape` _from Fix variable T_
-3. Combine `TypeVariable(T) == OperationShape` with `TypeVariable(T) <: ToSmithyBuilder<TypeVariable(T)>`
-    1. `OperationShape <: TypeVariable(T)`
-    2. `TypeVariable(T) <: OperationShape`
-    3. `TypeVariable(T) <: ToSmithyBuilder<OperationShape>`
-4. Combine `TypeVariable(T) == OperationShape` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), TypeVariable(T)>`
-    1. `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), OperationShape>`
-5. Combine `TypeVariable(T) == OperationShape` with `TypeVariable(B) <: SmithyBuilder<TypeVariable(T)>`
-    1. `TypeVariable(B) <: SmithyBuilder<OperationShape>`
-6. Combine `TypeVariable(T) == OperationShape` with `TypeVariable(B) <: AbstractShapeBuilder<AbstractShapeBuilder<SmithyBuilder<OperationShape>, OperationShape>, TypeVariable(T)>`
-    1. `TypeVariable(B) <: AbstractShapeBuilder<AbstractShapeBuilder<SmithyBuilder<OperationShape>, OperationShape>, OperationShape>`
-7. Combine `TypeVariable(T) == OperationShape` with `TypeVariable(B) <: AbstractShapeBuilder<SmithyBuilder<OperationShape>, TypeVariable(T)>`
-    1. `TypeVariable(B) <: AbstractShapeBuilder<SmithyBuilder<OperationShape>, OperationShape>`
-8. Choose `TypeVariable(B)` with `Readiness(
-   	 true ALLOWED
-   	 true HAS_PROPER_CONSTRAINTS
-   	 true HAS_NO_OUTER_TYPE_VARIABLE_DEPENDENCY
-   	false HAS_CAPTURED_UPPER_BOUND_WITH_SELF_TYPES
-   	 true HAS_PROPER_NON_SELF_TYPE_BASED_CONSTRAINT
-   	 true HAS_NO_DEPENDENCIES_TO_OTHER_VARIABLES
-   	 true HAS_PROPER_NON_TRIVIAL_CONSTRAINTS
-   	 true HAS_PROPER_NON_TRIVIAL_CONSTRAINTS_OTHER_THAN_INCORPORATED_FROM_DECLARED_UPPER_BOUND
-   	false REIFIED
-   	false HAS_PROPER_FLEXIBLE_LOWER_CONSTRAINT
-   	 true HAS_PROPER_NON_ILT_CONSTRAINT
-   	 true HAS_NO_EXPLICIT_LOWER_NOTHING_CONSTRAINT
-   	 true HAS_PROPER_EQUALITY_CONSTRAINT
-   	 true HAS_PROPER_NON_NOTHING_NON_UPPER_CONSTRAINT
-   )`
-9. `TypeVariable(B) == AbstractShapeBuilder<SmithyBuilder<OperationShape>, OperationShape>` _from Fix variable B_
-10. __NewConstraintError: `SmithyBuilder<OperationShape> <: AbstractShapeBuilder<SmithyBuilder<OperationShape>, OperationShape>`__
-11. Combine `TypeVariable(B) == AbstractShapeBuilder<SmithyBuilder<OperationShape>, OperationShape>` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), OperationShape>`
+7. `TypeVariable(B) == AbstractShapeBuilder<SmithyBuilder<OperationShape>, OperationShape>` _from Fix variable B_
+8. __NewConstraintError: `SmithyBuilder<OperationShape> <: AbstractShapeBuilder<SmithyBuilder<OperationShape>, OperationShape>`__
+9. Combine `TypeVariable(B) == AbstractShapeBuilder<SmithyBuilder<OperationShape>, OperationShape>` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), OperationShape>`
     1. `SmithyBuilder<OperationShape> <: TypeVariable(B)`
-12. __NewConstraintError: `AbstractShapeBuilder<SmithyBuilder<OperationShape>, OperationShape> <: AbstractShapeBuilder<AbstractShapeBuilder<SmithyBuilder<OperationShape>, OperationShape>, OperationShape>`__
+    2. `TypeVariable(B) <: AbstractShapeBuilder<AbstractShapeBuilder<SmithyBuilder<OperationShape>, OperationShape>, OperationShape>`
+10. __NewConstraintError: `AbstractShapeBuilder<SmithyBuilder<OperationShape>, OperationShape> <: AbstractShapeBuilder<AbstractShapeBuilder<SmithyBuilder<OperationShape>, OperationShape>, OperationShape>`__
+11. __NewConstraintError: `SmithyBuilder<OperationShape> <: AbstractShapeBuilder<AbstractShapeBuilder<SmithyBuilder<OperationShape>, OperationShape>, OperationShape>`__
 
 ### Call 7
 
@@ -284,16 +272,7 @@ R|<local>/shape|.removeTraitIfPresent#<R|OperationShape|, R|kotlin/Nothing|>()
 8. Combine `TypeVariable(T) == OperationShape` with `TypeVariable(T) <: ToSmithyBuilder<TypeVariable(T)>`
     1. `OperationShape <: TypeVariable(T)`
     2. `TypeVariable(T) <: OperationShape`
-    3. `TypeVariable(T) <: ToSmithyBuilder<OperationShape>`
-9. Combine `TypeVariable(T) == OperationShape` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), TypeVariable(T)>`
-    1. `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), OperationShape>`
-10. Combine `TypeVariable(T) == OperationShape` with `TypeVariable(B) <: SmithyBuilder<TypeVariable(T)>`
-    1. `TypeVariable(B) <: SmithyBuilder<OperationShape>`
-11. `TypeVariable(B) == kotlin/Nothing` _from TypeParameter R|kotlin/Nothing|_
-12. Combine `TypeVariable(B) == kotlin/Nothing` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), TypeVariable(T)>`
-    1. `TypeVariable(B) <: AbstractShapeBuilder<kotlin/Nothing, TypeVariable(T)>`
-13. Combine `TypeVariable(B) == kotlin/Nothing` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), OperationShape>`
-    1. `TypeVariable(B) <: AbstractShapeBuilder<kotlin/Nothing, OperationShape>`
+9. `TypeVariable(B) == kotlin/Nothing` _from TypeParameter R|kotlin/Nothing|_
 
 ##### Resolution Stages > CheckExtensionReceiver:
 
@@ -342,9 +321,11 @@ R|<local>/shape|.removeTraitIfPresent#<R|OperationShape|, R|kotlin/Nothing|>()
     1. `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), OperationShape>`
 5. Combine `TypeVariable(T) == OperationShape` with `TypeVariable(B) <: SmithyBuilder<TypeVariable(T)>`
     1. `TypeVariable(B) <: SmithyBuilder<OperationShape>`
-6. Combine `TypeVariable(T) == OperationShape` with `TypeVariable(B) <: AbstractShapeBuilder<kotlin/Nothing, TypeVariable(T)>`
-    1. `TypeVariable(B) <: AbstractShapeBuilder<kotlin/Nothing, OperationShape>`
-7. Choose `TypeVariable(B)` with `Readiness(
+6. Combine `TypeVariable(B) <: SmithyBuilder<OperationShape>` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), TypeVariable(T)>`
+    1. `TypeVariable(B) <: AbstractShapeBuilder<out SmithyBuilder<OperationShape>, TypeVariable(T)>`
+7. Combine `TypeVariable(B) <: SmithyBuilder<OperationShape>` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), OperationShape>`
+    1. `TypeVariable(B) <: AbstractShapeBuilder<out SmithyBuilder<OperationShape>, OperationShape>`
+8. Choose `TypeVariable(B)` with `Readiness(
    	 true ALLOWED
    	 true HAS_PROPER_CONSTRAINTS
    	 true HAS_NO_OUTER_TYPE_VARIABLE_DEPENDENCY
@@ -360,7 +341,9 @@ R|<local>/shape|.removeTraitIfPresent#<R|OperationShape|, R|kotlin/Nothing|>()
    	 true HAS_PROPER_EQUALITY_CONSTRAINT
    	false HAS_PROPER_NON_NOTHING_NON_UPPER_CONSTRAINT
    )`
-8. `TypeVariable(B) == kotlin/Nothing` _from Fix variable B_
+9. `TypeVariable(B) == kotlin/Nothing` _from Fix variable B_
+10. Combine `TypeVariable(B) == kotlin/Nothing` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), OperationShape>`
+    1. `TypeVariable(B) <: AbstractShapeBuilder<kotlin/Nothing, OperationShape>`
 
 ### Call 8
 
@@ -381,18 +364,7 @@ R|<local>/shape|.removeTraitIfPresent#<R|OperationShape|, R|AbstractShapeBuilder
 8. Combine `TypeVariable(T) == OperationShape` with `TypeVariable(T) <: ToSmithyBuilder<TypeVariable(T)>`
     1. `OperationShape <: TypeVariable(T)`
     2. `TypeVariable(T) <: OperationShape`
-    3. `TypeVariable(T) <: ToSmithyBuilder<OperationShape>`
-9. Combine `TypeVariable(T) == OperationShape` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), TypeVariable(T)>`
-    1. `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), OperationShape>`
-10. Combine `TypeVariable(T) == OperationShape` with `TypeVariable(B) <: SmithyBuilder<TypeVariable(T)>`
-    1. `TypeVariable(B) <: SmithyBuilder<OperationShape>`
-11. `TypeVariable(B) == AbstractShapeBuilder<*, OperationShape>` _from TypeParameter R|AbstractShapeBuilder<*, OperationShape>|_
-12. Combine `TypeVariable(B) == AbstractShapeBuilder<*, OperationShape>` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), TypeVariable(T)>`
-    1. `TypeVariable(B) <: AbstractShapeBuilder<AbstractShapeBuilder<*, OperationShape>, TypeVariable(T)>`
-13. Combine `TypeVariable(B) == AbstractShapeBuilder<*, OperationShape>` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), OperationShape>`
-    1. `TypeVariable(B) <: AbstractShapeBuilder<AbstractShapeBuilder<*, OperationShape>, OperationShape>`
-14. __NewConstraintError: `AbstractShapeBuilder<*, OperationShape> <: AbstractShapeBuilder<AbstractShapeBuilder<*, OperationShape>, TypeVariable(T)>`__
-15. __NewConstraintError: `AbstractShapeBuilder<*, OperationShape> <: AbstractShapeBuilder<AbstractShapeBuilder<*, OperationShape>, OperationShape>`__
+9. `TypeVariable(B) == AbstractShapeBuilder<*, OperationShape>` _from TypeParameter R|AbstractShapeBuilder<*, OperationShape>|_
 
 ##### Resolution Stages > CheckExtensionReceiver:
 
@@ -441,9 +413,11 @@ R|<local>/shape|.removeTraitIfPresent#<R|OperationShape|, R|AbstractShapeBuilder
     1. `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), OperationShape>`
 5. Combine `TypeVariable(T) == OperationShape` with `TypeVariable(B) <: SmithyBuilder<TypeVariable(T)>`
     1. `TypeVariable(B) <: SmithyBuilder<OperationShape>`
-6. Combine `TypeVariable(T) == OperationShape` with `TypeVariable(B) <: AbstractShapeBuilder<AbstractShapeBuilder<*, OperationShape>, TypeVariable(T)>`
-    1. `TypeVariable(B) <: AbstractShapeBuilder<AbstractShapeBuilder<*, OperationShape>, OperationShape>`
-7. Choose `TypeVariable(B)` with `Readiness(
+6. Combine `TypeVariable(B) <: SmithyBuilder<OperationShape>` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), TypeVariable(T)>`
+    1. `TypeVariable(B) <: AbstractShapeBuilder<out SmithyBuilder<OperationShape>, TypeVariable(T)>`
+7. Combine `TypeVariable(B) <: SmithyBuilder<OperationShape>` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), OperationShape>`
+    1. `TypeVariable(B) <: AbstractShapeBuilder<out SmithyBuilder<OperationShape>, OperationShape>`
+8. Choose `TypeVariable(B)` with `Readiness(
    	 true ALLOWED
    	 true HAS_PROPER_CONSTRAINTS
    	 true HAS_NO_OUTER_TYPE_VARIABLE_DEPENDENCY
@@ -459,8 +433,10 @@ R|<local>/shape|.removeTraitIfPresent#<R|OperationShape|, R|AbstractShapeBuilder
    	 true HAS_PROPER_EQUALITY_CONSTRAINT
    	 true HAS_PROPER_NON_NOTHING_NON_UPPER_CONSTRAINT
    )`
-8. `TypeVariable(B) == AbstractShapeBuilder<*, OperationShape>` _from Fix variable B_
-9. __NewConstraintError: `AbstractShapeBuilder<*, OperationShape> <: AbstractShapeBuilder<AbstractShapeBuilder<*, OperationShape>, OperationShape>`__
+9. `TypeVariable(B) == AbstractShapeBuilder<*, OperationShape>` _from Fix variable B_
+10. Combine `TypeVariable(B) == AbstractShapeBuilder<*, OperationShape>` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), OperationShape>`
+    1. `TypeVariable(B) <: AbstractShapeBuilder<AbstractShapeBuilder<*, OperationShape>, OperationShape>`
+11. __NewConstraintError: `AbstractShapeBuilder<*, OperationShape> <: AbstractShapeBuilder<AbstractShapeBuilder<*, OperationShape>, OperationShape>`__
 
 ### Call 9
 
@@ -523,16 +499,12 @@ shapeToBuilder#(R|<local>/target|)
 2. `Shape <: TypeVariable(S)` _from SimpleConstraintSystemConstraintPosition_
 3. Combine `TypeVariable(S) <: Shape` with `Shape <: TypeVariable(S)`
     1. `TypeVariable(S) == Shape`
-4. Combine `TypeVariable(S) == Shape` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), TypeVariable(S)>`
-    1. `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), Shape>`
-5. Combine `TypeVariable(S) == Shape` with `TypeVariable(B) <: AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, TypeVariable(S)>`
-    1. `TypeVariable(B) <: AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, Shape>`
-6. `TypeVariable(S) == SimpleShape` _from Fix variable S_
-7. Combine `TypeVariable(S) == SimpleShape` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), TypeVariable(S)>`
+4. `TypeVariable(S) == SimpleShape` _from Fix variable S_
+5. Combine `TypeVariable(S) == SimpleShape` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), TypeVariable(S)>`
     1. `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), SimpleShape>`
-8. Combine `TypeVariable(S) == SimpleShape` with `TypeVariable(B) <: AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, TypeVariable(S)>`
+6. Combine `TypeVariable(S) == SimpleShape` with `TypeVariable(B) <: AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, TypeVariable(S)>`
     1. `TypeVariable(B) <: AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>`
-9. Choose `TypeVariable(B)` with `Readiness(
+7. Choose `TypeVariable(B)` with `Readiness(
    	 true ALLOWED
    	 true HAS_PROPER_CONSTRAINTS
    	 true HAS_NO_OUTER_TYPE_VARIABLE_DEPENDENCY
@@ -548,32 +520,25 @@ shapeToBuilder#(R|<local>/target|)
    	false HAS_PROPER_EQUALITY_CONSTRAINT
    	false HAS_PROPER_NON_NOTHING_NON_UPPER_CONSTRAINT
    )`
-10. `AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape> <: TypeVariable(B)` _from SimpleConstraintSystemConstraintPosition_
-11. Combine `TypeVariable(B) <: AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>` with `AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape> <: TypeVariable(B)`
+8. `AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape> <: TypeVariable(B)` _from SimpleConstraintSystemConstraintPosition_
+9. Combine `TypeVariable(B) <: AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>` with `AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape> <: TypeVariable(B)`
     1. `TypeVariable(B) == AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>`
-12. Combine `TypeVariable(B) == AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), SimpleShape>`
+10. Combine `TypeVariable(B) == AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), SimpleShape>`
     1. `AbstractShapeBuilder<*, *> <: TypeVariable(B)`
     2. `TypeVariable(B) <: kotlin/Nothing`
-    3. `TypeVariable(B) <: AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>`
-13. Combine `TypeVariable(B) <: AbstractShapeBuilder<*, *>` with `AbstractShapeBuilder<*, *> <: TypeVariable(B)`
+11. Combine `TypeVariable(B) <: AbstractShapeBuilder<*, *>` with `AbstractShapeBuilder<*, *> <: TypeVariable(B)`
     1. `TypeVariable(B) == AbstractShapeBuilder<*, *>`
-14. __NewConstraintError: `AbstractShapeBuilder<*, *> <: AbstractShapeBuilder<TypeVariable(B), SimpleShape>`__
-15. __NewConstraintError: `AbstractShapeBuilder<*, *> <: AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>`__
-16. Combine `TypeVariable(B) == AbstractShapeBuilder<*, *>` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), SimpleShape>`
-    1. `TypeVariable(B) <: AbstractShapeBuilder<AbstractShapeBuilder<*, *>, SimpleShape>`
-17. __NewConstraintError: `AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape> <: kotlin/Nothing`__
-18. __NewConstraintError: `AbstractShapeBuilder<*, *> <: kotlin/Nothing`__
-19. Combine `TypeVariable(B) <: kotlin/Nothing` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), SimpleShape>`
+12. __NewConstraintError: `AbstractShapeBuilder<*, *> <: AbstractShapeBuilder<TypeVariable(B), SimpleShape>`__
+13. __NewConstraintError: `AbstractShapeBuilder<*, *> <: AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>`__
+14. __NewConstraintError: `AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape> <: kotlin/Nothing`__
+15. __NewConstraintError: `AbstractShapeBuilder<*, *> <: kotlin/Nothing`__
+16. Combine `TypeVariable(B) <: kotlin/Nothing` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), SimpleShape>`
     1. `TypeVariable(B) <: AbstractShapeBuilder<kotlin/Nothing, SimpleShape>`
-20. __NewConstraintError: `AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape> <: AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>`__
-21. __NewConstraintError: `AbstractShapeBuilder<*, *> <: AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>`__
-22. __NewConstraintError: `AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape> <: AbstractShapeBuilder<AbstractShapeBuilder<*, *>, SimpleShape>`__
-23. __NewConstraintError: `AbstractShapeBuilder<*, *> <: AbstractShapeBuilder<AbstractShapeBuilder<*, *>, SimpleShape>`__
-24. __NewConstraintError: `AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape> <: AbstractShapeBuilder<kotlin/Nothing, SimpleShape>`__
-25. __NewConstraintError: `AbstractShapeBuilder<*, *> <: AbstractShapeBuilder<kotlin/Nothing, SimpleShape>`__
-26. `TypeVariable(B) == kotlin/Nothing` _from SimpleConstraintSystemConstraintPosition_
-27. `TypeVariable(B) == CapturedType(*)` _from Fix variable B_
-28. Combine `TypeVariable(B) == CapturedType(*)` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), SimpleShape>`
+17. __NewConstraintError: `AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape> <: AbstractShapeBuilder<kotlin/Nothing, SimpleShape>`__
+18. __NewConstraintError: `AbstractShapeBuilder<*, *> <: AbstractShapeBuilder<kotlin/Nothing, SimpleShape>`__
+19. `TypeVariable(B) == kotlin/Nothing` _from SimpleConstraintSystemConstraintPosition_
+20. `TypeVariable(B) == CapturedType(*)` _from Fix variable B_
+21. Combine `TypeVariable(B) == CapturedType(*)` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), SimpleShape>`
     1. `TypeVariable(B) <: AbstractShapeBuilder<CapturedType(*), SimpleShape>`
 
 ### Call 10
@@ -595,7 +560,6 @@ shapeToBuilder#<R|AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBui
     2. `TypeVariable(B) <: AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>`
     3. `SimpleShape <: TypeVariable(S)`
     4. `TypeVariable(S) <: SimpleShape`
-    5. `TypeVariable(B) <: AbstractShapeBuilder<AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>, TypeVariable(S)>`
 7. Combine `AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape> <: TypeVariable(B)` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), TypeVariable(S)>`
     1. `AbstractShapeBuilder<*, *> <: TypeVariable(B)`
     2. `TypeVariable(B) <: kotlin/Nothing`
@@ -605,76 +569,40 @@ shapeToBuilder#<R|AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBui
 10. Combine `AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape> <: TypeVariable(B)` with `TypeVariable(B) <: AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>`
     1. `TypeVariable(B) == AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>`
 11. __NewConstraintError: `AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape> <: AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>`__
-12. Combine `TypeVariable(B) == AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), TypeVariable(S)>`
-    1. `TypeVariable(B) <: AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, TypeVariable(S)>`
-13. Combine `SimpleShape <: TypeVariable(S)` with `TypeVariable(S) <: SimpleShape`
+12. Combine `SimpleShape <: TypeVariable(S)` with `TypeVariable(S) <: SimpleShape`
     1. `TypeVariable(S) == SimpleShape`
-14. Combine `TypeVariable(S) == SimpleShape` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), TypeVariable(S)>`
-    1. `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), SimpleShape>`
-15. __NewConstraintError: `AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape> <: AbstractShapeBuilder<AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>, TypeVariable(S)>`__
-16. __NewConstraintError: `AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape> <: AbstractShapeBuilder<AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>, TypeVariable(S)>`__
-17. Combine `AbstractShapeBuilder<*, *> <: TypeVariable(B)` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), TypeVariable(S)>`
+13. Combine `AbstractShapeBuilder<*, *> <: TypeVariable(B)` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), TypeVariable(S)>`
     1. `Shape <: TypeVariable(S)`
     2. `TypeVariable(S) <: kotlin/Nothing`
-18. __NewConstraintError: `AbstractShapeBuilder<*, *> <: AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>`__
-19. __NewConstraintError: `AbstractShapeBuilder<*, *> <: AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>`__
-20. __NewConstraintError: `AbstractShapeBuilder<*, *> <: AbstractShapeBuilder<AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>, TypeVariable(S)>`__
-21. Combine `AbstractShapeBuilder<*, *> <: TypeVariable(B)` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), TypeVariable(S)>`
+14. __NewConstraintError: `AbstractShapeBuilder<*, *> <: AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>`__
+15. __NewConstraintError: `AbstractShapeBuilder<*, *> <: AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>`__
+16. Combine `AbstractShapeBuilder<*, *> <: TypeVariable(B)` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), TypeVariable(S)>`
     1. `TypeVariable(B) <: AbstractShapeBuilder<in AbstractShapeBuilder<*, *>, TypeVariable(S)>`
-22. __NewConstraintError: `AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape> <: kotlin/Nothing`__
-23. __NewConstraintError: `AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape> <: kotlin/Nothing`__
-24. __NewConstraintError: `AbstractShapeBuilder<*, *> <: kotlin/Nothing`__
-25. Combine `TypeVariable(B) <: kotlin/Nothing` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), TypeVariable(S)>`
+17. __NewConstraintError: `AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape> <: kotlin/Nothing`__
+18. __NewConstraintError: `AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape> <: kotlin/Nothing`__
+19. __NewConstraintError: `AbstractShapeBuilder<*, *> <: kotlin/Nothing`__
+20. Combine `TypeVariable(B) <: kotlin/Nothing` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), TypeVariable(S)>`
     1. `TypeVariable(B) <: AbstractShapeBuilder<kotlin/Nothing, TypeVariable(S)>`
-26. __NewConstraintError: `AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape> <: AbstractShapeBuilder<in AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, TypeVariable(S)>`__
-27. __NewConstraintError: `AbstractShapeBuilder<*, *> <: AbstractShapeBuilder<in AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, TypeVariable(S)>`__
-28. __NewConstraintError: `AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape> <: AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, TypeVariable(S)>`__
-29. __NewConstraintError: `AbstractShapeBuilder<*, *> <: AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, TypeVariable(S)>`__
-30. Combine `TypeVariable(S) <: Shape` with `Shape <: TypeVariable(S)`
+21. __NewConstraintError: `AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape> <: AbstractShapeBuilder<in AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, TypeVariable(S)>`__
+22. __NewConstraintError: `AbstractShapeBuilder<*, *> <: AbstractShapeBuilder<in AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, TypeVariable(S)>`__
+23. Combine `TypeVariable(S) <: Shape` with `Shape <: TypeVariable(S)`
     1. `TypeVariable(S) == Shape`
-31. __NewConstraintError: `Shape <: SimpleShape`__
-32. Combine `TypeVariable(S) == Shape` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), TypeVariable(S)>`
-    1. `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), Shape>`
-33. Combine `TypeVariable(S) == Shape` with `TypeVariable(B) <: AbstractShapeBuilder<AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>, TypeVariable(S)>`
-    1. `TypeVariable(B) <: AbstractShapeBuilder<AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>, Shape>`
-34. Combine `TypeVariable(S) == Shape` with `TypeVariable(B) <: AbstractShapeBuilder<in AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, TypeVariable(S)>`
-    1. `TypeVariable(B) <: AbstractShapeBuilder<in AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, Shape>`
-35. Combine `TypeVariable(S) == Shape` with `TypeVariable(B) <: AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, TypeVariable(S)>`
-    1. `TypeVariable(B) <: AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, Shape>`
-36. __NewConstraintError: `SimpleShape <: kotlin/Nothing`__
-37. __NewConstraintError: `Shape <: kotlin/Nothing`__
-38. Combine `TypeVariable(S) <: kotlin/Nothing` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), TypeVariable(S)>`
+24. __NewConstraintError: `Shape <: SimpleShape`__
+25. __NewConstraintError: `SimpleShape <: kotlin/Nothing`__
+26. __NewConstraintError: `Shape <: kotlin/Nothing`__
+27. Combine `TypeVariable(S) <: kotlin/Nothing` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), TypeVariable(S)>`
     1. `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), kotlin/Nothing>`
-39. Combine `TypeVariable(S) <: kotlin/Nothing` with `TypeVariable(B) <: AbstractShapeBuilder<AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>, TypeVariable(S)>`
-    1. `TypeVariable(B) <: AbstractShapeBuilder<AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>, kotlin/Nothing>`
-40. Combine `TypeVariable(S) <: kotlin/Nothing` with `TypeVariable(B) <: AbstractShapeBuilder<in AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, TypeVariable(S)>`
+28. Combine `TypeVariable(S) <: kotlin/Nothing` with `TypeVariable(B) <: AbstractShapeBuilder<in AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, TypeVariable(S)>`
     1. `TypeVariable(B) <: AbstractShapeBuilder<in AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, kotlin/Nothing>`
-41. Combine `TypeVariable(S) <: kotlin/Nothing` with `TypeVariable(B) <: AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, TypeVariable(S)>`
-    1. `TypeVariable(B) <: AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, kotlin/Nothing>`
-42. __NewConstraintError: `AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape> <: AbstractShapeBuilder<in AbstractShapeBuilder<*, *>, TypeVariable(S)>`__
-43. __NewConstraintError: `AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape> <: AbstractShapeBuilder<in AbstractShapeBuilder<*, *>, TypeVariable(S)>`__
-44. __NewConstraintError: `AbstractShapeBuilder<*, *> <: AbstractShapeBuilder<in AbstractShapeBuilder<*, *>, TypeVariable(S)>`__
-45. __NewConstraintError: `AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape> <: AbstractShapeBuilder<kotlin/Nothing, TypeVariable(S)>`__
-46. __NewConstraintError: `AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape> <: AbstractShapeBuilder<kotlin/Nothing, TypeVariable(S)>`__
-47. __NewConstraintError: `AbstractShapeBuilder<*, *> <: AbstractShapeBuilder<kotlin/Nothing, TypeVariable(S)>`__
-48. __NewConstraintError: `AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape> <: AbstractShapeBuilder<AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>, Shape>`__
-49. __NewConstraintError: `AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape> <: AbstractShapeBuilder<AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>, Shape>`__
-50. __NewConstraintError: `AbstractShapeBuilder<*, *> <: AbstractShapeBuilder<AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>, Shape>`__
-51. __NewConstraintError: `AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape> <: AbstractShapeBuilder<in AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, Shape>`__
-52. __NewConstraintError: `AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape> <: AbstractShapeBuilder<in AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, Shape>`__
-53. __NewConstraintError: `AbstractShapeBuilder<*, *> <: AbstractShapeBuilder<in AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, Shape>`__
-54. __NewConstraintError: `AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape> <: AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, Shape>`__
-55. __NewConstraintError: `AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape> <: AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, Shape>`__
-56. __NewConstraintError: `AbstractShapeBuilder<*, *> <: AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, Shape>`__
-57. __NewConstraintError: `AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape> <: AbstractShapeBuilder<AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>, kotlin/Nothing>`__
-58. __NewConstraintError: `AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape> <: AbstractShapeBuilder<AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>, kotlin/Nothing>`__
-59. __NewConstraintError: `AbstractShapeBuilder<*, *> <: AbstractShapeBuilder<AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>, kotlin/Nothing>`__
-60. __NewConstraintError: `AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape> <: AbstractShapeBuilder<in AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, kotlin/Nothing>`__
-61. __NewConstraintError: `AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape> <: AbstractShapeBuilder<in AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, kotlin/Nothing>`__
-62. __NewConstraintError: `AbstractShapeBuilder<*, *> <: AbstractShapeBuilder<in AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, kotlin/Nothing>`__
-63. __NewConstraintError: `AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape> <: AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, kotlin/Nothing>`__
-64. __NewConstraintError: `AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape> <: AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, kotlin/Nothing>`__
-65. __NewConstraintError: `AbstractShapeBuilder<*, *> <: AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, kotlin/Nothing>`__
+29. __NewConstraintError: `AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape> <: AbstractShapeBuilder<in AbstractShapeBuilder<*, *>, TypeVariable(S)>`__
+30. __NewConstraintError: `AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape> <: AbstractShapeBuilder<in AbstractShapeBuilder<*, *>, TypeVariable(S)>`__
+31. __NewConstraintError: `AbstractShapeBuilder<*, *> <: AbstractShapeBuilder<in AbstractShapeBuilder<*, *>, TypeVariable(S)>`__
+32. __NewConstraintError: `AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape> <: AbstractShapeBuilder<kotlin/Nothing, TypeVariable(S)>`__
+33. __NewConstraintError: `AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape> <: AbstractShapeBuilder<kotlin/Nothing, TypeVariable(S)>`__
+34. __NewConstraintError: `AbstractShapeBuilder<*, *> <: AbstractShapeBuilder<kotlin/Nothing, TypeVariable(S)>`__
+35. __NewConstraintError: `AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape> <: AbstractShapeBuilder<in AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, kotlin/Nothing>`__
+36. __NewConstraintError: `AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape> <: AbstractShapeBuilder<in AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, kotlin/Nothing>`__
+37. __NewConstraintError: `AbstractShapeBuilder<*, *> <: AbstractShapeBuilder<in AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, kotlin/Nothing>`__
 
 ##### Call Completion:
 
@@ -715,28 +643,21 @@ shapeToBuilder#<R|AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBui
 4. __NewConstraintError: `SimpleShape <: kotlin/Nothing`__
 5. Combine `TypeVariable(S) == SimpleShape` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), TypeVariable(S)>`
     1. `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), SimpleShape>`
-6. Combine `TypeVariable(S) == SimpleShape` with `TypeVariable(B) <: AbstractShapeBuilder<AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>, TypeVariable(S)>`
-    1. `TypeVariable(B) <: AbstractShapeBuilder<AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>, SimpleShape>`
-7. Combine `TypeVariable(S) == SimpleShape` with `TypeVariable(B) <: AbstractShapeBuilder<in AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, TypeVariable(S)>`
+6. Combine `TypeVariable(S) == SimpleShape` with `TypeVariable(B) <: AbstractShapeBuilder<in AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, TypeVariable(S)>`
     1. `TypeVariable(B) <: AbstractShapeBuilder<in AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>`
-8. Combine `TypeVariable(S) == SimpleShape` with `TypeVariable(B) <: AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, TypeVariable(S)>`
-    1. `TypeVariable(B) <: AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>`
-9. Combine `TypeVariable(S) == SimpleShape` with `TypeVariable(B) <: AbstractShapeBuilder<in AbstractShapeBuilder<*, *>, TypeVariable(S)>`
+7. Combine `TypeVariable(S) == SimpleShape` with `TypeVariable(B) <: AbstractShapeBuilder<in AbstractShapeBuilder<*, *>, TypeVariable(S)>`
     1. `TypeVariable(B) <: AbstractShapeBuilder<in AbstractShapeBuilder<*, *>, SimpleShape>`
-10. Combine `TypeVariable(S) == SimpleShape` with `TypeVariable(B) <: AbstractShapeBuilder<kotlin/Nothing, TypeVariable(S)>`
+8. Combine `TypeVariable(S) == SimpleShape` with `TypeVariable(B) <: AbstractShapeBuilder<kotlin/Nothing, TypeVariable(S)>`
     1. `TypeVariable(B) <: AbstractShapeBuilder<kotlin/Nothing, SimpleShape>`
-11. __NewConstraintError: `AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape> <: AbstractShapeBuilder<AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>, SimpleShape>`__
-12. __NewConstraintError: `AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape> <: AbstractShapeBuilder<AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>, SimpleShape>`__
-13. __NewConstraintError: `AbstractShapeBuilder<*, *> <: AbstractShapeBuilder<AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>, SimpleShape>`__
-14. __NewConstraintError: `AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape> <: AbstractShapeBuilder<in AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>`__
-15. __NewConstraintError: `AbstractShapeBuilder<*, *> <: AbstractShapeBuilder<in AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>`__
-16. __NewConstraintError: `AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape> <: AbstractShapeBuilder<in AbstractShapeBuilder<*, *>, SimpleShape>`__
-17. __NewConstraintError: `AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape> <: AbstractShapeBuilder<in AbstractShapeBuilder<*, *>, SimpleShape>`__
-18. __NewConstraintError: `AbstractShapeBuilder<*, *> <: AbstractShapeBuilder<in AbstractShapeBuilder<*, *>, SimpleShape>`__
-19. __NewConstraintError: `AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape> <: AbstractShapeBuilder<kotlin/Nothing, SimpleShape>`__
-20. __NewConstraintError: `AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape> <: AbstractShapeBuilder<kotlin/Nothing, SimpleShape>`__
-21. __NewConstraintError: `AbstractShapeBuilder<*, *> <: AbstractShapeBuilder<kotlin/Nothing, SimpleShape>`__
-22. Choose `TypeVariable(B)` with `Readiness(
+9. __NewConstraintError: `AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape> <: AbstractShapeBuilder<in AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>`__
+10. __NewConstraintError: `AbstractShapeBuilder<*, *> <: AbstractShapeBuilder<in AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>`__
+11. __NewConstraintError: `AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape> <: AbstractShapeBuilder<in AbstractShapeBuilder<*, *>, SimpleShape>`__
+12. __NewConstraintError: `AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape> <: AbstractShapeBuilder<in AbstractShapeBuilder<*, *>, SimpleShape>`__
+13. __NewConstraintError: `AbstractShapeBuilder<*, *> <: AbstractShapeBuilder<in AbstractShapeBuilder<*, *>, SimpleShape>`__
+14. __NewConstraintError: `AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape> <: AbstractShapeBuilder<kotlin/Nothing, SimpleShape>`__
+15. __NewConstraintError: `AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape> <: AbstractShapeBuilder<kotlin/Nothing, SimpleShape>`__
+16. __NewConstraintError: `AbstractShapeBuilder<*, *> <: AbstractShapeBuilder<kotlin/Nothing, SimpleShape>`__
+17. Choose `TypeVariable(B)` with `Readiness(
     	 true ALLOWED
     	 true HAS_PROPER_CONSTRAINTS
     	 true HAS_NO_OUTER_TYPE_VARIABLE_DEPENDENCY
@@ -752,28 +673,27 @@ shapeToBuilder#<R|AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBui
     	 true HAS_PROPER_EQUALITY_CONSTRAINT
     	 true HAS_PROPER_NON_NOTHING_NON_UPPER_CONSTRAINT
     )`
-23. `TypeVariable(B) == AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>` _from Fix variable B_
-24. __NewConstraintError: `AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape> <: AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>`__
-25. __NewConstraintError: `AbstractShapeBuilder<*, *> <: AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>`__
-26. __NewConstraintError: `AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape> <: kotlin/Nothing`__
-27. Combine `TypeVariable(B) == AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), SimpleShape>`
+18. `TypeVariable(B) == AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>` _from Fix variable B_
+19. __NewConstraintError: `AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape> <: AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>`__
+20. __NewConstraintError: `AbstractShapeBuilder<*, *> <: AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>`__
+21. __NewConstraintError: `AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape> <: kotlin/Nothing`__
+22. Combine `TypeVariable(B) == AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), kotlin/Nothing>`
     1. `AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape> <: TypeVariable(B)`
     2. `TypeVariable(B) <: AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>`
-28. __NewConstraintError: `AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape> <: AbstractShapeBuilder<TypeVariable(B), Shape>`__
-29. __NewConstraintError: `AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape> <: AbstractShapeBuilder<AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>, Shape>`__
-30. __NewConstraintError: `AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape> <: AbstractShapeBuilder<in AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, Shape>`__
-31. __NewConstraintError: `AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape> <: AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, Shape>`__
-32. __NewConstraintError: `AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape> <: AbstractShapeBuilder<TypeVariable(B), kotlin/Nothing>`__
-33. __NewConstraintError: `AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape> <: AbstractShapeBuilder<AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>, kotlin/Nothing>`__
-34. __NewConstraintError: `AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape> <: AbstractShapeBuilder<in AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, kotlin/Nothing>`__
-35. __NewConstraintError: `AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape> <: AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, kotlin/Nothing>`__
-36. __NewConstraintError: `AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape> <: AbstractShapeBuilder<AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>, SimpleShape>`__
-37. __NewConstraintError: `AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape> <: AbstractShapeBuilder<in AbstractShapeBuilder<*, *>, SimpleShape>`__
-38. __NewConstraintError: `AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape> <: AbstractShapeBuilder<kotlin/Nothing, SimpleShape>`__
-39. Combine `TypeVariable(B) == AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), Shape>`
-    1. `TypeVariable(B) <: AbstractShapeBuilder<AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>, Shape>`
-40. Combine `TypeVariable(B) == AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), kotlin/Nothing>`
+23. __NewConstraintError: `AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape> <: AbstractShapeBuilder<TypeVariable(B), kotlin/Nothing>`__
+24. __NewConstraintError: `AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape> <: AbstractShapeBuilder<in AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, kotlin/Nothing>`__
+25. __NewConstraintError: `AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape> <: AbstractShapeBuilder<in AbstractShapeBuilder<*, *>, SimpleShape>`__
+26. __NewConstraintError: `AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape> <: AbstractShapeBuilder<kotlin/Nothing, SimpleShape>`__
+27. Combine `TypeVariable(B) == AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), kotlin/Nothing>`
     1. `TypeVariable(B) <: AbstractShapeBuilder<AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>, kotlin/Nothing>`
+28. Combine `TypeVariable(B) == AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), SimpleShape>`
+    1. `TypeVariable(B) <: AbstractShapeBuilder<AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>, SimpleShape>`
+29. __NewConstraintError: `AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape> <: AbstractShapeBuilder<AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>, kotlin/Nothing>`__
+30. __NewConstraintError: `AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape> <: AbstractShapeBuilder<AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>, kotlin/Nothing>`__
+31. __NewConstraintError: `AbstractShapeBuilder<*, *> <: AbstractShapeBuilder<AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>, kotlin/Nothing>`__
+32. __NewConstraintError: `AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape> <: AbstractShapeBuilder<AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>, SimpleShape>`__
+33. __NewConstraintError: `AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape> <: AbstractShapeBuilder<AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>, SimpleShape>`__
+34. __NewConstraintError: `AbstractShapeBuilder<*, *> <: AbstractShapeBuilder<AbstractShapeBuilder<AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>, SimpleShape>, SimpleShape>`__
 
 ### Call 11
 
@@ -792,12 +712,21 @@ shapeToBuilder#<R|AbstractShapeBuilder<*, SimpleShape>|, R|SimpleShape|>(R|<loca
 6. Combine `TypeVariable(B) == AbstractShapeBuilder<*, SimpleShape>` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), TypeVariable(S)>`
     1. `SimpleShape <: TypeVariable(S)`
     2. `TypeVariable(S) <: SimpleShape`
-    3. `TypeVariable(B) <: AbstractShapeBuilder<AbstractShapeBuilder<*, SimpleShape>, TypeVariable(S)>`
 7. Combine `SimpleShape <: TypeVariable(S)` with `TypeVariable(S) <: SimpleShape`
     1. `TypeVariable(S) == SimpleShape`
-8. Combine `TypeVariable(S) == SimpleShape` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), TypeVariable(S)>`
-    1. `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), SimpleShape>`
-9. __NewConstraintError: `AbstractShapeBuilder<*, SimpleShape> <: AbstractShapeBuilder<AbstractShapeBuilder<*, SimpleShape>, TypeVariable(S)>`__
+
+##### Resolution Stages > CheckArguments:
+
+1. `SimpleShape <: TypeVariable(S)` _from Argument R|<local>/target|_
+
+##### Resolution Stages > CheckLambdaAgainstTypeVariableContradiction:
+
+1. `TypeVariable(B) <: AbstractShapeBuilder<*, *>` _from ExpectedType for some call_
+2. Combine `TypeVariable(B) <: AbstractShapeBuilder<*, *>` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), TypeVariable(S)>`
+    1. `TypeVariable(B) <: AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, TypeVariable(S)>`
+3. Combine `TypeVariable(B) == AbstractShapeBuilder<*, SimpleShape>` with `TypeVariable(B) <: AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, TypeVariable(S)>`
+    1. `SimpleShape <: TypeVariable(S)`
+    2. `TypeVariable(S) <: SimpleShape`
 
 ##### Call Completion:
 
@@ -836,10 +765,9 @@ shapeToBuilder#<R|AbstractShapeBuilder<*, SimpleShape>|, R|SimpleShape|>(R|<loca
 2. `TypeVariable(S) == SimpleShape` _from Fix variable S_
 3. Combine `TypeVariable(S) == SimpleShape` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), TypeVariable(S)>`
     1. `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), SimpleShape>`
-4. Combine `TypeVariable(S) == SimpleShape` with `TypeVariable(B) <: AbstractShapeBuilder<AbstractShapeBuilder<*, SimpleShape>, TypeVariable(S)>`
-    1. `TypeVariable(B) <: AbstractShapeBuilder<AbstractShapeBuilder<*, SimpleShape>, SimpleShape>`
-5. __NewConstraintError: `AbstractShapeBuilder<*, SimpleShape> <: AbstractShapeBuilder<AbstractShapeBuilder<*, SimpleShape>, SimpleShape>`__
-6. Choose `TypeVariable(B)` with `Readiness(
+4. Combine `TypeVariable(S) == SimpleShape` with `TypeVariable(B) <: AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, TypeVariable(S)>`
+    1. `TypeVariable(B) <: AbstractShapeBuilder<out AbstractShapeBuilder<*, *>, SimpleShape>`
+5. Choose `TypeVariable(B)` with `Readiness(
    	 true ALLOWED
    	 true HAS_PROPER_CONSTRAINTS
    	 true HAS_NO_OUTER_TYPE_VARIABLE_DEPENDENCY
@@ -855,5 +783,7 @@ shapeToBuilder#<R|AbstractShapeBuilder<*, SimpleShape>|, R|SimpleShape|>(R|<loca
    	 true HAS_PROPER_EQUALITY_CONSTRAINT
    	 true HAS_PROPER_NON_NOTHING_NON_UPPER_CONSTRAINT
    )`
-7. `TypeVariable(B) == AbstractShapeBuilder<*, SimpleShape>` _from Fix variable B_
+6. `TypeVariable(B) == AbstractShapeBuilder<*, SimpleShape>` _from Fix variable B_
+7. Combine `TypeVariable(B) == AbstractShapeBuilder<*, SimpleShape>` with `TypeVariable(B) <: AbstractShapeBuilder<TypeVariable(B), SimpleShape>`
+    1. `TypeVariable(B) <: AbstractShapeBuilder<AbstractShapeBuilder<*, SimpleShape>, SimpleShape>`
 8. __NewConstraintError: `AbstractShapeBuilder<*, SimpleShape> <: AbstractShapeBuilder<AbstractShapeBuilder<*, SimpleShape>, SimpleShape>`__

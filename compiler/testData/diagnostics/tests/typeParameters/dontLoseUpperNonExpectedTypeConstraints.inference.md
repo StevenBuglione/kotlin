@@ -123,16 +123,20 @@ ModOp#(this@R|/rem|, R?C|/wrap|(R|<local>/t|))
     1. `Z <: TypeVariable(S)`
 7. Combine `TypeVariable(K) <: TypeVariable(S)` with `TypeVariable(S) <: TypeVariable(K)`
     1. `TypeVariable(K) == TypeVariable(S)`
-8. Combine `TypeVariable(K) <: TypeVariable(S)` with `TypeVariable(S) <: TypeVariable(K)`
+8. Combine `TypeVariable(K) == TypeVariable(S)` with `TypeVariable(K) <: TypeVariable(S)`
+    1. `TypeVariable(S) <: TypeVariable(S)`
+9. Combine `TypeVariable(K) <: TypeVariable(S)` with `TypeVariable(S) <: TypeVariable(K)`
     1. `TypeVariable(S) == TypeVariable(K)`
-9. Combine `TypeVariable(R) & Any <: TypeVariable(K)` with `TypeVariable(K) <: kotlin/Number?`
+10. Combine `TypeVariable(S) == TypeVariable(K)` with `TypeVariable(K) == TypeVariable(S)`
+    1. `TypeVariable(K) <: TypeVariable(K)`
+11. Combine `TypeVariable(R) & Any <: TypeVariable(K)` with `TypeVariable(K) <: kotlin/Number?`
     1. `TypeVariable(R) <: kotlin/Number?`
-10. Combine `TypeVariable(K) == TypeVariable(S)` with `TypeVariable(K) <: kotlin/Number?`
+12. Combine `TypeVariable(K) == TypeVariable(S)` with `TypeVariable(K) <: kotlin/Number?`
     1. `TypeVariable(S) <: kotlin/Number?`
-11. Combine `TypeVariable(R) & Any <: TypeVariable(S)` with `TypeVariable(S) == TypeVariable(K)`
+13. Combine `TypeVariable(R) & Any <: TypeVariable(S)` with `TypeVariable(S) == TypeVariable(K)`
     1. `TypeVariable(R) & Any <: TypeVariable(K)`
     2. `TypeVariable(R) <: TypeVariable(K)?`
-12. Combine `Z <: TypeVariable(S)` with `TypeVariable(S) == TypeVariable(K)`
+14. Combine `Z <: TypeVariable(S)` with `TypeVariable(S) == TypeVariable(K)`
     1. `Z <: TypeVariable(K)`
 
 ##### Resolution Stages > CheckLambdaAgainstTypeVariableContradiction:
@@ -324,4 +328,5 @@ ModOp#(this@R|/rem|, R?C|/wrap|(R|<local>/t|))
     	false HAS_PROPER_EQUALITY_CONSTRAINT
     	false HAS_PROPER_NON_NOTHING_NON_UPPER_CONSTRAINT
     )`
-11. `TypeVariable(R) == it(M & Z?)` _from Fix variable R_
+11. `it(M & Z?) <: TypeVariable(R)` _from SimpleConstraintSystemConstraintPosition_
+12. `TypeVariable(R) == it(M & Z?)` _from Fix variable R_

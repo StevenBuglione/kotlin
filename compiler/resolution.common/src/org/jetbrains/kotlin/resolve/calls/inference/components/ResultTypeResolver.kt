@@ -13,6 +13,7 @@ import org.jetbrains.kotlin.resolve.calls.inference.components.TypeVariableDirec
 import org.jetbrains.kotlin.resolve.calls.inference.extractTypeForGivenRecursiveTypeParameter
 import org.jetbrains.kotlin.resolve.calls.inference.hasRecursiveTypeParametersWithGivenSelfType
 import org.jetbrains.kotlin.resolve.calls.inference.isEqualityConstraintCompatible
+import org.jetbrains.kotlin.resolve.calls.inference.isSubtypeConstraintCompatible
 import org.jetbrains.kotlin.resolve.calls.inference.model.*
 import org.jetbrains.kotlin.types.AbstractTypeApproximator
 import org.jetbrains.kotlin.types.AbstractTypeChecker
@@ -32,12 +33,17 @@ class ResultTypeResolver(
     }
 
     context(c: Context)
-    private fun TypeVariableMarker.getDefaultTypeForSelfType(constraints: List<Constraint>): KotlinTypeMarker? {
+    private fun TypeVariableMarker.getDefaultTypeForSelfType(
+        constraints: List<Constraint>,
+        useOnlyConstraintsFromDeclaredUpperBounds: Boolean = false,
+    ): KotlinTypeMarker? {
         val typeVariableConstructor = freshTypeConstructor()
         val typeParameter = typeVariableConstructor.typeParameter ?: return null
 
         val typesForRecursiveTypeParameters = constraints.mapNotNull { constraint ->
-            if (constraint.position.from !is DeclaredUpperBoundConstraintPosition<*>) return@mapNotNull null
+            if (useOnlyConstraintsFromDeclaredUpperBounds && constraint.position.from !is DeclaredUpperBoundConstraintPosition<*>) {
+                return@mapNotNull null
+            }
             constraint.type.extractTypeForGivenRecursiveTypeParameter(typeParameter)
         }.takeIf { it.isNotEmpty() } ?: return null
 
@@ -46,7 +52,7 @@ class ResultTypeResolver(
 
     context(c: Context)
     private fun TypeVariableMarker.getDefaultType(direction: ResolveDirection, constraints: List<Constraint>): KotlinTypeMarker {
-        getDefaultTypeForSelfType(constraints)?.let { return it }
+        getDefaultTypeForSelfType(constraints, useOnlyConstraintsFromDeclaredUpperBounds = true)?.let { return it }
 
         return if (direction == ResolveDirection.TO_SUBTYPE) c.nothingType() else c.nullableAnyType()
     }
@@ -511,9 +517,10 @@ class ResultTypeResolver(
             if (!it.type.isNullableType()) hasNotNull = true
             false
         }
+        val components = mutableListOf<KotlinTypeMarker>()
 
         if (upperConstraints.isNotEmpty()) {
-            return computeUpperType(upperConstraints).let {
+            components += computeUpperType(upperConstraints).let {
                 if (hasNotNull && it.isNullableType() && languageVersionSettings.supportsFeature(LanguageFeature.InferenceEnhancementsIn23)) {
                     it.makeDefinitelyNotNullOrNotNull()
                 } else {
@@ -522,7 +529,21 @@ class ResultTypeResolver(
             }
         }
 
-        return null
+        // The computed upper type is most likely a concrete type that satisfies
+        // the recursive constraints already, but if it's not (e.g., it's a supertype of one),
+        // we need to manually account for them too.
+        val needsExplicitSelfType = components.isEmpty() || !c.isSubtypeConstraintCompatible(components.first(), typeVariable.defaultType())
+
+        if (needsExplicitSelfType) {
+            typeVariable.getDefaultTypeForSelfType(constraints)?.let { capturedTypeForSelf ->
+                components += capturedTypeForSelf
+            }
+        }
+
+        return when {
+            components.isNotEmpty() -> c.intersectTypes(components)
+            else -> null
+        }
     }
 
     context(c: Context)

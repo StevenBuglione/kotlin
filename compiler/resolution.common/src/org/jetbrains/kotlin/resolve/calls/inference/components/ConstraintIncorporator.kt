@@ -335,8 +335,6 @@ class ConstraintIncorporator(
         newConstraintType: KotlinTypeMarker,
         isSubtype: Boolean,
     ) {
-        if (newConstraintType.containsNestedTypeVariable(targetVariable)) return
-
         val isUsefulForNullabilityConstraint =
             newConstraintType.isPotentialUsefulNullabilityConstraint(
                 causeOfIncorporationConstraint.type,

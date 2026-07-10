@@ -721,20 +721,33 @@ R|<local>/fragments|.flatMapTo#(R?C|java/util/TreeSet.TreeSet|(Q|Wrapper|.R?C|/W
        	false HAS_PROPER_EQUALITY_CONSTRAINT
        	 true HAS_PROPER_NON_NOTHING_NON_UPPER_CONSTRAINT
        )`
-13. `TypeVariable(R) == kotlin/Int` _from Fix variable R_
-14. Combine `TypeVariable(R) == kotlin/Int` with `TypeVariable(R) <: TypeVariable(E)`
-    1. `kotlin/Int <: TypeVariable(E)`
-15. Combine `TypeVariable(R) == kotlin/Int` with `TypeVariable(C) <: kotlin/collections/MutableCollection<in TypeVariable(R)>`
-    1. `TypeVariable(C) <: kotlin/collections/MutableCollection<in kotlin/Int>`
-16. Combine `TypeVariable(R) == kotlin/Int` with `TypeVariable(E) <: kotlin/Comparable<ft<TypeVariable(R) & Any, TypeVariable(R)?>>?`
+13. `kotlin/Int! <: TypeVariable(R)` _from SimpleConstraintSystemConstraintPosition_
+14. Combine `TypeVariable(R) <: kotlin/Int!` with `kotlin/Int! <: TypeVariable(R)`
+    1. `TypeVariable(R) == kotlin/Int!`
+15. Combine `TypeVariable(R) == kotlin/Int!` with `TypeVariable(R) <: TypeVariable(E)`
+    1. `kotlin/Int! <: TypeVariable(E)`
+16. Combine `TypeVariable(R) == kotlin/Int!` with `TypeVariable(C) <: kotlin/collections/MutableCollection<in TypeVariable(R)>`
+    1. `TypeVariable(C) <: kotlin/collections/MutableCollection<in kotlin/Int!>`
+17. Combine `TypeVariable(R) == kotlin/Int!` with `TypeVariable(E) <: kotlin/Comparable<ft<TypeVariable(R) & Any, TypeVariable(R)?>>?`
     1. `TypeVariable(E) <: kotlin/Comparable<kotlin/Int!>?`
-17. Combine `TypeVariable(R) == kotlin/Int` with `TypeVariable(R) <: kotlin/Comparable<ft<TypeVariable(R) & Any, TypeVariable(R)?>>!`
+18. Combine `TypeVariable(R) == kotlin/Int!` with `TypeVariable(R) <: kotlin/Comparable<ft<TypeVariable(R) & Any, TypeVariable(R)?>>!`
     1. `TypeVariable(R) <: kotlin/Comparable<kotlin/Int!>!`
-18. Combine `TypeVariable(R) == kotlin/Int` with `TypeVariable(R) <: kotlin/Comparable<ft<TypeVariable(R) & Any, TypeVariable(R)?>>?`
+19. Combine `TypeVariable(R) == kotlin/Int!` with `TypeVariable(R) <: kotlin/Comparable<ft<TypeVariable(R) & Any, TypeVariable(R)?>>?`
     1. `TypeVariable(R) <: kotlin/Comparable<kotlin/Int!>?`
-19. Combine `TypeVariable(R) == kotlin/Int` with `TypeVariable(_R) <: kotlin/collections/Iterable<TypeVariable(R)>`
+20. Combine `TypeVariable(R) == kotlin/Int!` with `TypeVariable(_R) <: kotlin/collections/Iterable<TypeVariable(R)>`
+    1. `TypeVariable(_R) <: kotlin/collections/Iterable<kotlin/Int!>`
+21. Combine `TypeVariable(E) <: kotlin/Int!` with `kotlin/Int! <: TypeVariable(E)`
+    1. `TypeVariable(E) == kotlin/Int!`
+22. Combine `TypeVariable(E) == kotlin/Int!` with `java/util/TreeSet<TypeVariable(E)> <: TypeVariable(C)`
+    1. `java/util/TreeSet<kotlin/Int!> <: TypeVariable(C)`
+23. `TypeVariable(R) == kotlin/Int` _from Fix variable R_
+24. Combine `TypeVariable(R) == kotlin/Int` with `TypeVariable(R) <: TypeVariable(E)`
+    1. `kotlin/Int <: TypeVariable(E)`
+25. Combine `TypeVariable(R) == kotlin/Int` with `TypeVariable(C) <: kotlin/collections/MutableCollection<in TypeVariable(R)>`
+    1. `TypeVariable(C) <: kotlin/collections/MutableCollection<in kotlin/Int>`
+26. Combine `TypeVariable(R) == kotlin/Int` with `TypeVariable(_R) <: kotlin/collections/Iterable<TypeVariable(R)>`
     1. `TypeVariable(_R) <: kotlin/collections/Iterable<kotlin/Int>`
-20. Choose `TypeVariable(E)` with `Readiness(
+27. Choose `TypeVariable(E)` with `Readiness(
     	 true ALLOWED
     	 true HAS_PROPER_CONSTRAINTS
     	 true HAS_NO_OUTER_TYPE_VARIABLE_DEPENDENCY
@@ -782,10 +795,10 @@ R|<local>/fragments|.flatMapTo#(R?C|java/util/TreeSet.TreeSet|(Q|Wrapper|.R?C|/W
        	false HAS_PROPER_EQUALITY_CONSTRAINT
        	 true HAS_PROPER_NON_NOTHING_NON_UPPER_CONSTRAINT
        )`
-21. `TypeVariable(E) == kotlin/Int` _from Fix variable E_
-22. Combine `TypeVariable(E) == kotlin/Int` with `java/util/TreeSet<TypeVariable(E)> <: TypeVariable(C)`
+28. `TypeVariable(E) == kotlin/Int` _from Fix variable E_
+29. Combine `TypeVariable(E) == kotlin/Int` with `java/util/TreeSet<TypeVariable(E)> <: TypeVariable(C)`
     1. `java/util/TreeSet<kotlin/Int> <: TypeVariable(C)`
-23. Choose `TypeVariable(C)` with `Readiness(
+30. Choose `TypeVariable(C)` with `Readiness(
     	 true ALLOWED
     	 true HAS_PROPER_CONSTRAINTS
     	 true HAS_NO_OUTER_TYPE_VARIABLE_DEPENDENCY
@@ -817,8 +830,11 @@ R|<local>/fragments|.flatMapTo#(R?C|java/util/TreeSet.TreeSet|(Q|Wrapper|.R?C|/W
        	false HAS_PROPER_EQUALITY_CONSTRAINT
        	 true HAS_PROPER_NON_NOTHING_NON_UPPER_CONSTRAINT
        )`
-24. `TypeVariable(C) == java/util/TreeSet<kotlin/Int>` _from Fix variable C_
-25. Choose `TypeVariable(_R)` with `Readiness(
+31. `kotlin/collections/MutableCollection<in kotlin/Int> <: TypeVariable(C)` _from SimpleConstraintSystemConstraintPosition_
+32. Combine `TypeVariable(C) <: kotlin/collections/MutableCollection<in kotlin/Int>` with `kotlin/collections/MutableCollection<in kotlin/Int> <: TypeVariable(C)`
+    1. `TypeVariable(C) == kotlin/collections/MutableCollection<in kotlin/Int>`
+33. `TypeVariable(C) == java/util/TreeSet<kotlin/Int>` _from Fix variable C_
+34. Choose `TypeVariable(_R)` with `Readiness(
     	 true ALLOWED
     	 true HAS_PROPER_CONSTRAINTS
     	 true HAS_NO_OUTER_TYPE_VARIABLE_DEPENDENCY
@@ -834,7 +850,10 @@ R|<local>/fragments|.flatMapTo#(R?C|java/util/TreeSet.TreeSet|(Q|Wrapper|.R?C|/W
     	false HAS_PROPER_EQUALITY_CONSTRAINT
     	 true HAS_PROPER_NON_NOTHING_NON_UPPER_CONSTRAINT
     )`
-26. `TypeVariable(_R) == kotlin/collections/MutableSet<kotlin/Int>` _from Fix variable _R_
+35. `kotlin/collections/Iterable<kotlin/Int> <: TypeVariable(_R)` _from SimpleConstraintSystemConstraintPosition_
+36. Combine `TypeVariable(_R) <: kotlin/collections/Iterable<kotlin/Int>` with `kotlin/collections/Iterable<kotlin/Int> <: TypeVariable(_R)`
+    1. `TypeVariable(_R) == kotlin/collections/Iterable<kotlin/Int>`
+37. `TypeVariable(_R) == kotlin/collections/MutableSet<kotlin/Int>` _from Fix variable _R_
 
 ### Call 5
 
