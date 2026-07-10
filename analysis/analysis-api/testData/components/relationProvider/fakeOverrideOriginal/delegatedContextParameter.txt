@@ -22,4 +22,4 @@ FAKE_OVERRIDE_ORIGINAL:
       typeArguments: []
       type: kotlin/Int
     visibility: PUBLIC
-    containingDeclaration: test/I.foo
+    containingDeclaration: test/Delegating.foo
