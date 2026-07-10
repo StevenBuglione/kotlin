@@ -379,7 +379,13 @@ public class KaDebugRenderer(
             // Java values
             is Enum<*> -> printer.append(value.name)
             is List<*> -> renderList(value, printer, currentSymbolStack)
-            is PsiPackage -> printer.append("PsiPackage") // They are provided by the platform and could be anonymous
+            is PsiPackage -> {
+                // They are provided by the platform and could be anonymous
+                printer.append("PsiPackage(")
+                printer.append(value.qualifiedName)
+                printer.append(')')
+            }
+
             is PsiElement -> printer.append(value::class.java.simpleName)
             else -> printer.append(value.toString())
         }
@@ -483,7 +489,6 @@ public class KaDebugRenderer(
     @KaNonPublicApi
     public companion object {
         private val ignoredPropertyNames = setOf(
-            "psi",
             "token",
             "builder",
             "coneType",
