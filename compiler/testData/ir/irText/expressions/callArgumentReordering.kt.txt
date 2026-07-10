@@ -1,0 +1,23 @@
+fun callee(a: Int, b: Int) {
+}
+
+fun foo(): Int {
+  return 1
+}
+
+fun test() {
+  callee(a = foo(), b = foo())
+  { // BLOCK
+    val tmp_0: Int = foo()
+    val tmp_1: Int = foo()
+    callee(a = tmp_1, b = tmp_0)
+  }
+  { // BLOCK
+    val tmp_2: Int = foo()
+    callee(a = tmp_2, b = 1)
+  }
+  { // BLOCK
+    val tmp_3: Int = foo()
+    callee(a = 1, b = tmp_3)
+  }
+}
