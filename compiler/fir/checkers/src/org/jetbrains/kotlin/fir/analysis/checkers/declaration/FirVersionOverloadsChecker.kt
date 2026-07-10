@@ -132,13 +132,15 @@ object FirVersionOverloadsChecker : FirFunctionChecker(MppCheckerKind.Platform) 
             // update version map and check arguments
             paramVersions[param.symbol] = version
 
-            var hasDefaultValue = param.defaultValue != null
+            var hasDefaultValue = param.defaultValue != null ||
+                    (declaration.symbol.getSingleMatchedExpectForActualOrNull()?.valueParameterSymbols?.getOrNull(i)?.hasDefaultValue == true)
             if (!hasDefaultValue && classScope != null && declaration is FirNamedFunction) {
                 classScope.processFunctionsByName(declaration.nameOrSpecialName) {}
 
                 @OptIn(ScopeFunctionRequiresPrewarm::class)
                 classScope.processOverriddenFunctions(declaration.symbol) l@{ overridden ->
-                    val overriddenParam = overridden.valueParameterSymbols.getOrNull(i) ?: return@l ProcessorAction.NEXT
+                    val overriddenWithDefault = overridden.getSingleMatchedExpectForActualOrNull() ?: overridden
+                    val overriddenParam = overriddenWithDefault.valueParameterSymbols.getOrNull(i) ?: return@l ProcessorAction.NEXT
                     if (overriddenParam.hasDefaultValue) {
                         hasDefaultValue = true
                         return@l ProcessorAction.STOP
@@ -154,7 +156,7 @@ object FirVersionOverloadsChecker : FirFunctionChecker(MppCheckerKind.Platform) 
                 declaration is FirConstructor && param.correspondingProperty != null && containingClassSymbol?.isInlineOrValue == true ->
                     reporter.reportOn(versionAnnotation.source, FirErrors.INVALID_VERSIONING_ON_VALUE_CLASS_PARAMETER)
 
-                !hasDefaultValue && !declaration.isActual ->
+                !hasDefaultValue ->
                     reporter.reportOn(versionAnnotation.source, FirErrors.INVALID_VERSIONING_ON_NON_OPTIONAL)
             }
 
