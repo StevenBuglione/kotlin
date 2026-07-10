@@ -1,9 +1,17 @@
 // IGNORE_BACKEND: JVM_IR
-// ISSUE: KT-87549
+// LANGUAGE: +MultiPlatformProjects
+// ISSUE: KT-87506
 // CHECK_BYTECODE_LISTING
 
-open class A {
-    open fun foo(a: String = "a", b: String = "b"): String = a + b
+// MODULE: common
+expect open class A {
+    open fun foo(a: String = "a", b: String = "b"): String
+}
+
+
+// MODULE: platform()()(common)
+actual open class A {
+    actual open fun foo(a: String, b: String): String = a + b
 }
 
 @OptIn(ExperimentalVersionOverloading::class)
