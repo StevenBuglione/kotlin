@@ -22,4 +22,4 @@ FAKE_OVERRIDE_ORIGINAL:
       typeArguments: []
       type: kotlin/String
     visibility: PUBLIC
-    containingDeclaration: test/Base.foo
+    containingDeclaration: test/Derived.foo
