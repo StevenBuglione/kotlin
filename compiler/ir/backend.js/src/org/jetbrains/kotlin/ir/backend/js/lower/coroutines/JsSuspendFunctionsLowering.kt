@@ -359,14 +359,6 @@ open class JsSuspendFunctionsLowering<C : JsCommonBackendContext>(
 
     override fun IrBlockBodyBuilder.generateCoroutineStart(invokeSuspendFunction: IrFunction, receiver: IrExpression) {
         val dispatchReceiverVar = createTmpVariable(receiver, irType = receiver.type)
-        +irCall(coroutineImplResultSymbolSetter).apply {
-            arguments[0] = irGet(dispatchReceiverVar)
-            arguments[1] = irGetObject(context.irBuiltIns.unitClass)
-        }
-        +irCall(coroutineImplExceptionPropertySetter).apply {
-            arguments[0] = irGet(dispatchReceiverVar)
-            arguments[1] = irNull()
-        }
         val call = irCall(invokeSuspendFunction.symbol).apply {
             arguments[0] = irGet(dispatchReceiverVar)
         }
