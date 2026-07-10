@@ -1,26 +1,26 @@
-IS_THE_SAME_SYMBOL:
-true
+IS_THE_SAME_SYMBOL: true
 FAKE_OVERRIDE_ORIGINAL:
-KaReceiverParameterSymbol:
-  annotations: []
-  callableId: null
-  contextParameters: []
-  contextReceivers: []
-  isActual: false
-  isCompanion: false
-  isDelegated: false
-  isExpect: false
-  isExtension: false
-  isExternal: false
-  isVal: true
-  location: LOCAL
-  modality: FINAL
-  name: <receiver>
-  origin: INTERSECTION_OVERRIDE
-  owningCallableSymbol: KaNamedFunctionSymbol(test/C.foo)
-  receiverParameter: null
-  returnType: KaUsualClassType:
+  KaReceiverParameterSymbol:
     annotations: []
-    typeArguments: []
-    type: kotlin/Int
-  visibility: PUBLIC
+    callableId: null
+    contextParameters: []
+    contextReceivers: []
+    isActual: false
+    isCompanion: false
+    isDelegated: false
+    isExpect: false
+    isExtension: false
+    isExternal: false
+    isVal: true
+    location: LOCAL
+    modality: FINAL
+    name: <receiver>
+    origin: INTERSECTION_OVERRIDE
+    owningCallableSymbol: KaNamedFunctionSymbol(test/C.foo)
+    receiverParameter: null
+    returnType: KaUsualClassType:
+      annotations: []
+      typeArguments: []
+      type: kotlin/Int
+    visibility: PUBLIC
+    containingDeclaration: test/C.foo

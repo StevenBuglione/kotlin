@@ -5,11 +5,11 @@
 
 package org.jetbrains.kotlin.analysis.api.impl.base.test.cases.components.relationProvider
 
-import org.jetbrains.kotlin.analysis.api.symbols.KaCallableSymbol
-import org.jetbrains.kotlin.analysis.api.symbols.KaDebugRenderer
+import org.jetbrains.kotlin.analysis.api.symbols.*
 import org.jetbrains.kotlin.analysis.test.framework.base.AbstractAnalysisApiBasedTest
 import org.jetbrains.kotlin.analysis.test.framework.projectStructure.KtTestModule
 import org.jetbrains.kotlin.analysis.test.framework.targets.getSingleTestTargetSymbolOfType
+import org.jetbrains.kotlin.analysis.utils.printer.prettyPrint
 import org.jetbrains.kotlin.psi.KtFile
 import org.jetbrains.kotlin.test.services.TestServices
 import org.jetbrains.kotlin.test.services.assertions
@@ -21,13 +21,24 @@ abstract class AbstractFakeOverrideOriginalTest : AbstractAnalysisApiBasedTest()
             val original = symbol.fakeOverrideOriginal
 
             val renderer = KaDebugRenderer(renderExpandedTypes = true)
-            buildString {
-                appendLine("IS_THE_SAME_SYMBOL:")
-                appendLine(original == symbol)
+            prettyPrint {
+                appendLine("IS_THE_SAME_SYMBOL: ${original == symbol}")
                 appendLine("FAKE_OVERRIDE_ORIGINAL:")
-                appendLine(renderer.render(useSiteSession, original))
+                withIndent {
+                    appendLine(renderer.render(useSiteSession, original))
+                    withIndent {
+                        appendLine("containingDeclaration: ${original.containingDeclaration?.qualifiedNameString()}")
+                    }
+                }
             }
         }
         testServices.assertions.assertEqualsToTestOutputFile(actual)
+    }
+
+    private fun KaSymbol.qualifiedNameString() = when (this) {
+        is KaConstructorSymbol -> "<constructor> ${containingClassId?.asString()}"
+        is KaClassLikeSymbol -> classId!!.asString()
+        is KaCallableSymbol -> callableId!!.toString()
+        else -> error("unknown symbol $this")
     }
 }
