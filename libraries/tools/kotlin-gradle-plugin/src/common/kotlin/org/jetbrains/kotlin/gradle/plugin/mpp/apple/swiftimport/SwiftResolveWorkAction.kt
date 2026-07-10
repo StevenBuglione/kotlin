@@ -62,6 +62,9 @@ internal abstract class SwiftResolveWorkAction @Inject constructor(
 
     override fun execute() {
         val errorFile = parameters.errorFile.get().asFile
+        if (parameters.coordinationEnabled.get()) {
+            parameters.coordinationService.get().markSwiftResolveStarted(parameters.syntheticPackageHash.get())
+        }
         errorFile.delete()
         try {
             // Copy lock file from persisted

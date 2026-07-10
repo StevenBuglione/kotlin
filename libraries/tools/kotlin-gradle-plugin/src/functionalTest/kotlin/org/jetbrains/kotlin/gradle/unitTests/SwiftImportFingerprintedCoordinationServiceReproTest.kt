@@ -34,6 +34,7 @@ class SwiftImportFingerprintedCoordinationServiceReproTest {
 
             val joinerIsWaiting = taskPool.submit(Callable {
                 joinerReachedWaitState.countDown()
+                assertTrue(bucket.ownerStarted.await(1, TimeUnit.SECONDS), "owner never signaled start")
                 val waiter = workerPool.submit(Callable {
                     bucket.completion.await()
                     Unit
@@ -43,6 +44,7 @@ class SwiftImportFingerprintedCoordinationServiceReproTest {
 
             val owner = taskPool.submit(Callable {
                 assertTrue(joinerReachedWaitState.await(1, TimeUnit.SECONDS), "joiner did not reach wait state")
+                bucket.ownerStarted.countDown()
                 val ownerWorker = workerPool.submit(Callable {
                     bucket.completion.countDown()
                     Unit

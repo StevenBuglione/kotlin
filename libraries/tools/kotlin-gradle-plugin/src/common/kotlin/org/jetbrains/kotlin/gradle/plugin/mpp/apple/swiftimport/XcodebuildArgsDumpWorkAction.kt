@@ -72,6 +72,11 @@ internal abstract class XcodebuildArgsDumpWorkAction @Inject constructor(
 
     override fun execute() {
         val errorFile = parameters.errorFile.get().asFile
+        if (parameters.coordinationEnabled.get()) {
+            parameters.fingerprintCoordinationService.get().markXcodeDumpStarted(
+                key = parameters.xcodebuildExecutionFingerprint.get(),
+            )
+        }
         errorFile.delete()
         try {
             doExecute()
