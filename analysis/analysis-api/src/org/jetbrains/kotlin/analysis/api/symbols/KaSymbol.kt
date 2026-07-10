@@ -41,6 +41,8 @@ public interface KaSymbol : KaLifetimeOwner {
     public val location: KaSymbolLocation
 
     /**
+     * **The API is obsolete and will be deprecated soon. Use [realPsi] or [anchorPsi] instead.**
+     *
      * A [PsiElement] corresponding to this [KaSymbol].
      *
      * The property is only defined for the following [origin]s:
