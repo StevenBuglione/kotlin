@@ -75,7 +75,9 @@ private class IrExpressionEvaluator(
 
                 IrCompositeImpl(expression.startOffset, expression.endOffset, expression.type, null, listOf(receiver, const))
             }
-            expression.isCompileTimeBuiltinCall(irBuiltIns) -> evaluateBuiltinCall(expression)
+            expression.isInterpretableKCallableNameCall(irBuiltIns) -> inlineCallableName(expression)
+            expression.isEnumName() -> inlineEnumName(expression)
+            expression.isCompileTimeBuiltinCall() -> evaluateBuiltinCall(expression)
             else -> null
         }
     }
@@ -102,9 +104,6 @@ private class IrExpressionEvaluator(
     }
 
     private fun evaluateBuiltinCall(expression: IrCall): IrExpression? {
-        if (expression.isInterpretableKCallableNameCall(irBuiltIns)) return inlineCallableName(expression)
-        if (expression.isEnumName()) return inlineEnumName(expression)
-
         val owner = expression.symbol.owner
         val name = owner.name.asString()
         val operands = expression.arguments.mapNotNull { argument ->
@@ -241,8 +240,7 @@ private class IrExpressionEvaluator(
             }
         }
 
-        private fun IrCall.isCompileTimeBuiltinCall(irBuiltIns: IrBuiltIns): Boolean {
-            if (this.isEnumName() || this.isInterpretableKCallableNameCall(irBuiltIns)) return true // Evaluated manually
+        private fun IrCall.isCompileTimeBuiltinCall(): Boolean {
             if (isExcludedFromEvaluation()) return false
 
             val owner = this.symbol.owner
