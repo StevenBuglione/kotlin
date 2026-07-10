@@ -62,6 +62,12 @@ public class FirStandaloneNormalAnalysisSourceModuleFakeOverrideOriginalTestGene
   }
 
   @Test
+  @TestMetadata("delegatedDefaultSetterParameter.kt")
+  public void testDelegatedDefaultSetterParameter() {
+    run("delegatedDefaultSetterParameter.kt");
+  }
+
+  @Test
   @TestMetadata("delegatedFunction.kt")
   public void testDelegatedFunction() {
     run("delegatedFunction.kt");
@@ -83,6 +89,12 @@ public class FirStandaloneNormalAnalysisSourceModuleFakeOverrideOriginalTestGene
   @TestMetadata("delegatedReceiver.kt")
   public void testDelegatedReceiver() {
     run("delegatedReceiver.kt");
+  }
+
+  @Test
+  @TestMetadata("delegatedSetterParameter.kt")
+  public void testDelegatedSetterParameter() {
+    run("delegatedSetterParameter.kt");
   }
 
   @Test
@@ -110,6 +122,12 @@ public class FirStandaloneNormalAnalysisSourceModuleFakeOverrideOriginalTestGene
   }
 
   @Test
+  @TestMetadata("intersectionOverrideDefaultSetterParameter.kt")
+  public void testIntersectionOverrideDefaultSetterParameter() {
+    run("intersectionOverrideDefaultSetterParameter.kt");
+  }
+
+  @Test
   @TestMetadata("intersectionOverrideFunction.kt")
   public void testIntersectionOverrideFunction() {
     run("intersectionOverrideFunction.kt");
@@ -119,6 +137,12 @@ public class FirStandaloneNormalAnalysisSourceModuleFakeOverrideOriginalTestGene
   @TestMetadata("intersectionOverrideReceiver.kt")
   public void testIntersectionOverrideReceiver() {
     run("intersectionOverrideReceiver.kt");
+  }
+
+  @Test
+  @TestMetadata("intersectionOverrideSetterParameter.kt")
+  public void testIntersectionOverrideSetterParameter() {
+    run("intersectionOverrideSetterParameter.kt");
   }
 
   @Test
@@ -182,6 +206,12 @@ public class FirStandaloneNormalAnalysisSourceModuleFakeOverrideOriginalTestGene
   }
 
   @Test
+  @TestMetadata("regularSetterParameter.kt")
+  public void testRegularSetterParameter() {
+    run("regularSetterParameter.kt");
+  }
+
+  @Test
   @TestMetadata("regularValueParameter.kt")
   public void testRegularValueParameter() {
     run("regularValueParameter.kt");
@@ -218,6 +248,12 @@ public class FirStandaloneNormalAnalysisSourceModuleFakeOverrideOriginalTestGene
   }
 
   @Test
+  @TestMetadata("substitutionOverrideDefaultSetterParameter.kt")
+  public void testSubstitutionOverrideDefaultSetterParameter() {
+    run("substitutionOverrideDefaultSetterParameter.kt");
+  }
+
+  @Test
   @TestMetadata("substitutionOverrideFunction.kt")
   public void testSubstitutionOverrideFunction() {
     run("substitutionOverrideFunction.kt");
@@ -245,6 +281,12 @@ public class FirStandaloneNormalAnalysisSourceModuleFakeOverrideOriginalTestGene
   @TestMetadata("substitutionOverrideSetter.kt")
   public void testSubstitutionOverrideSetter() {
     run("substitutionOverrideSetter.kt");
+  }
+
+  @Test
+  @TestMetadata("substitutionOverrideSetterParameter.kt")
+  public void testSubstitutionOverrideSetterParameter() {
+    run("substitutionOverrideSetterParameter.kt");
   }
 
   @Test

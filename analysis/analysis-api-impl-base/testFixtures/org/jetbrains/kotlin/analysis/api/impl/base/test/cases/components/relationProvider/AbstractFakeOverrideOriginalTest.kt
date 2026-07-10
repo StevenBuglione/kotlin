@@ -5,6 +5,7 @@
 
 package org.jetbrains.kotlin.analysis.api.impl.base.test.cases.components.relationProvider
 
+import org.jetbrains.kotlin.analysis.api.KaSession
 import org.jetbrains.kotlin.analysis.api.symbols.*
 import org.jetbrains.kotlin.analysis.test.framework.base.AbstractAnalysisApiBasedTest
 import org.jetbrains.kotlin.analysis.test.framework.projectStructure.KtTestModule
@@ -35,8 +36,11 @@ abstract class AbstractFakeOverrideOriginalTest : AbstractAnalysisApiBasedTest()
         testServices.assertions.assertEqualsToTestOutputFile(actual)
     }
 
-    private fun KaSymbol.qualifiedNameString() = when (this) {
+    context(_: KaSession)
+    private fun KaSymbol.qualifiedNameString(): String = when (this) {
         is KaConstructorSymbol -> "<constructor> ${containingClassId?.asString()}"
+        is KaPropertyGetterSymbol -> "<getter> ${containingSymbol?.qualifiedNameString()}"
+        is KaPropertySetterSymbol -> "<setter> ${containingSymbol?.qualifiedNameString()}"
         is KaClassLikeSymbol -> classId!!.asString()
         is KaCallableSymbol -> callableId!!.toString()
         else -> error("unknown symbol $this")
