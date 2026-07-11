@@ -242,24 +242,23 @@ TEST(ArcFrameTest, LeaveUnlinksBeforeReentrantDestructionAndDoesNotReleaseBorrow
     });
 }
 
-TEST(ArcFrameTest, RetargetDoesNotInspectInvalidatedSkippedFrameStorage) {
-    kotlin::RunInNewThread([] {
-        FrameStorage target;
-        FrameStorage invalidated;
-        target.local = permanentHeader();
-        EnterFrame(target.start(), FrameStorage::kParameters, kFrameStorageCount);
-        EnterFrame(invalidated.start(), FrameStorage::kParameters, kFrameStorageCount);
+TEST(ArcFrameDeathTest, RetargetRejectsSkippedOwningFrameWithoutInspectingItsStorage) {
+    EXPECT_DEATH(
+            kotlin::RunInNewThread([] {
+                FrameStorage target;
+                FrameStorage invalidated;
+                EnterFrame(target.start(), FrameStorage::kParameters, kFrameStorageCount);
+                EnterFrame(invalidated.start(), FrameStorage::kParameters, kFrameStorageCount);
 
-        invalidated.overlay.parameters = INT32_MAX;
-        invalidated.overlay.count = -1;
-        invalidated.local = reinterpret_cast<ObjHeader*>(0x21);
-        SetCurrentFrame(target.start());
-
-        EXPECT_EQ(getCurrentFrame(), &target.overlay);
-        LeaveFrame(target.start(), FrameStorage::kParameters, kFrameStorageCount);
-        EXPECT_EQ(getCurrentFrame(), nullptr);
-        EXPECT_EQ(target.local, nullptr);
-    });
+                // Model an inner frame whose native stack storage is no longer safe to inspect.
+                // SetCurrentFrame must diagnose using pointer identity only: these deliberately
+                // invalid layout values must never be read while reporting the skipped cleanup.
+                invalidated.overlay.parameters = INT32_MAX;
+                invalidated.overlay.count = -1;
+                invalidated.local = reinterpret_cast<ObjHeader*>(0x21);
+                SetCurrentFrame(target.start());
+            }),
+            "ARC frame retarget expected current frame.*an owning ARC frame was skipped");
 }
 
 TEST(ArcDestructionTest, EagerlyDestroysAcyclicObjectsAtZeroCount) {

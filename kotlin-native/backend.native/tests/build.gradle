@@ -3379,6 +3379,12 @@ standaloneTest("arc_owned_result_forwarding") {
     source = "codegen/arc/ownedResultForwarding.kt"
 }
 
+standaloneTest("arc_exceptional_frame_cleanup") {
+    enabled = project.target.name == "linux_x64" && isArcMM
+    useGoldenData = true
+    source = "codegen/arc/exceptionalFrameCleanup.kt"
+}
+
 linkTest("arc_debug_detect_cycles_klib") {
     source = "runtime/memory/arc_debug_klib/main.kt"
     lib = "runtime/memory/arc_debug_klib/library.kt"
@@ -6475,6 +6481,12 @@ fileCheckTest("filecheck_arc_owned_result_forwarding") {
     enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
     annotatedSource = project.file('filecheck/arc_owned_result_forwarding.kt')
     extraOpts = ["-opt"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_exceptional_frame_cleanup") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('filecheck/arc_exceptional_frame_cleanup.kt')
     phaseToCheck = "Codegen"
 }
 

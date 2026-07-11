@@ -3,8 +3,8 @@ set -euo pipefail
 
 profile=${1:-}
 case "$profile" in
-    smoke|stress|race|unowned-death) ;;
-    *) echo "usage: $0 smoke|stress|race|unowned-death" >&2; exit 2 ;;
+    smoke|stress|race|unowned-death|no-collector) ;;
+    *) echo "usage: $0 smoke|stress|race|unowned-death|no-collector" >&2; exit 2 ;;
 esac
 
 root=$(git rev-parse --show-toplevel)
@@ -45,6 +45,12 @@ if [[ ! -x "$executable" && -x "$output" ]]; then
     executable=$output
 fi
 [[ -x "$executable" ]] || { echo "ARC fixture executable was not produced: $executable" >&2; exit 1; }
+
+if [[ "$profile" == no-collector ]]; then
+    python3 "$root/tools/arc/no_collector_symbols.py" \
+        "$executable" \
+        --output "$artifacts/no-collector-symbols.txt"
+fi
 
 if [[ -n "${ARC_FIXTURE_SANITIZER:-}" ]]; then
     command -v readelf >/dev/null || { echo "readelf is required to verify sanitizer instrumentation" >&2; exit 1; }

@@ -2942,10 +2942,17 @@ void leaveFrameArc(ObjHeader** start, int parameters, int count) {
 
 void setCurrentFrameArc(ObjHeader** start) {
   MEMORY_LOG("SetCurrentFrameArc %p\n", start)
-  // Native unwinding may already have invalidated skipped stack frames before an outer landingpad
-  // executes. Each ARC function therefore releases its own frame in its cleanup landingpad; this
-  // operation must only retarget the TLS cursor and must never inspect skipped frame storage.
-  currentFrame = reinterpret_cast<FrameOverlay*>(start);
+  FrameOverlay* frame = reinterpret_cast<FrameOverlay*>(start);
+  // Native unwinding may already have invalidated stack storage by the time an outer landingpad
+  // executes, so never traverse or inspect currentFrame here. Every entered owning ARC frame must
+  // run its own cleanup landingpad. A pointer-only comparison is sufficient to detect a missing
+  // cleanup without dereferencing a potentially invalid skipped frame.
+  // This remains a hard check in release binaries: continuing would leak the skipped frame's
+  // owning slots and leave the TLS cursor pointing into dead stack storage.
+  RuntimeCheck(currentFrame == frame,
+               "ARC frame retarget expected current frame %p, but found %p; an owning ARC frame was skipped",
+               frame, currentFrame);
+  currentFrame = frame;
 }
 
 #endif

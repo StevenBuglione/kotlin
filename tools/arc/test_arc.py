@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent))
 import arc
+import no_collector_symbols
 
 
 class ArcProfileTest(unittest.TestCase):
@@ -47,6 +48,52 @@ class ArcProfileTest(unittest.TestCase):
         self.assertEqual(["bash", "tools/arc/run_fixture.sh", "unowned-death"], command)
         script = (Path(__file__).parent / "run_fixture.sh").read_text()
         self.assertIn("attempted to access an expired @ArcUnowned reference", script)
+
+    def test_no_collector_profile_uses_ordinary_arc_fixture(self):
+        with patch.dict(os.environ, {}, clear=True):
+            command = arc.profile_command("arc-no-collector")
+        self.assertEqual(["bash", "tools/arc/run_fixture.sh", "no-collector"], command)
+
+        script = (Path(__file__).parent / "run_fixture.sh").read_text()
+        self.assertIn('if [[ "$profile" == no-collector ]]', script)
+        self.assertIn("no_collector_symbols.py", script)
+        justfile = (Path(__file__).parents[2] / "Justfile").read_text()
+        self.assertIn("remote-arc-no-collector: remote-snapshot", justfile)
+        self.assertIn("tools/arc/arc.py run arc-no-collector", justfile)
+
+    def test_no_collector_symbol_command_requests_full_demangled_defined_symbols(self):
+        with patch.dict(os.environ, {"ARC_NM": "/opt/llvm/bin/llvm-nm"}, clear=True):
+            command = no_collector_symbols.symbol_command(Path("program.kexe"))
+        self.assertEqual(
+            ["/opt/llvm/bin/llvm-nm", "-a", "-C", "--defined-only", "program.kexe"],
+            command,
+        )
+
+    def test_no_collector_gate_rejects_specific_collector_implementations(self):
+        symbols = """
+0001 T EnterFrameArc
+0002 T kotlin::gc::ConcurrentMarkAndSweep::PerformFullGC()
+0003 t (anonymous namespace)::collectCycles(MemoryState*)
+"""
+        matches = no_collector_symbols.verify_symbols(symbols)
+        self.assertEqual(
+            {"concurrent mark-and-sweep collector", "legacy Bacon cycle traversal"},
+            {reason for reason, _ in matches},
+        )
+
+    def test_no_collector_gate_allows_compatibility_and_unrelated_symbols(self):
+        symbols = """
+0001 T EnterFrameArc
+0002 T Kotlin_native_internal_GC_collect
+0003 T Kotlin_getCurrentStackTrace
+0004 T user.project.MarkAndSweepReport
+0005 T scanBlackboardImage
+"""
+        self.assertEqual([], no_collector_symbols.verify_symbols(symbols))
+
+    def test_no_collector_gate_requires_arc_symbol_evidence(self):
+        with self.assertRaisesRegex(ValueError, "no ARC frame/runtime evidence"):
+            no_collector_symbols.verify_symbols("0001 T Kotlin_native_internal_GC_collect\n")
 
     def test_sanitizer_matrix_and_individual_probes_are_explicit(self):
         with patch.dict(os.environ, {}, clear=True):

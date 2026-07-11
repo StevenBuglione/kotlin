@@ -7,7 +7,8 @@
 
 // CHECK: void @"kfun:#flameThrower(){}kotlin.Nothing"() #[[FLAME_THROWER_DECLARATION_ATTRIBUTES:[0-9]+]]
 fun flameThrower(): Nothing {
-    // CHECK: call void @ThrowException(%struct.ObjHeader* {{.*}}) #[[THROW_EXCEPTION_CALLSITE_ATTRIBUTES:[0-9]+]]
+    // ARC uses invoke so its exceptional edge can release the active frame.
+    // CHECK: {{call|invoke}} void @ThrowException(%struct.ObjHeader* {{.*}}) #[[THROW_EXCEPTION_CALLSITE_ATTRIBUTES:[0-9]+]]
     throw Throwable("🔥")
 }
 

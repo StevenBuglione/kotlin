@@ -31,7 +31,7 @@ EXCLUDED_PATHS = (
 )
 PROFILES = (
     "dist", "runtime", "sanity", "full", "arc-smoke", "arc-stress", "arc-race", "arc-race-tsan",
-    "arc-unowned-death",
+    "arc-unowned-death", "arc-no-collector",
     "arc-sanitize", "arc-sanitize-asan", "arc-sanitize-ubsan", "arc-sanitize-tsan", "arc-bench",
 )
 
@@ -202,6 +202,8 @@ def profile_command(profile: str) -> list[str]:
         ]
     if profile == "arc-unowned-death":
         return ["bash", "tools/arc/run_fixture.sh", "unowned-death"]
+    if profile == "arc-no-collector":
+        return ["bash", "tools/arc/run_fixture.sh", "no-collector"]
     if profile == "arc-sanitize":
         return ["bash", "tools/arc/sanitizer_probe.sh", "all"]
     if profile.startswith("arc-sanitize-"):
