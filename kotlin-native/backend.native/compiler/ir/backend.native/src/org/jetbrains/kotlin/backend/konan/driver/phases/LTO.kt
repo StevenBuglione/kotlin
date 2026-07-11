@@ -7,6 +7,9 @@ package org.jetbrains.kotlin.backend.konan.driver.phases
 
 import org.jetbrains.kotlin.backend.common.phaser.ActionState
 import org.jetbrains.kotlin.backend.konan.NativeGenerationState
+import org.jetbrains.kotlin.backend.konan.arc.ArcOwnershipPlanningInput
+import org.jetbrains.kotlin.backend.konan.arc.ArcOwnershipPlanningReport
+import org.jetbrains.kotlin.backend.konan.arc.runArcOwnershipPlanning
 import org.jetbrains.kotlin.backend.konan.descriptors.GlobalHierarchyAnalysis
 import org.jetbrains.kotlin.backend.konan.driver.utilities.KotlinBackendIrHolder
 import org.jetbrains.kotlin.backend.konan.driver.utilities.getDefaultIrActions
@@ -162,6 +165,14 @@ internal val EscapeAnalysisPhase = createSimpleNamedCompilerPhase<NativeGenerati
             lifetimes
         }
 )
+
+internal val ArcOwnershipAnalysisPhase =
+        createSimpleNamedCompilerPhase<NativeGenerationState, ArcOwnershipPlanningInput, ArcOwnershipPlanningReport>(
+                name = "ArcOwnershipAnalysis",
+                description = "Build and verify the ARC ownership plan after escape analysis",
+                outputIfNotEnabled = { _, _, _, _ -> ArcOwnershipPlanningReport.Disabled },
+                op = ::runArcOwnershipPlanning,
+        )
 
 internal data class RedundantCallsInput(
         val moduleDFG: ModuleDFG,

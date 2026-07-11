@@ -6269,6 +6269,9 @@ task buildKonanTests { t ->
 
 
 sourceSets {
+    test {
+        kotlin.srcDir 'unit'
+    }
     nopPlugin {
         kotlin {
             srcDir 'extensions/nop/src/main/kotlin'

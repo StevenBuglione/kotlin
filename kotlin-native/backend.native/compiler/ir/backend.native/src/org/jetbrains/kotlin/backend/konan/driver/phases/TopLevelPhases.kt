@@ -6,6 +6,7 @@
 package org.jetbrains.kotlin.backend.konan.driver.phases
 
 import org.jetbrains.kotlin.backend.konan.*
+import org.jetbrains.kotlin.backend.konan.arc.ArcOwnershipPlanningInput
 import org.jetbrains.kotlin.backend.konan.driver.PhaseContext
 import org.jetbrains.kotlin.backend.konan.driver.PhaseEngine
 import org.jetbrains.kotlin.backend.konan.driver.utilities.CExportFiles
@@ -376,6 +377,7 @@ private fun PhaseEngine<NativeGenerationState>.runCodegen(module: IrModuleFragme
     runPhase(GHAPhase, module, disable = !optimize)
     runPhase(RTTIPhase, RTTIInput(module, dceResult))
     val lifetimes = runPhase(EscapeAnalysisPhase, EscapeAnalysisInput(module, moduleDFG, devirtualizationAnalysisResults), disable = !optimize)
+    runPhase(ArcOwnershipAnalysisPhase, ArcOwnershipPlanningInput(module, lifetimes))
     runPhase(CodegenPhase, CodegenInput(module, lifetimes))
 }
 
