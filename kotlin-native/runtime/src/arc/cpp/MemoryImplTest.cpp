@@ -37,6 +37,37 @@ TEST(ArcReferenceCountStateTest, FinalReleaseAtomicallyEntersPermanentDeallocati
     EXPECT_FALSE(header.tryIncRefCount<true>());
 }
 
+TEST(ArcReferenceCountStateTest, ConcurrentRetainReleasePreservesTheAnchoredOwner) {
+    constexpr int kThreads = 8;
+    constexpr int kIterations = 10'000;
+    ContainerHeader header{};
+    header.setRefCount(1);
+    std::atomic<bool> start = false;
+    std::atomic<bool> invalidTransition = false;
+    std::vector<std::thread> workers;
+    for (int worker = 0; worker < kThreads; ++worker) {
+        workers.emplace_back([&] {
+            while (!start.load(std::memory_order_acquire)) {
+            }
+            for (int iteration = 0; iteration < kIterations; ++iteration) {
+                header.incRefCount<true>();
+                if (header.decRefCount<true>() <= 0) {
+                    invalidTransition.store(true, std::memory_order_relaxed);
+                    return;
+                }
+            }
+        });
+    }
+
+    start.store(true, std::memory_order_release);
+    for (auto& worker : workers) worker.join();
+
+    EXPECT_FALSE(invalidTransition.load(std::memory_order_relaxed));
+    EXPECT_EQ(header.refCount(), 1);
+    EXPECT_EQ(header.decRefCount<true>(), 0);
+    EXPECT_TRUE(header.arcDeallocating());
+}
+
 TEST(ArcReferenceCountStateDeathTest, GeneralRetainCannotCreateInitialOwnership) {
     ContainerHeader header{};
     EXPECT_DEATH(header.incRefCount<true>(), "Attempted to retain a zero-count or deallocating ARC object");
@@ -66,12 +97,21 @@ struct RecycledPayload {
     static constexpr std::array<ObjHeader* RecycledPayload::*, 1> kFields{&RecycledPayload::reference};
 };
 
+constexpr size_t kReleaseVisibilityOwnerCount = 8;
+
+struct ReleaseVisibilityPayload {
+    std::array<uint32_t, kReleaseVisibilityOwnerCount> writes{};
+    static constexpr std::array<ObjHeader* ReleaseVisibilityPayload::*, 0> kFields{};
+};
+
 using Object = kotlin::test_support::Object<Payload>;
 using Node = kotlin::test_support::Object<NodePayload>;
 using WeakCounter = kotlin::test_support::Object<WeakCounterPayload>;
 using RecycledObject = kotlin::test_support::Object<RecycledPayload>;
+using ReleaseVisibilityObject = kotlin::test_support::Object<ReleaseVisibilityPayload>;
 
 void recycledArcDestroy(ObjHeader* object);
+void releaseVisibilityArcDestroy(ObjHeader* object);
 
 struct FrameStorage {
     FrameOverlay overlay{};
@@ -96,10 +136,15 @@ kotlin::test_support::TypeInfoHolder recycledTypeInfo{
         kotlin::test_support::TypeInfoHolder::ObjectBuilder<RecycledPayload>()
                 .addFlag(TF_HAS_FINALIZER)
                 .setArcDestroy(recycledArcDestroy)};
+kotlin::test_support::TypeInfoHolder releaseVisibilityTypeInfo{
+        kotlin::test_support::TypeInfoHolder::ObjectBuilder<ReleaseVisibilityPayload>()
+                .setArcDestroy(releaseVisibilityArcDestroy)};
 std::atomic<int> finalizedNodes = 0;
 std::atomic<int> finalizedRecycledObjects = 0;
 std::atomic<int> recycledArcDeinitCount = 0;
 std::atomic<bool> recycledArcDeinitSawInitializedPayload = false;
+std::atomic<int> releaseVisibilityArcDeinitCount = 0;
+std::atomic<uint32_t> releaseVisibilityObservedMask = 0;
 std::atomic<bool> finalizerSawRegisteredRuntime = false;
 std::atomic<FrameOverlay*> finalizerObservedFrame = nullptr;
 std::atomic<bool> resurrectionRejected = false;
@@ -142,6 +187,16 @@ void recycledArcDestroy(ObjHeader* object) {
             payload.reference == permanentHeader() && payload.marker == 0xfeedfacecafebeefULL,
             std::memory_order_relaxed);
     recycledArcDeinitCount.fetch_add(1, std::memory_order_relaxed);
+}
+
+void releaseVisibilityArcDestroy(ObjHeader* object) {
+    auto& payload = *ReleaseVisibilityObject::FromObjHeader(object);
+    uint32_t observedMask = 0;
+    for (size_t index = 0; index < payload.writes.size(); ++index) {
+        if (payload.writes[index] == static_cast<uint32_t>(index + 1)) observedMask |= uint32_t{1} << index;
+    }
+    releaseVisibilityObservedMask.store(observedMask, std::memory_order_relaxed);
+    releaseVisibilityArcDeinitCount.fetch_add(1, std::memory_order_relaxed);
 }
 
 void baseArcDestroy(ObjHeader* object) {
@@ -319,6 +374,43 @@ TEST(ArcDestructionTest, NewAllocationMovesInitialOwnershipIntoResultSlot) {
 
         result.clear();
         EXPECT_EQ(finalizedNodes.load(std::memory_order_relaxed), 2);
+    });
+}
+
+TEST(ArcReferenceCountOrderingTest, FinalDeinitAcquiresWritesFromEveryReleasingThread) {
+    releaseVisibilityArcDeinitCount.store(0, std::memory_order_relaxed);
+    releaseVisibilityObservedMask.store(0, std::memory_order_relaxed);
+    kotlin::RunInNewThread([] {
+        ObjHolder object;
+        ObjHeader* allocated = AllocInstance(releaseVisibilityTypeInfo.typeInfo(), object.slot());
+        for (size_t owner = 1; owner < kReleaseVisibilityOwnerCount; ++owner) {
+            ASSERT_TRUE(TryAddHeapRef(allocated));
+        }
+        Kotlin_ArcMarkDeinitInitialized(allocated, releaseVisibilityTypeInfo.typeInfo());
+
+        std::atomic<bool> start = false;
+        std::vector<std::thread> workers;
+        for (size_t index = 1; index < kReleaseVisibilityOwnerCount; ++index) {
+            workers.emplace_back([&, index] {
+                kotlin::RunInNewThread([&, index] {
+                    while (!start.load(std::memory_order_acquire)) {
+                    }
+                    auto& payload = *ReleaseVisibilityObject::FromObjHeader(allocated);
+                    payload.writes[index] = static_cast<uint32_t>(index + 1);
+                    ReleaseHeapRef(allocated);
+                });
+            });
+        }
+
+        start.store(true, std::memory_order_release);
+        auto& payload = *ReleaseVisibilityObject::FromObjHeader(allocated);
+        payload.writes[0] = 1;
+        object.clear();
+        for (auto& worker : workers) worker.join();
+
+        constexpr uint32_t kExpectedMask = (uint32_t{1} << kReleaseVisibilityOwnerCount) - 1;
+        EXPECT_EQ(releaseVisibilityArcDeinitCount.load(std::memory_order_relaxed), 1);
+        EXPECT_EQ(releaseVisibilityObservedMask.load(std::memory_order_relaxed), kExpectedMask);
     });
 }
 
@@ -575,11 +667,14 @@ TEST(ArcDestructionTest, WeakPromotionRacesFinalReleaseWithoutResurrection) {
         ObjHolder counter;
         ObjHeader* allocatedObject = AllocInstance(nodeTypeInfo.typeInfo(), object.slot());
         ObjHeader* allocatedCounter = AllocInstance(weakCounterTypeInfo.typeInfo(), counter.slot());
+        ObjHeader* expectedChild = permanentHeader();
+        UpdateHeapRef(nextSlot(allocatedObject), expectedChild);
         installWeakCounter(allocatedObject, allocatedCounter);
 
         std::atomic<bool> start = false;
         std::atomic<bool> stop = false;
         std::atomic<int> successfulPromotions = 0;
+        std::atomic<int> invalidPromotions = 0;
         std::vector<std::thread> workers;
         for (int worker = 0; worker < 4; ++worker) {
             workers.emplace_back([&] {
@@ -590,6 +685,9 @@ TEST(ArcDestructionTest, WeakPromotionRacesFinalReleaseWithoutResurrection) {
                         ObjHeader* promoted = nullptr;
                         Konan_WeakReferenceCounterLegacyMM_get(allocatedCounter, &promoted);
                         if (promoted != nullptr) {
+                            if (Node::FromObjHeader(promoted)->next != expectedChild) {
+                                invalidPromotions.fetch_add(1, std::memory_order_relaxed);
+                            }
                             successfulPromotions.fetch_add(1, std::memory_order_relaxed);
                             ReleaseHeapRef(promoted);
                         }
@@ -610,6 +708,7 @@ TEST(ArcDestructionTest, WeakPromotionRacesFinalReleaseWithoutResurrection) {
         Konan_WeakReferenceCounterLegacyMM_get(allocatedCounter, &promoted);
         EXPECT_EQ(promoted, nullptr);
         EXPECT_EQ(finalizedNodes.load(std::memory_order_relaxed), 1);
+        EXPECT_EQ(invalidPromotions.load(std::memory_order_relaxed), 0);
         EXPECT_TRUE(resurrectionRejected.load(std::memory_order_relaxed));
     });
 }

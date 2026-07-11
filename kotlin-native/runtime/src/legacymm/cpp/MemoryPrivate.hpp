@@ -151,7 +151,9 @@ struct ContainerHeader {
 #if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
     if (Atomic) {
       while (true) {
-        uint32_t current = __atomic_load_n(&refCount_, __ATOMIC_ACQUIRE);
+        // Retaining requires an already-owned, published strong reference. The
+        // count update does not publish or consume object contents itself.
+        uint32_t current = __atomic_load_n(&refCount_, __ATOMIC_RELAXED);
         uint32_t count = (current & CONTAINER_TAG_ARC_REFCOUNT_MASK) >> CONTAINER_TAG_SHIFT;
         if ((current & CONTAINER_TAG_ARC_DEALLOCATING) != 0 || count == 0) {
           RuntimeFail("Attempted to retain a zero-count or deallocating ARC object");
@@ -160,7 +162,7 @@ struct ContainerHeader {
           RuntimeFail("ARC reference count overflow");
         }
         uint32_t desired = current + CONTAINER_TAG_INCREMENT;
-        if (__atomic_compare_exchange_n(&refCount_, &current, desired, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return;
+        if (__atomic_compare_exchange_n(&refCount_, &current, desired, false, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) return;
       }
     } else {
       if ((refCount_ & CONTAINER_TAG_ARC_DEALLOCATING) != 0 || refCount() == 0) {
@@ -188,14 +190,16 @@ struct ContainerHeader {
 #if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
     if (Atomic) {
       while (true) {
-        uint32_t current = __atomic_load_n(&refCount_, __ATOMIC_ACQUIRE);
+        // The pointer acquisition protocol (for example, the weak-counter lock)
+        // supplies visibility and lifetime safety before this state transition.
+        uint32_t current = __atomic_load_n(&refCount_, __ATOMIC_RELAXED);
         uint32_t count = (current & CONTAINER_TAG_ARC_REFCOUNT_MASK) >> CONTAINER_TAG_SHIFT;
         if ((current & CONTAINER_TAG_ARC_DEALLOCATING) != 0 || count == 0) return false;
         if (count == (CONTAINER_TAG_ARC_REFCOUNT_MASK >> CONTAINER_TAG_SHIFT)) {
           RuntimeFail("ARC reference count overflow");
         }
         uint32_t desired = current + CONTAINER_TAG_INCREMENT;
-        if (__atomic_compare_exchange_n(&refCount_, &current, desired, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+        if (__atomic_compare_exchange_n(&refCount_, &current, desired, false, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
           return true;
         }
       }
@@ -235,7 +239,7 @@ struct ContainerHeader {
 #if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
     if (Atomic) {
       while (true) {
-        uint32_t current = __atomic_load_n(&refCount_, __ATOMIC_ACQUIRE);
+        uint32_t current = __atomic_load_n(&refCount_, __ATOMIC_RELAXED);
         uint32_t count = (current & CONTAINER_TAG_ARC_REFCOUNT_MASK) >> CONTAINER_TAG_SHIFT;
         if ((current & CONTAINER_TAG_ARC_DEALLOCATING) != 0 || count == 0) {
           RuntimeFail("Attempted to release a zero-count or deallocating ARC object");
@@ -243,7 +247,10 @@ struct ContainerHeader {
         uint32_t desired = count == 1
                 ? ((current - CONTAINER_TAG_INCREMENT) | CONTAINER_TAG_ARC_DEALLOCATING)
                 : current - CONTAINER_TAG_INCREMENT;
-        if (__atomic_compare_exchange_n(&refCount_, &current, desired, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+        if (__atomic_compare_exchange_n(&refCount_, &current, desired, false, __ATOMIC_RELEASE, __ATOMIC_RELAXED)) {
+          // The final releaser must observe all writes sequenced before earlier
+          // releases in this reference count's release sequence before teardown.
+          if (count == 1) __atomic_thread_fence(__ATOMIC_ACQUIRE);
           return static_cast<int>(count - 1);
         }
       }
