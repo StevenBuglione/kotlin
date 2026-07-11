@@ -5,6 +5,7 @@
 
 package org.jetbrains.kotlin.backend.konan.rust.codegen
 
+import org.jetbrains.kotlin.backend.konan.ir.isUnbox
 import org.jetbrains.kotlin.ir.IrElement
 import org.jetbrains.kotlin.ir.IrStatement
 import org.jetbrains.kotlin.ir.UNDEFINED_OFFSET
@@ -25,10 +26,13 @@ import org.jetbrains.kotlin.ir.expressions.IrContinue
 import org.jetbrains.kotlin.ir.expressions.IrDoWhileLoop
 import org.jetbrains.kotlin.ir.expressions.IrExpression
 import org.jetbrains.kotlin.ir.expressions.IrExpressionBody
+import org.jetbrains.kotlin.ir.expressions.IrGetField
 import org.jetbrains.kotlin.ir.expressions.IrGetObjectValue
 import org.jetbrains.kotlin.ir.expressions.IrGetValue
+import org.jetbrains.kotlin.ir.expressions.IrInlinedFunctionBlock
 import org.jetbrains.kotlin.ir.expressions.IrLoop
 import org.jetbrains.kotlin.ir.expressions.IrReturn
+import org.jetbrains.kotlin.ir.expressions.IrReturnableBlock
 import org.jetbrains.kotlin.ir.expressions.IrSetValue
 import org.jetbrains.kotlin.ir.expressions.IrTypeOperator
 import org.jetbrains.kotlin.ir.expressions.IrTypeOperatorCall
@@ -42,6 +46,7 @@ import org.jetbrains.kotlin.ir.types.isDouble
 import org.jetbrains.kotlin.ir.types.isFloat
 import org.jetbrains.kotlin.ir.types.isInt
 import org.jetbrains.kotlin.ir.types.isLong
+import org.jetbrains.kotlin.ir.types.isNothing
 import org.jetbrains.kotlin.ir.types.isShort
 import org.jetbrains.kotlin.ir.types.isString
 import org.jetbrains.kotlin.ir.types.isUByte
@@ -206,6 +211,10 @@ internal class RustIrCodegen(
             val function = entry.key
             val body = entry.value
             val generated = RustGeneratedFunction(function, defaultRustName(function), linkerSymbolNamer.linkerName(function))
+            // rustc can merge signed and unsigned narrow-return functions before Kotlin/Native's
+            // return extension attributes are normalized. Keep the zero-extended class distinct;
+            // after linkage the ABI attributes themselves prevent unsafe cross-class merging.
+            if (function.returnType.requiresNarrowUnsignedMergeBarrier()) appendLine("#[inline(never)]")
             append("#[export_name = \"")
             append(escapeRustString(generated.linkerName))
             appendLine("\"]")
@@ -232,8 +241,10 @@ internal class RustIrCodegen(
         private val valueNames = IdentityHashMap<IrValueDeclaration, String>()
         private val loopNames = IdentityHashMap<IrLoop, String>()
         private val doWhileContinueNames = IdentityHashMap<IrLoop, String>()
+        private val returnableBlockNames = IdentityHashMap<IrReturnableBlock, String>()
         private var nextValueIndex = 0
         private var nextLoopIndex = 0
+        private var nextReturnableBlockIndex = 0
 
         init {
             function.parameters.forEach { valueName(it) }
@@ -284,7 +295,9 @@ internal class RustIrCodegen(
                 ?: unsupported(expression, RustUnsupportedCode.MALFORMED_IR, "Value is read outside its declaring function")
             is IrSetValue -> "{ ${valueName(expression.symbol.owner)} = ${expression(expression.value)}; () }"
             is IrCall -> renderCall(expression)
+            is IrGetField -> renderPrimitiveCarrierFieldRead(expression)
             is IrWhen -> renderWhen(expression)
+            is IrReturnableBlock -> renderReturnableBlock(expression)
             is IrBlock -> renderContainer(expression.statements, expression.type)
             is IrComposite -> renderContainer(expression.statements, expression.type)
             is IrReturn -> renderReturn(expression)
@@ -388,8 +401,30 @@ internal class RustIrCodegen(
         }
 
         private fun renderReturn(irReturn: IrReturn): String {
-            if (irReturn.returnTargetSymbol.owner !== function) {
-                unsupported(irReturn, RustUnsupportedCode.UNSUPPORTED_RETURN_TARGET, "Only returns from the current function are supported")
+            val target = irReturn.returnTargetSymbol.owner
+            if (target is IrReturnableBlock) {
+                val label = returnableBlockNames[target]
+                    ?: unsupported(irReturn, RustUnsupportedCode.UNSUPPORTED_RETURN_TARGET, "Returnable block is not an enclosing expression")
+                return if (target.type.isUnit()) {
+                    "break '$label { ${expression(irReturn.value)}; () }"
+                } else {
+                    val renderedValue = expression(irReturn.value)
+                    val valueType = rustType(irReturn.value.type, irReturn)
+                    val targetType = rustType(target.type, target)
+                    val adaptedValue = when {
+                        valueType == targetType -> renderedValue
+                        irReturn.value.type.isSupportedInteger() && target.type.isSupportedInteger() -> "$renderedValue as $targetType"
+                        else -> unsupported(
+                            irReturn,
+                            RustUnsupportedCode.UNSUPPORTED_RETURN_TARGET,
+                            "Returnable block cannot adapt $valueType to $targetType",
+                        )
+                    }
+                    "break '$label ($adaptedValue)"
+                }
+            }
+            if (target !== function) {
+                unsupported(irReturn, RustUnsupportedCode.UNSUPPORTED_RETURN_TARGET, "Only returns from the current function or an enclosing returnable block are supported")
             }
             return if (function.returnType.isUnit()) {
                 // Unit is still a value-producing expression in IR and may carry side effects.
@@ -397,6 +432,35 @@ internal class RustIrCodegen(
             } else {
                 "return ${expression(irReturn.value)}"
             }
+        }
+
+        private fun renderReturnableBlock(block: IrReturnableBlock): String {
+            if (block in returnableBlockNames) {
+                unsupported(block, RustUnsupportedCode.MALFORMED_IR, "Returnable block is recursively nested in itself")
+            }
+            val label = "block_${nextReturnableBlockIndex++}"
+            returnableBlockNames[block] = label
+            return try {
+                "'$label: ${renderContainer(block.statements, block.type)}"
+            } finally {
+                returnableBlockNames.remove(block)
+            }
+        }
+
+        private fun renderPrimitiveCarrierFieldRead(read: IrGetField): String {
+            if (!read.type.isSupportedPrimitive() || read.symbol.owner.type != read.type) {
+                unsupported(read, RustUnsupportedCode.UNSUPPORTED_EXPRESSION, "Unsupported field read")
+            }
+            val fieldName = read.symbol.owner.fqNameWhenAvailable?.asString()
+            if (fieldName !in PRIMITIVE_CARRIER_FIELD_NAMES) {
+                unsupported(read, RustUnsupportedCode.UNSUPPORTED_EXPRESSION, "Unsupported field read $fieldName")
+            }
+            val carrier = read.receiver as? IrInlinedFunctionBlock
+                ?: unsupported(read, RustUnsupportedCode.UNSUPPORTED_EXPRESSION, "Primitive carrier field requires an inlined block")
+            if (!carrier.type.isNothing()) {
+                unsupported(read, RustUnsupportedCode.UNSUPPORTED_EXPRESSION, "Primitive carrier field requires a Nothing-typed inlined block")
+            }
+            return expression(carrier)
         }
 
         private fun renderTypeOperator(call: IrTypeOperatorCall): String = when (call.operator) {
@@ -417,7 +481,10 @@ internal class RustIrCodegen(
             }
             renderPrintln(callee, arguments)?.let { return it }
             renderPrimitiveConversion(callee, arguments, call)?.let { return it }
+            renderPrimitiveReinterpret(callee, arguments, call)?.let { return it }
+            renderUnsignedPrimitiveRepresentation(callee, arguments, call)?.let { return it }
             renderPrimitiveOperator(callee, arguments, call)?.let { return it }
+            primitiveCarrierArgument(call)?.let { return expression(it) }
             if (isUnitSingleton(callee)) return "()"
             if (callee in moduleFunctions) {
                 validateSignature(callee)
@@ -473,7 +540,47 @@ internal class RustIrCodegen(
             val renderedValue = expression(value)
             val sourceType = rustType(value.type, call)
             val targetType = rustType(call.type, call)
-            return if (sourceType == targetType) renderedValue else "($renderedValue as $targetType)"
+            return if (sourceType == targetType) renderedValue else "$renderedValue as $targetType"
+        }
+
+        private fun renderUnsignedPrimitiveRepresentation(
+            callee: IrSimpleFunction,
+            arguments: List<IrExpression>,
+            call: IrCall,
+        ): String? {
+            val fqName = callee.fqNameWhenAvailable?.asString() ?: return null
+            val argument = arguments.singleOrNull()?.takeIf { it.type.isSupportedInteger() } ?: return null
+            return when {
+                fqName in UNSIGNED_PRIMITIVE_CONSTRUCTORS && callee.returnType.isUnit() && call.type.isUnit() -> {
+                    if (callee.parameters.singleOrNull()?.type?.isSupportedInteger() != true) return null
+                    "{ let _ = ${expression(argument)}; () }"
+                }
+                fqName in UNSIGNED_PRIMITIVE_GETTERS && callee.returnType.isSupportedInteger() && call.type.isSupportedInteger() -> {
+                    val rendered = expression(argument)
+                    val sourceType = rustType(argument.type, argument)
+                    val targetType = rustType(call.type, call)
+                    if (sourceType == targetType) rendered else "$rendered as $targetType"
+                }
+                else -> null
+            }
+        }
+
+        private fun renderPrimitiveReinterpret(
+            callee: IrSimpleFunction,
+            arguments: List<IrExpression>,
+            call: IrCall,
+        ): String? {
+            if (callee.fqNameWhenAvailable?.asString() != "kotlin.native.internal.reinterpret") return null
+            val argument = arguments.singleOrNull() ?: return null
+            val sourceWidth = argument.type.supportedIntegerBitWidth() ?: return null
+            val targetWidth = call.type.supportedIntegerBitWidth() ?: return null
+            if (sourceWidth != targetWidth) {
+                unsupported(call, RustUnsupportedCode.UNSUPPORTED_CALL, "Primitive reinterpret requires equal-width integer carriers")
+            }
+            val rendered = expression(argument)
+            val sourceType = rustType(argument.type, argument)
+            val targetType = rustType(call.type, call)
+            return if (sourceType == targetType) rendered else "$rendered as $targetType"
         }
 
         private fun unwrapBoxForPrint(argument: IrExpression): IrExpression {
@@ -490,6 +597,7 @@ internal class RustIrCodegen(
             call: IrCall,
         ): String? {
             val name = callee.name.asString()
+            if (name !in PRIMITIVE_OPERATOR_NAMES) return null
             val fqName = callee.fqNameWhenAvailable?.asString()
             if (fqName != null && !fqName.startsWith("kotlin.")) return null
             if (arguments.isEmpty()) return null
@@ -504,7 +612,7 @@ internal class RustIrCodegen(
                     render(expression(lhs), expression(arguments[1]))
                 } else null
             fun coerceInteger(value: IrExpression, rendered: String, targetRustType: String): String =
-                if (rustType(value.type, call) == targetRustType) rendered else "($rendered as $targetRustType)"
+                if (rustType(value.type, call) == targetRustType) rendered else "$rendered as $targetRustType"
             fun integerUnary(render: (String) -> String): String? {
                 if (arguments.size != 1 || !lhs.type.isSupportedInteger() || !call.type.isSupportedInteger()) return null
                 val targetType = rustType(call.type, call)
@@ -588,7 +696,10 @@ internal class RustIrCodegen(
             } ?: unsupported(call, RustUnsupportedCode.UNSUPPORTED_CALL, "Malformed primitive operator call ${displayName(callee)}")
         }
 
-        private fun IrExpression.isNonZeroIntegerConstant(): Boolean = when (this) {
+        private fun IrExpression.isNonZeroIntegerConstant(): Boolean =
+            isNonZeroIntegerConstant(mutableSetOf())
+
+        private fun IrExpression.isNonZeroIntegerConstant(seenVariables: MutableSet<IrVariable>): Boolean = when (this) {
             is IrConst -> when (kind) {
                 IrConstKind.Byte -> value as Byte != 0.toByte()
                 IrConstKind.Short -> value as Short != 0.toShort()
@@ -596,6 +707,11 @@ internal class RustIrCodegen(
                 IrConstKind.Int -> value as Int != 0
                 IrConstKind.Long -> value as Long != 0L
                 else -> false
+            }
+            is IrGetValue -> {
+                val variable = symbol.owner as? IrVariable
+                variable != null && !variable.isVar && seenVariables.add(variable) &&
+                        variable.initializer?.isNonZeroIntegerConstant(seenVariables) == true
             }
             else -> false
         }
@@ -695,6 +811,10 @@ internal class RustIrCodegen(
 
                 override fun visitCall(expression: IrCall) {
                     val callee = expression.symbol.owner
+                    primitiveCarrierArgument(expression)?.let { argument ->
+                        argument.acceptVoid(this)
+                        return
+                    }
                     when {
                         isKotlinPrintln(callee) -> {
                             expression.arguments.filterNotNull().forEach { argument ->
@@ -786,6 +906,18 @@ internal class RustIrCodegen(
                             isUByte() || isUShort() || isUInt() || isULong()
                     )
 
+        fun IrType.supportedIntegerBitWidth(): Int? = when {
+            !isSupportedInteger() -> null
+            isByte() || isUByte() -> 8
+            isShort() || isChar() || isUShort() -> 16
+            isInt() || isUInt() -> 32
+            isLong() || isULong() -> 64
+            else -> null
+        }
+
+        fun IrType.requiresNarrowUnsignedMergeBarrier(): Boolean =
+            !isNullable() && (isChar() || isUByte() || isUShort())
+
         fun IrType.isSupportedPrintType(): Boolean =
             !isNullable() && (isBoolean() || isInt() || isLong() || isString())
 
@@ -813,6 +945,14 @@ internal class RustIrCodegen(
         }
 
         fun isPrimitiveBox(call: IrCall): Boolean = call.symbol.owner.name.asString().endsWith("-box>")
+
+        fun primitiveCarrierArgument(call: IrCall): IrInlinedFunctionBlock? {
+            val callee = call.symbol.owner
+            if (!callee.isUnbox() || !callee.returnType.isSupportedPrimitive() || !call.type.isSupportedPrimitive()) return null
+            if (callee.returnType != call.type) return null
+            val argument = call.arguments.singleOrNull() as? IrInlinedFunctionBlock ?: return null
+            return argument.takeIf { it.type.isNothing() }
+        }
 
         fun unwrapPrimitiveBox(expression: IrExpression): IrExpression {
             val call = expression as? IrCall ?: return expression
@@ -920,6 +1060,22 @@ internal class RustIrCodegen(
 
         private val INTEGER_CONVERSION_NAMES = setOf(
             "toByte", "toShort", "toChar", "toInt", "toLong", "toUByte", "toUShort", "toUInt", "toULong",
+        )
+
+        private val UNSIGNED_PRIMITIVE_CONSTRUCTORS = setOf(
+            "kotlin.UByte.<constructor>", "kotlin.UShort.<constructor>",
+            "kotlin.UInt.<constructor>", "kotlin.ULong.<constructor>",
+        )
+
+        private val UNSIGNED_PRIMITIVE_GETTERS = setOf(
+            "kotlin.UByte.<get-data>", "kotlin.UShort.<get-data>",
+            "kotlin.UInt.<get-data>", "kotlin.ULong.<get-data>",
+        )
+
+        private val PRIMITIVE_CARRIER_FIELD_NAMES = setOf(
+            "kotlin.Boolean.value", "kotlin.Byte.value", "kotlin.Short.value", "kotlin.Char.value",
+            "kotlin.Int.value", "kotlin.Long.value", "kotlin.Float.value", "kotlin.Double.value",
+            "kotlin.UByte.data", "kotlin.UShort.data", "kotlin.UInt.data", "kotlin.ULong.data",
         )
     }
 }

@@ -97,8 +97,8 @@ class RustIntegerConversionDivisionCompatibilityTest {
                 val workspace = directory.resolve(".kotlin-rust/$hybridOutputName")
                 assertPreflightSucceeded(workspace)
                 val generatedSource = Files.readAllBytes(workspace.resolve("src/lib.rs")).toString(StandardCharsets.UTF_8)
-                assertGeneratedBodyContains(generatedSource, "widen", "(value_0 as i64)")
-                assertGeneratedBodyContains(generatedSource, "narrow", "(value_0 as i32)")
+                assertGeneratedBodyContains(generatedSource, "widen", "value_0 as i64")
+                assertGeneratedBodyContains(generatedSource, "narrow", "value_0 as i32")
                 listOf("intDivThree", "intDivMinusOne", "longDivThree", "longDivMinusOne").forEach {
                     assertGeneratedBodyContains(generatedSource, it, ").wrapping_div(")
                 }

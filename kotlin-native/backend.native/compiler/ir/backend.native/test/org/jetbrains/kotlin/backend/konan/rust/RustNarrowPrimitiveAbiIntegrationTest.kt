@@ -170,6 +170,8 @@ class RustNarrowPrimitiveAbiIntegrationTest {
 
                         fun generatedNarrow(value: Byte): Int = value + 1
                         fun variableByteDiv(value: Byte, divisor: Byte): Int = value / divisor
+                        fun variableShortRem(value: Short, divisor: Short): Int = value % divisor
+                        fun zeroByteDiv(value: Byte): Int = value / 0
                         fun zeroShortRem(value: Short): Int = value % 0
 
                         fun main() {
@@ -199,6 +201,13 @@ class RustNarrowPrimitiveAbiIntegrationTest {
                             println(intToChar(-1).code)
                             println(generatedNarrow(Byte.MAX_VALUE))
                             println(variableByteDiv(20.toByte(), 4.toByte()))
+                            println(variableShortRem(20.toShort(), 6.toShort()))
+                            try {
+                                zeroByteDiv(1.toByte())
+                                println("missing Byte exception")
+                            } catch (_: ArithmeticException) {
+                                println("Byte zero")
+                            }
                             try {
                                 zeroShortRem(1.toShort())
                                 println("missing Short exception")
@@ -214,16 +223,13 @@ class RustNarrowPrimitiveAbiIntegrationTest {
                 "-1", "-65535", "-65536", "32768", "32768", "0",
                 "256", "65536", "0", "65535", "0", "65535",
                 "-128", "-1", "4294934528", "-1", "65535", "65535",
-                "128", "5", "Short zero",
+                "128", "5", "2", "Byte zero", "Short zero",
             )
             val generatedLeaves = listOf(
-                "byteToLong", "longToByte", "intToChar", "charIncrement", "charDecrement",
-            )
-            val loweredFallbackLeaves = listOf(
                 "bytePlus", "byteMinus", "byteTimes", "byteUnaryMinus", "byteDivMinusOne", "byteRemMinusOne",
                 "shortPlus", "shortMinus", "shortTimes", "shortUnaryMinus", "shortDivMinusOne", "shortRemMinusOne",
                 "ubytePlus", "ushortPlus", "charPlusOne", "charDifference", "shortToUInt", "uintToShort", "charToInt",
-                "generatedNarrow",
+                "byteToLong", "longToByte", "intToChar", "charIncrement", "charDecrement", "generatedNarrow",
             )
 
             for (profileAndArguments in PROFILES) {
@@ -248,28 +254,131 @@ class RustNarrowPrimitiveAbiIntegrationTest {
                 )
                 val generatedSource = Files.readAllBytes(workspace.resolve("src/lib.rs")).toString(StandardCharsets.UTF_8)
                 generatedLeaves.forEach { assertGeneratedFunction(generatedSource, it) }
-                loweredFallbackLeaves.forEach { assertLlvmFallback(generatedSource, it) }
                 assertLlvmFallback(generatedSource, "variableByteDiv")
+                assertLlvmFallback(generatedSource, "variableShortRem")
+                assertLlvmFallback(generatedSource, "zeroByteDiv")
                 assertLlvmFallback(generatedSource, "zeroShortRem")
             }
 
+            val strictSource = directory.resolve("narrow-arithmetic-strict.kt").apply {
+                writeText(
+                    """
+                        fun bytePlus(left: Byte, right: Byte): Int = left + right
+                        fun byteMinus(left: Byte, right: Byte): Int = left - right
+                        fun byteTimes(left: Byte, right: Byte): Int = left * right
+                        fun byteUnaryMinus(value: Byte): Int = -value
+                        fun byteDivMinusOne(value: Byte): Int = value / -1
+                        fun byteRemMinusOne(value: Byte): Int = value % -1
+
+                        fun shortPlus(left: Short, right: Short): Int = left + right
+                        fun shortMinus(left: Short, right: Short): Int = left - right
+                        fun shortTimes(left: Short, right: Short): Int = left * right
+                        fun shortUnaryMinus(value: Short): Int = -value
+                        fun shortDivMinusOne(value: Short): Int = value / -1
+                        fun shortRemMinusOne(value: Short): Int = value % -1
+
+                        fun ubytePlus(left: UByte, right: UByte): UInt = left + right
+                        fun ushortPlus(left: UShort, right: UShort): UInt = left + right
+
+                        fun charPlusOne(value: Char): Char = value + 1
+                        fun charDifference(left: Char, right: Char): Int = left - right
+                        fun charIncrement(value: Char): Char = value.inc()
+                        fun charDecrement(value: Char): Char = value.dec()
+
+                        fun byteToLong(value: Byte): Long = value.toLong()
+                        fun longToByte(value: Long): Byte = value.toByte()
+                        fun shortToUInt(value: Short): UInt = value.toUInt()
+                        fun uintToShort(value: UInt): Short = value.toShort()
+                        fun charToInt(value: Char): Int = value.code
+                        fun intToChar(value: Int): Char = value.toChar()
+                        fun generatedNarrow(value: Byte): Int = value + 1
+
+                        fun main() {
+                            bytePlus(Byte.MIN_VALUE, Byte.MAX_VALUE)
+                            byteMinus(Byte.MIN_VALUE, Byte.MAX_VALUE)
+                            byteTimes(Byte.MIN_VALUE, Byte.MAX_VALUE)
+                            byteUnaryMinus(Byte.MIN_VALUE)
+                            byteDivMinusOne(Byte.MIN_VALUE)
+                            byteRemMinusOne(Byte.MIN_VALUE)
+                            shortPlus(Short.MIN_VALUE, Short.MAX_VALUE)
+                            shortMinus(Short.MIN_VALUE, Short.MAX_VALUE)
+                            shortTimes(Short.MIN_VALUE, 2.toShort())
+                            shortUnaryMinus(Short.MIN_VALUE)
+                            shortDivMinusOne(Short.MIN_VALUE)
+                            shortRemMinusOne(Short.MIN_VALUE)
+                            ubytePlus(UByte.MAX_VALUE, 1u.toUByte())
+                            ushortPlus(UShort.MAX_VALUE, 1u.toUShort())
+                            charPlusOne('\uFFFF')
+                            charDifference('\uFFFF', '\u0000')
+                            charIncrement('\uFFFF')
+                            charDecrement('\u0000')
+                            byteToLong(Byte.MIN_VALUE)
+                            longToByte(Long.MAX_VALUE)
+                            shortToUInt(Short.MIN_VALUE)
+                            uintToShort(UInt.MAX_VALUE)
+                            charToInt('\uFFFF')
+                            intToChar(-1)
+                            generatedNarrow(Byte.MAX_VALUE)
+                        }
+                    """.trimIndent()
+                )
+            }
+            val strictOutputName = "narrow-arithmetic-strict"
             val strictCompilation = compile(
                 compiler,
-                source,
-                directory.resolve("narrow-arithmetic-strict"),
+                strictSource,
+                directory.resolve(strictOutputName),
                 "rust-strict",
                 emptyList(),
             )
-            assertTrue(strictCompilation.exitCode != 0, "Strict compilation unexpectedly succeeded")
+            assertEquals(0, strictCompilation.exitCode, strictCompilation.output)
+            assertEquals(emptyList(), outputLines(runProgram(executable(directory.resolve(strictOutputName))).output))
+            val strictWorkspace = directory.resolve(".kotlin-rust/$strictOutputName")
+            val strictGeneratedSource = Files.readAllBytes(strictWorkspace.resolve("src/main.rs")).toString(StandardCharsets.UTF_8)
+            generatedLeaves.forEach { assertStrictGeneratedFunction(strictGeneratedSource, it) }
+
+            val fallbackSource = directory.resolve("narrow-arithmetic-fallback-strict.kt").apply {
+                writeText(
+                    """
+                        fun variableByteDiv(value: Byte, divisor: Byte): Int = value / divisor
+                        fun variableShortRem(value: Short, divisor: Short): Int = value % divisor
+                        fun zeroByteDiv(value: Byte): Int = value / 0
+                        fun zeroShortRem(value: Short): Int = value % 0
+
+                        fun main() {
+                            variableByteDiv(20.toByte(), 4.toByte())
+                            variableShortRem(20.toShort(), 6.toShort())
+                            zeroByteDiv(1.toByte())
+                            zeroShortRem(1.toShort())
+                        }
+                    """.trimIndent()
+                )
+            }
+            val fallbackStrictCompilation = compile(
+                compiler,
+                fallbackSource,
+                directory.resolve("narrow-arithmetic-fallback-strict"),
+                "rust-strict",
+                emptyList(),
+            )
+            assertTrue(fallbackStrictCompilation.exitCode != 0, "Strict fallback compilation unexpectedly succeeded")
             assertContains(
-                strictCompilation.output,
-                "[UNSUPPORTED_TYPE] variableByteDiv: Unsupported Kotlin type",
+                fallbackStrictCompilation.output,
+                "[UNSUPPORTED_CALL] variableByteDiv: Integer division requires Kotlin exception interop",
             )
             assertContains(
-                strictCompilation.output,
-                "[UNSUPPORTED_TYPE] zeroShortRem: Unsupported Kotlin type",
+                fallbackStrictCompilation.output,
+                "[UNSUPPORTED_CALL] variableShortRem: Integer remainder requires Kotlin exception interop",
             )
-            assertContains(strictCompilation.output, source.fileName.toString())
+            assertContains(
+                fallbackStrictCompilation.output,
+                "[UNSUPPORTED_CALL] zeroByteDiv: Integer division requires Kotlin exception interop",
+            )
+            assertContains(
+                fallbackStrictCompilation.output,
+                "[UNSUPPORTED_CALL] zeroShortRem: Integer remainder requires Kotlin exception interop",
+            )
+            assertContains(fallbackStrictCompilation.output, fallbackSource.fileName.toString())
         }
     }
 
@@ -305,6 +414,11 @@ class RustNarrowPrimitiveAbiIntegrationTest {
         val end = source.indexOf(";\n", start)
         assertTrue(end >= 0, "LLVM fallback '$functionName' has no declaration terminator")
         assertContains(source.substring(start, end + 1), "__llvm")
+    }
+
+    private fun assertStrictGeneratedFunction(source: String, functionName: String) {
+        val marker = Regex.escape("#[export_name = \"kn_${functionName}_")
+        assertTrue(Regex(marker).containsMatchIn(source), "Strict Rust function '$functionName' was not found in:\n$source")
     }
 
     private fun compile(
