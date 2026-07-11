@@ -18,6 +18,7 @@ import org.jetbrains.kotlin.ir.declarations.IrClass
 import org.jetbrains.kotlin.ir.declarations.IrSimpleFunction
 import org.jetbrains.kotlin.ir.declarations.IrVariable
 import org.jetbrains.kotlin.ir.expressions.IrCall
+import org.jetbrains.kotlin.ir.expressions.IrBlock
 import org.jetbrains.kotlin.ir.expressions.IrConst
 import org.jetbrains.kotlin.ir.expressions.IrConstructorCall
 import org.jetbrains.kotlin.ir.expressions.IrExpression
@@ -26,11 +27,15 @@ import org.jetbrains.kotlin.ir.expressions.IrGetObjectValue
 import org.jetbrains.kotlin.ir.expressions.IrGetValue
 import org.jetbrains.kotlin.ir.expressions.IrReturn
 import org.jetbrains.kotlin.ir.expressions.IrSetField
+import org.jetbrains.kotlin.ir.expressions.IrStatementOrigin
+import org.jetbrains.kotlin.ir.expressions.IrWhen
+import org.jetbrains.kotlin.ir.types.isBoolean
 import org.jetbrains.kotlin.ir.types.isUnit
 import org.jetbrains.kotlin.ir.util.allParameters
 import org.jetbrains.kotlin.ir.util.constructedClass
 import org.jetbrains.kotlin.ir.util.fqNameForIrSerialization
 import org.jetbrains.kotlin.ir.util.hasAnnotation
+import org.jetbrains.kotlin.ir.util.isElseBranch
 import org.jetbrains.kotlin.ir.visitors.IrElementVisitorVoid
 import org.jetbrains.kotlin.ir.visitors.acceptChildrenVoid
 import org.jetbrains.kotlin.ir.visitors.acceptVoid
@@ -104,9 +109,10 @@ internal fun classifyArcProducedReference(
 /**
  * ARC-only first-slice ownership planner.
  *
- * It deliberately accepts only straight-line, non-suspend functions made from reference vals,
- * direct reference-producing calls, and strong field loads/stores. Unsupported functions are
- * skipped without changing IR. Every accepted plan is path-verified immediately.
+ * It deliberately accepts only non-suspend functions made from reference vals, direct
+ * reference-producing calls, strong field loads/stores, and one narrowly shaped Unit `if`
+ * whose two arms contain compatible strong stores. Unsupported functions are skipped without
+ * changing IR. Every accepted plan is path-verified immediately.
  */
 internal fun runArcOwnershipPlanning(
     generationState: NativeGenerationState,
@@ -132,7 +138,15 @@ internal fun runArcOwnershipPlanning(
                             plans += optimized.plan
                             classifications += optimized.plan.classificationCounts()
                             optimization += optimized.metrics
-                            selectOwnedResultForwarding(declaration, builtPlan, optimized)?.let {
+                            val forwarding = selectOwnedResultForwarding(declaration, builtPlan, optimized)
+                            generationState.context.log {
+                                "ARC ownership plan ${optimized.plan.functionName}: " +
+                                        "blocks=${optimized.plan.blocks.size}, " +
+                                        "changed=${optimized.metrics.plansChanged != 0}, " +
+                                        "containedOwnedCopiesEliminated=${optimized.metrics.containedOwnedCopiesEliminated}, " +
+                                        "ownedResultForwarding=${forwarding != null}"
+                            }
+                            forwarding?.let {
                                 ownedResultForwarding[declaration] = it
                             }
                         }
@@ -170,6 +184,9 @@ private fun selectOwnedResultForwarding(
     builtPlan: CuratedArcFunctionPlan,
     optimized: ArcOwnershipOptimizationResult,
 ): ArcOwnedResultForwarding? {
+    // Multi-block plans currently feed verification and optimization metrics only. Keep the
+    // codegen authorization boundary explicit even if the IR-shape checks below are broadened.
+    if (builtPlan.plan.blocks.size != 1) return null
     val body = function.body as? org.jetbrains.kotlin.ir.expressions.IrBlockBody ?: return null
     val returnExpression = body.statements.lastOrNull() as? IrReturn ?: return null
     if (returnExpression.returnTargetSymbol != function.symbol) return null
@@ -238,12 +255,53 @@ private fun reportFailure(
     function,
 )
 
+/**
+ * Seal the first curated real-CFG shape after all merge-block cleanups have been planned.
+ *
+ * Branches are deliberately restricted to strong stores and must initialize the same storage.
+ * This is stronger than the verifier requires when storage was initialized on entry, but it
+ * prevents an unsupported source-level `if` from becoming a path-state compiler error.
+ */
+internal fun buildCuratedArcUnitIfPlan(
+    functionName: String,
+    entryValues: Map<ArcValue, ArcOwnership>,
+    entryInitializedStorage: Set<ArcStorage>,
+    entryOperations: List<ArcOperation>,
+    trueOperations: List<ArcOperation>,
+    falseOperations: List<ArcOperation>,
+    mergeOperations: List<ArcOperation>,
+    returnedValue: ArcValue?,
+): ArcFunctionPlan? {
+    fun branchStorage(operations: List<ArcOperation>): Set<ArcStorage>? {
+        if (operations.isEmpty() || operations.any { it !is ArcOperation.StrongStore }) return null
+        return operations.mapTo(linkedSetOf()) { (it as ArcOperation.StrongStore).storage }
+    }
+
+    val trueStorage = branchStorage(trueOperations) ?: return null
+    val falseStorage = branchStorage(falseOperations) ?: return null
+    if (trueStorage != falseStorage) return null
+
+    val entry = ArcBlockId("entry")
+    val trueBlock = ArcBlockId("when0_then")
+    val falseBlock = ArcBlockId("when0_else")
+    val mergeBlock = ArcBlockId("when0_merge")
+    val blocks = linkedMapOf(
+        entry to ArcBasicBlock(entry, entryOperations, ArcTerminator.Branch(trueBlock, falseBlock)),
+        trueBlock to ArcBasicBlock(trueBlock, trueOperations, ArcTerminator.Jump(mergeBlock)),
+        falseBlock to ArcBasicBlock(falseBlock, falseOperations, ArcTerminator.Jump(mergeBlock)),
+        mergeBlock to ArcBasicBlock(mergeBlock, mergeOperations, ArcTerminator.Return(returnedValue)),
+    )
+    return ArcFunctionPlan(functionName, entry, entryValues, entryInitializedStorage, blocks)
+}
+
 private class CuratedArcOwnershipPlanBuilder(
     private val function: IrSimpleFunction,
     private val lifetimes: Map<IrElement, Lifetime>,
 ) {
     private val entry = ArcBlockId("entry")
-    private val operations = mutableListOf<ArcOperation>()
+    private val entryOperations = mutableListOf<ArcOperation>()
+    private var currentOperations = entryOperations
+    private var conditional: CuratedUnitIf? = null
     private val values = mutableMapOf<org.jetbrains.kotlin.ir.symbols.IrValueSymbol, ArcValue>()
     private val ownership = mutableMapOf<ArcValue, ArcOwnership>()
     private val entryValues = linkedMapOf<ArcValue, ArcOwnership>()
@@ -251,6 +309,12 @@ private class CuratedArcOwnershipPlanBuilder(
     private val localDefinitionOrder = mutableListOf<ArcValue>()
     private var nextValue = 0
     private var returnedValue: ArcValue? = null
+
+    private data class CuratedUnitIf(
+        val trueOperations: List<ArcOperation>,
+        val falseOperations: List<ArcOperation>,
+        val mergeOperations: MutableList<ArcOperation>,
+    )
 
     fun build(): CuratedArcFunctionPlan? {
         if (function.isSuspend || function.body !is org.jetbrains.kotlin.ir.expressions.IrBlockBody) return null
@@ -270,6 +334,7 @@ private class CuratedArcOwnershipPlanBuilder(
             when (statement) {
                 is IrVariable -> if (!planVariable(statement)) return null
                 is IrSetField -> if (!planStrongStore(statement)) return null
+                is IrWhen -> if (!planUnitIf(statement)) return null
                 is IrReturn -> {
                     if (!isLast || !planReturn(statement)) return null
                 }
@@ -280,18 +345,32 @@ private class CuratedArcOwnershipPlanBuilder(
 
         localDefinitionOrder.asReversed().forEach { value ->
             if (value != returnedValue && ownership[value] == ArcOwnership.Owned) {
-                operations += ArcOperation.Destroy(value, ArcPlanLocation("lexical scope exit"))
+                currentOperations += ArcOperation.Destroy(value, ArcPlanLocation("lexical scope exit"))
             }
         }
 
-        val block = ArcBasicBlock(entry, operations, ArcTerminator.Return(returnedValue))
-        val plan = ArcFunctionPlan(
-            functionName = function.fqNameForIrSerialization.asString(),
-            entry = entry,
-            entryValues = entryValues,
-            entryInitializedStorage = initializedStorage,
-            blocks = mapOf(entry to block),
-        )
+        val functionName = function.fqNameForIrSerialization.asString()
+        val plannedIf = conditional
+        val plan = if (plannedIf == null) {
+            ArcFunctionPlan(
+                functionName = functionName,
+                entry = entry,
+                entryValues = entryValues,
+                entryInitializedStorage = initializedStorage,
+                blocks = mapOf(entry to ArcBasicBlock(entry, entryOperations, ArcTerminator.Return(returnedValue))),
+            )
+        } else {
+            buildCuratedArcUnitIfPlan(
+                functionName,
+                entryValues,
+                initializedStorage,
+                entryOperations,
+                plannedIf.trueOperations,
+                plannedIf.falseOperations,
+                plannedIf.mergeOperations,
+                returnedValue,
+            ) ?: return null
+        }
         return CuratedArcFunctionPlan(
             plan,
             values.mapNotNull { (symbol, value) ->
@@ -310,18 +389,18 @@ private class CuratedArcOwnershipPlanBuilder(
         val resultOwnership = when (initializer) {
             is IrConst<*>, is IrGetObjectValue -> {
                 classifyArcProducedReference(isPermanent = true, lifetime = lifetimes[initializer]).also {
-                    operations += ArcOperation.Define(result, it, location)
+                    currentOperations += ArcOperation.Define(result, it, location)
                 }
             }
             is IrGetValue -> {
                 val source = values[initializer.symbol] ?: return false
-                operations += ArcOperation.Copy(source, result, location)
+                currentOperations += ArcOperation.Copy(source, result, location)
                 if (ownership[source] == ArcOwnership.Immortal) ArcOwnership.Immortal else ArcOwnership.Owned
             }
             is IrGetField -> {
                 val storage = storage(initializer)
                 initializedStorage += storage
-                operations += ArcOperation.StrongLoad(storage, result, location)
+                currentOperations += ArcOperation.StrongLoad(storage, result, location)
                 ArcOwnership.Owned
             }
             is IrConstructorCall, is IrCall -> {
@@ -332,7 +411,7 @@ private class CuratedArcOwnershipPlanBuilder(
                     lifetime = lifetimes[initializer],
                     requiresHeapAllocation = requiresHeapAllocation,
                 ).also {
-                    operations += ArcOperation.Define(result, it, location)
+                    currentOperations += ArcOperation.Define(result, it, location)
                 }
             }
             else -> return false
@@ -343,12 +422,68 @@ private class CuratedArcOwnershipPlanBuilder(
         return true
     }
 
-    private fun planStrongStore(setField: IrSetField): Boolean {
+    private fun planStrongStore(
+        setField: IrSetField,
+        destination: MutableList<ArcOperation> = currentOperations,
+        requireReferenceStore: Boolean = false,
+    ): Boolean {
+        if (requireReferenceStore && !setField.symbol.owner.type.binaryTypeIsReference()) return false
         if (!setField.symbol.owner.type.binaryTypeIsReference()) return true
         val valueExpression = setField.value as? IrGetValue ?: return false
         val value = values[valueExpression.symbol] ?: return false
-        operations += ArcOperation.StrongStore(storage(setField), value, location(setField, "strong field store"))
+        destination += ArcOperation.StrongStore(storage(setField), value, location(setField, "strong field store"))
         return true
+    }
+
+    private fun planUnitIf(expression: IrWhen): Boolean {
+        if (conditional != null || expression.origin !== IrStatementOrigin.IF || !expression.type.isUnit()) return false
+        if (expression.branches.size != 2) return false
+        val trueBranch = expression.branches[0]
+        val falseBranch = expression.branches[1]
+        if (isElseBranch(trueBranch) || !isElseBranch(falseBranch)) return false
+        if (!isSupportedCondition(trueBranch.condition)) return false
+
+        val trueStores = branchStores(trueBranch.result) ?: return false
+        val falseStores = branchStores(falseBranch.result) ?: return false
+        // ArcStorage is currently keyed by field declaration, not receiver identity. Requiring
+        // the same declaration in both arms is sufficient for this metrics-only CFG slice; no
+        // multi-block plan may authorize codegen until receiver-specific storage is modeled.
+        val trueStorage = trueStores.mapTo(linkedSetOf()) { storage(it) }
+        val falseStorage = falseStores.mapTo(linkedSetOf()) { storage(it) }
+        if (trueStorage != falseStorage) return false
+
+        val trueOperations = mutableListOf<ArcOperation>()
+        val falseOperations = mutableListOf<ArcOperation>()
+        if (!trueStores.all { planStrongStore(it, trueOperations, requireReferenceStore = true) }) return false
+        if (!falseStores.all { planStrongStore(it, falseOperations, requireReferenceStore = true) }) return false
+
+        val mergeOperations = mutableListOf<ArcOperation>()
+        conditional = CuratedUnitIf(trueOperations, falseOperations, mergeOperations)
+        currentOperations = mergeOperations
+        return true
+    }
+
+    private fun isSupportedCondition(condition: IrExpression): Boolean {
+        if (!condition.type.isBoolean()) return false
+        return condition is IrGetValue || (condition is IrConst<*> && condition.value is Boolean)
+    }
+
+    private fun branchStores(result: IrExpression): List<IrSetField>? {
+        if (!result.type.isUnit()) return null
+        val stores = when (result) {
+            is IrSetField -> listOf(result)
+            is IrBlock -> result.statements.map { it as? IrSetField ?: return null }
+            else -> return null
+        }
+        if (stores.isEmpty()) return null
+        return stores.takeIf { candidates ->
+            candidates.all { store ->
+                store.type.isUnit() &&
+                        store.symbol.owner.type.binaryTypeIsReference() &&
+                        (store.receiver == null || store.receiver is IrGetValue) &&
+                        store.value is IrGetValue
+            }
+        }
     }
 
     private fun planReturn(expression: IrReturn): Boolean {
@@ -361,7 +496,7 @@ private class CuratedArcOwnershipPlanBuilder(
             // are +1. Model that transfer explicitly so returning a borrowed parameter (for
             // example intArrayOf's vararg array) has a balanced ownership plan.
             val ownedResult = newValue("return")
-            operations += ArcOperation.Copy(value, ownedResult, location(expression, "owned return copy"))
+            currentOperations += ArcOperation.Copy(value, ownedResult, location(expression, "owned return copy"))
             ownership[ownedResult] = ArcOwnership.Owned
             localDefinitionOrder += ownedResult
             ownedResult

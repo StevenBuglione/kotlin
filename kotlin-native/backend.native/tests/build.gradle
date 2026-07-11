@@ -3379,6 +3379,19 @@ standaloneTest("arc_owned_result_forwarding") {
     source = "codegen/arc/ownedResultForwarding.kt"
 }
 
+tasks.register("arc_ownership_planning_unit_if", KonanDriverTest) {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    flags = ["-opt", "-Xverbose-phases=ArcOwnershipAnalysis"]
+    compilerMessages = true
+    source = "codegen/arc/ownershipPlanningUnitIf.kt"
+    outputChecker = { output ->
+        output.contains(
+                "ARC ownership plan branchStore: blocks=4, changed=true, " +
+                        "containedOwnedCopiesEliminated=1, ownedResultForwarding=false"
+        ) && output.contains("OK\n")
+    }
+}
+
 standaloneTest("arc_exceptional_frame_cleanup") {
     enabled = project.target.name == "linux_x64" && isArcMM
     useGoldenData = true
