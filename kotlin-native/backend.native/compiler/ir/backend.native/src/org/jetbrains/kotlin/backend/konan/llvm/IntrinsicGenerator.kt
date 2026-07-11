@@ -337,7 +337,7 @@ internal class IntrinsicGenerator(private val environment: IntrinsicGeneratorEnv
             new = args[1]
         }
         return if (isObjectRef(args[1])) {
-            require(context.memoryModel == MemoryModel.EXPERIMENTAL)
+            require(context.memoryModel.usesSharedHeap)
             when (mode) {
                 CmpExchangeMode.SET -> call(llvm.CompareAndSetVolatileHeapRef, listOf(address, expected, new))
                 CmpExchangeMode.SWAP -> call(llvm.CompareAndSwapVolatileHeapRef, listOf(address, expected, new),
@@ -371,7 +371,7 @@ internal class IntrinsicGenerator(private val environment: IntrinsicGeneratorEnv
         }
         return if (isObjectRef(value)) {
             require(op == LLVMAtomicRMWBinOp.LLVMAtomicRMWBinOpXchg)
-            require(context.memoryModel == MemoryModel.EXPERIMENTAL)
+            require(context.memoryModel.usesSharedHeap)
             call(llvm.GetAndSetVolatileHeapRef, listOf(address, value),
                     environment.calculateLifetime(callSite), resultSlot = resultSlot)
         } else {

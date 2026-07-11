@@ -159,7 +159,7 @@ internal fun ReportUnhandledException(throwable: Throwable) {
 @OptIn(FreezingIsDeprecated::class, ExperimentalNativeApi::class)
 internal object UnhandledExceptionHookHolder {
     internal val hook: FreezableAtomicReference<ReportUnhandledExceptionHook?> =
-        if (Platform.memoryModel == MemoryModel.EXPERIMENTAL) {
+        if (Platform.memoryModel.usesSharedHeap) {
             FreezableAtomicReference<ReportUnhandledExceptionHook?>(null)
         } else {
             FreezableAtomicReference<ReportUnhandledExceptionHook?>(null).freeze()

@@ -235,6 +235,7 @@ enum class MemoryModel {
     kStrict = 0,
     kRelaxed = 1,
     kExperimental = 2,
+    kArc = 3,
 };
 
 // Controls the current memory model, is compile-time constant.

@@ -220,6 +220,17 @@ bitcode {
             }
         }
 
+        module("arc") {
+            headersDirs.from(files("src/main/cpp", "src/legacymm/cpp"))
+            sourceSets {
+                main {}
+                test {}
+            }
+
+            compilerArgs.add("-DKONAN_ARC_MEMORY_MANAGER=1")
+            onlyIf { target == KonanTarget.LINUX_X64 }
+        }
+
         module("profileRuntime") {
             srcRoot.set(layout.projectDirectory.dir("src/profile_runtime"))
             sourceSets {
@@ -250,6 +261,18 @@ bitcode {
                 main {}
                 testFixtures {}
             }
+        }
+
+        module("arc_memory_manager") {
+            srcRoot.set(layout.projectDirectory.dir("src/legacymm"))
+            headersDirs.from(files("src/main/cpp"))
+            sourceSets {
+                main {}
+                testFixtures {}
+            }
+
+            compilerArgs.add("-DKONAN_ARC_MEMORY_MANAGER=1")
+            onlyIf { target == KonanTarget.LINUX_X64 }
         }
 
         module("experimental_memory_manager") {
@@ -330,6 +353,12 @@ bitcode {
 
         testsGroup("std_alloc_runtime_tests") {
             testedModules.addAll("main", "legacy_memory_manager", "strict", "std_alloc", "objc")
+        }
+
+        if (target == KonanTarget.LINUX_X64 && sanitizer == null) {
+            testsGroup("arc_runtime_tests") {
+                testedModules.addAll("main", "arc_memory_manager", "arc", "std_alloc", "objc")
+            }
         }
 
         testsGroup("custom_alloc_runtime_tests") {

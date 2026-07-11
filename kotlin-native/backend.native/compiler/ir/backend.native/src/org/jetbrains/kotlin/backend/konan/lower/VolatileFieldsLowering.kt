@@ -146,7 +146,7 @@ internal class VolatileFieldsLowering(val context: Context) : FileLoweringPass {
                         it.backingField?.hasAnnotation(KonanFqNames.volatile) != true -> null
                         else -> {
                             val field = it.backingField!!
-                            if (field.type.binaryTypeIsReference() && context.memoryModel != MemoryModel.EXPERIMENTAL) {
+                            if (field.type.binaryTypeIsReference() && !context.memoryModel.usesSharedHeap) {
                                 it.annotations = it.annotations.filterNot { it.symbol.owner.parentAsClass.hasEqualFqName(KonanFqNames.volatile) }
                                 null
                             } else {
@@ -211,7 +211,7 @@ internal class VolatileFieldsLowering(val context: Context) : FileLoweringPass {
                         ?: return unsupported("Only compile-time known IrProperties supported for $intrinsicType")
                 val property = reference.symbol.owner
                 val backingField = property.backingField
-                if (backingField?.type?.binaryTypeIsReference() == true && context.memoryModel != MemoryModel.EXPERIMENTAL) {
+                if (backingField?.type?.binaryTypeIsReference() == true && !context.memoryModel.usesSharedHeap) {
                     return unsupported("Only primitives are supported for $intrinsicType with legacy memory model")
                 }
                 if (backingField?.hasAnnotation(KonanFqNames.volatile) != true) {

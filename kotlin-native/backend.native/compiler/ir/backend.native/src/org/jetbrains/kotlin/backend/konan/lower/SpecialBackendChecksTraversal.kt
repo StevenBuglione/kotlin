@@ -336,6 +336,16 @@ private class BackendChecker(
     override fun visitField(declaration: IrField) {
         if (declaration.isFakeOverride) return // Can't happen now, just trying to be future-proof here.
 
+        if (declaration.correspondingPropertySymbol == null) {
+            checkArcReferenceDeclaration(
+                    declaration,
+                    declaration.type,
+                    isMutable = !declaration.isFinal,
+                    hasStorage = true,
+                    isDelegated = false,
+            )
+        }
+
         val parent = declaration.parent
 
         if (parent is IrClass && parent.defaultType.isNativePointed(symbols) && parent.symbol != symbols.nativePointed) {
@@ -592,7 +602,108 @@ private class BackendChecker(
         seenTypeParameters.remove(typeParameter)
     }
 
+    override fun visitProperty(declaration: IrProperty) {
+        checkArcReferenceProperty(declaration)
+        super.visitProperty(declaration)
+    }
+
+    override fun visitVariable(declaration: IrVariable) {
+        checkArcReferenceDeclaration(
+                declaration,
+                declaration.type,
+                isMutable = declaration.isVar,
+                hasStorage = true,
+                isDelegated = false,
+        )
+        super.visitVariable(declaration)
+    }
+
+    override fun visitSimpleFunction(declaration: IrSimpleFunction) {
+        declaration.annotations.findAnnotation(KonanFqNames.arcDeinit)?.let { annotation ->
+            checkArcMode(annotation, "ArcDeinit")
+            val isValid = declaration.parent is IrClass &&
+                    declaration.visibility == DescriptorVisibilities.PRIVATE &&
+                    declaration.modality == Modality.FINAL &&
+                    declaration.valueParameters.isEmpty() &&
+                    declaration.extensionReceiverParameter == null &&
+                    !declaration.isSuspend &&
+                    declaration.returnType.isUnit()
+            if (!isValid) {
+                reportError(
+                        annotation,
+                        "@ArcDeinit is applicable only to a private final zero-argument non-suspend Unit member function"
+                )
+            }
+        }
+        super.visitSimpleFunction(declaration)
+    }
+
+    private fun checkArcReferenceProperty(declaration: IrProperty) {
+        val backingField = declaration.backingField
+        checkArcReferenceDeclaration(
+                declaration,
+                backingField?.type,
+                isMutable = declaration.isVar,
+                hasStorage = backingField != null,
+                isDelegated = declaration.isDelegated,
+                fieldAnnotations = backingField,
+        )
+    }
+
+    private fun checkArcReferenceDeclaration(
+            declaration: IrDeclaration,
+            type: IrType?,
+            isMutable: Boolean,
+            hasStorage: Boolean,
+            isDelegated: Boolean,
+            fieldAnnotations: IrField? = null,
+    ) {
+        val weak = declaration.annotations.findAnnotation(KonanFqNames.arcWeak)
+                ?: fieldAnnotations?.annotations?.findAnnotation(KonanFqNames.arcWeak)
+        val unowned = declaration.annotations.findAnnotation(KonanFqNames.arcUnowned)
+                ?: fieldAnnotations?.annotations?.findAnnotation(KonanFqNames.arcUnowned)
+        if (weak == null && unowned == null) return
+
+        weak?.let { checkArcMode(it, "ArcWeak") }
+        unowned?.let { checkArcMode(it, "ArcUnowned") }
+        if (weak != null && unowned != null) {
+            reportError(unowned, "@ArcWeak and @ArcUnowned cannot be used on the same declaration")
+        }
+
+        val annotation = weak ?: unowned!!
+        if (isDelegated) {
+            reportError(annotation, "ARC reference annotations are not supported on delegated properties")
+        }
+        if (!hasStorage || type == null) {
+            reportError(annotation, "ARC reference annotations require a declaration with storage")
+        }
+        if (!type.binaryTypeIsReference()) {
+            reportError(annotation, "ARC reference annotations are applicable only to reference declarations")
+        }
+
+        if (weak != null && (!isMutable || !type.isNullable())) {
+            reportError(weak, "@ArcWeak is applicable only to mutable nullable reference declarations")
+        }
+        if (unowned != null && type.isNullable()) {
+            reportError(unowned, "@ArcUnowned is applicable only to non-null reference declarations")
+        }
+    }
+
+    private fun checkArcMode(annotation: IrConstructorCall, annotationName: String) {
+        if (context.config.memoryModel != MemoryModel.ARC) {
+            reportError(annotation, "@$annotationName is available only with the ARC memory model")
+        }
+    }
+
     override fun visitClass(declaration: IrClass) {
+        val deinits = declaration.declarations.filterIsInstance<IrSimpleFunction>()
+                .mapNotNull { function ->
+                    function.annotations.findAnnotation(KonanFqNames.arcDeinit)?.let { function to it }
+                }
+        deinits.forEach { (_, annotation) -> checkArcMode(annotation, "ArcDeinit") }
+        if (deinits.size > 1) {
+            reportError(deinits[1].second, "A class may declare only one @ArcDeinit member function")
+        }
         if (declaration.isKotlinObjCClass()) {
             checkKotlinObjCClass(declaration)
         }

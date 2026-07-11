@@ -49,6 +49,11 @@ public enum class MemoryModel {
     STRICT,
     RELAXED,
     EXPERIMENTAL,
+    ARC;
+
+    /** Whether objects may be shared between threads without freezing. */
+    internal val usesSharedHeap: Boolean
+        get() = this == EXPERIMENTAL || this == ARC
 }
 
 /**
@@ -96,7 +101,7 @@ public object Platform {
      * If freezing is enabled.
      *
      * This value would be false, only if binary option `freezing` is equal to `disabled`. This is default when
-     * [memoryModel] is equal to [MemoryModel.EXPERIMENTAL].
+     * [memoryModel] is equal to [MemoryModel.EXPERIMENTAL] or [MemoryModel.ARC].
      */
     public val isFreezingEnabled: Boolean
         get() = Platform_isFreezingEnabled()

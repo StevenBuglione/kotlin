@@ -323,6 +323,12 @@ MODEL_VARIANTS(void, EnterFrame, ObjHeader** start, int parameters, int count);
 MODEL_VARIANTS(void, LeaveFrame, ObjHeader** start, int parameters, int count);
 MODEL_VARIANTS(void, SetCurrentFrame, ObjHeader** start);
 
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+void EnterFrameArc(ObjHeader** start, int parameters, int count) RUNTIME_NOTHROW;
+void LeaveFrameArc(ObjHeader** start, int parameters, int count) RUNTIME_NOTHROW;
+void SetCurrentFrameArc(ObjHeader** start) RUNTIME_NOTHROW;
+#endif
+
 void ReleaseHeapRef(const ObjHeader* object) RUNTIME_NOTHROW;
 MODEL_VARIANTS(void, ReleaseHeapRef, const ObjHeader* object);
 MODEL_VARIANTS(void, ReleaseHeapRefNoCollect, const ObjHeader* object);

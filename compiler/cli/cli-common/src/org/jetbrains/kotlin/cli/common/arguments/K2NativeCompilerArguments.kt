@@ -56,7 +56,7 @@ class K2NativeCompilerArguments : CommonCompilerArguments() {
     @Argument(value = "-manifest", valueDescription = "<path>", description = "Provide a maniferst addend file")
     var manifestFile: String? = null
 
-    @Argument(value="-memory-model", valueDescription = "<model>", description = "Memory model to use, 'strict' and 'experimental' are currently supported")
+    @Argument(value="-memory-model", valueDescription = "<model>", description = "Memory model to use: 'strict', 'experimental', or 'arc' (linux_x64 only)")
     var memoryModel: String? = null
 
     @GradleOption(
@@ -393,7 +393,7 @@ class K2NativeCompilerArguments : CommonCompilerArguments() {
     @Argument(
         value = "-Xworker-exception-handling",
         valueDescription = "<mode>",
-        description = "Unhandled exception processing in Worker.executeAfter. Possible values: 'legacy', 'use-hook'. The default value is 'legacy', for -memory-model experimental the default value is 'use-hook'"
+        description = "Unhandled exception processing in Worker.executeAfter. Possible values: 'legacy', 'use-hook'. The default value is 'legacy'; shared-heap memory models use 'use-hook'"
     )
     var workerExceptionHandling: String? = null
 

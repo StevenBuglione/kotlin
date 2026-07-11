@@ -26,7 +26,9 @@
 
 // CycleDetector internally uses static local with runtime initialization,
 // which requires atomics. Atomics are not available on WASM.
-#ifdef KONAN_WASM
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+#define USE_CYCLE_DETECTOR 0
+#elif defined(KONAN_WASM)
 #define USE_CYCLE_DETECTOR 0
 #else
 #define USE_CYCLE_DETECTOR 1
@@ -67,10 +69,15 @@
 #include "ObjCMMAPI.h"
 #endif
 
+// ARC destroys zero-count objects eagerly and deliberately leaves strong cycles alive.
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+#define USE_GC 0
+#else
 // If garbage collection algorithm for cyclic garbage to be used.
 // We are using the Bacon's algorithm for GC, see
 // http://researcher.watson.ibm.com/researcher/files/us-bacon/Bacon03Pure.pdf.
 #define USE_GC 1
+#endif
 // Define to 1 to print all memory operations.
 #define TRACE_MEMORY 0
 // Define to 1 to print major GC events.
@@ -738,6 +745,10 @@ struct MemoryState {
   uint64_t allocSinceLastGcThreshold;
 #endif // USE_GC
 
+#if !USE_GC
+  ForeignRefManager* foreignRefManager;
+#endif
+
   // A stack of initializing singletons.
   std_support::vector<std::pair<ObjHeader**, ObjHeader*>> initializingSingletons;
 
@@ -944,6 +955,9 @@ inline bool isFreeable(const ContainerHeader* header) {
   return header != nullptr && header->tag() != CONTAINER_TAG_STACK;
 }
 
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+[[maybe_unused]]
+#endif
 inline bool isArena(const ContainerHeader* header) {
   return header != nullptr && header->stack();
 }
@@ -965,6 +979,9 @@ inline ContainerHeader* clearRemoved(ContainerHeader* container) {
     reinterpret_cast<uintptr_t>(container) & ~static_cast<uintptr_t>(1));
 }
 
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+[[maybe_unused]]
+#endif
 inline ContainerHeader* realShareableContainer(ContainerHeader* container) {
   RuntimeAssert(container->shareable(), "Only makes sense on shareable objects");
   return containerFor(reinterpret_cast<ObjHeader*>(container + 1));
@@ -1164,9 +1181,9 @@ void scheduleDestroyContainer(MemoryState* state, ContainerHeader* container) {
     processFinalizerQueue(state);
   }
 #else
-  freeInObjectPool(container), 0;
-  atomicAdd(&allocCount, -1);
   CONTAINER_DESTROY_EVENT(state, container);
+  freeInObjectPool(container, 0);
+  atomicAdd(&allocCount, -1);
 #endif
 }
 
@@ -1324,6 +1341,37 @@ inline void incrementRC(ContainerHeader* container) {
   container->incRefCount<Atomic>();
 }
 
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+
+THREAD_LOCAL_VARIABLE ContainerHeaderList* arcDestructionWorklist = nullptr;
+
+void drainArcDestructionWorklist(ContainerHeader* container) {
+  if (arcDestructionWorklist != nullptr) {
+    arcDestructionWorklist->push_back(container);
+    return;
+  }
+
+  ContainerHeaderList worklist;
+  arcDestructionWorklist = &worklist;
+  worklist.push_back(container);
+  while (!worklist.empty()) {
+    ContainerHeader* next = worklist.back();
+    worklist.pop_back();
+    freeContainer(next);
+  }
+  arcDestructionWorklist = nullptr;
+}
+
+template <bool Atomic, bool UseCycleCollector>
+inline void decrementRC(ContainerHeader* container) {
+  static_assert(!UseCycleCollector, "ARC never enables cycle collection");
+  if (container->decRefCount<Atomic>() == 0) {
+    drainArcDestructionWorklist(container);
+  }
+}
+
+#else
+
 template <bool Atomic, bool UseCycleCollector>
 inline void decrementRC(ContainerHeader* container) {
   if (container->decRefCount<Atomic>() == 0) {
@@ -1331,11 +1379,17 @@ inline void decrementRC(ContainerHeader* container) {
   }
 }
 
+#endif
+
 inline void decrementRC(ContainerHeader* container) {
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+  decrementRC<true, false>(container);
+#else
   if (isShareable(container))
     decrementRC<true, false>(container);
   else
     decrementRC<false, false>(container);
+#endif
 }
 
 template <bool CanCollect>
@@ -1705,7 +1759,11 @@ inline void addHeapRef(ContainerHeader* container) {
       break;
     case CONTAINER_TAG_LOCAL:
       RuntimeAssert(container->refCount() > 0, "add ref for reclaimed object");
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+      incrementRC</* Atomic = */ true>(container);
+#else
       incrementRC</* Atomic = */ false>(container);
+#endif
       break;
     /* case CONTAINER_TAG_FROZEN: case CONTAINER_TAG_SHARED: */
     default:
@@ -1726,7 +1784,11 @@ inline bool tryAddHeapRef(ContainerHeader* container) {
     case CONTAINER_TAG_STACK:
       break;
     case CONTAINER_TAG_LOCAL:
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+      if (!tryIncrementRC</* Atomic = */ true>(container)) return false;
+#else
       if (!tryIncrementRC</* Atomic = */ false>(container)) return false;
+#endif
       break;
     /* case CONTAINER_TAG_FROZEN: case CONTAINER_TAG_SHARED: */
     default:
@@ -2142,6 +2204,18 @@ void deinitMemory(MemoryState* memoryState, bool destroyRuntime) {
   RuntimeAssert(memoryState->finalizerQueueSize == 0, "Finalizer queue must be empty");
 #endif // USE_GC
 
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+  atomicAdd(&aliveMemoryStatesCount, -1);
+  auto* foreignRefManager = memoryState->foreignRefManager;
+  while (!foreignRefManager->tryReleaseRefOwned()) {
+    foreignRefManager->processEnqueuedReleaseRefsWith([](ObjHeader* object) {
+      releaseHeapRef<false>(object);
+    });
+  }
+  memoryState->foreignRefManager = nullptr;
+  memoryState->tls.Deinit();
+#endif
+
   atomicAdd(&pendingDeinit, -1);
 
 #if TRACE_MEMORY
@@ -2168,6 +2242,9 @@ void deinitMemory(MemoryState* memoryState, bool destroyRuntime) {
   ::memoryState = nullptr;
 }
 
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+[[maybe_unused]]
+#endif
 void makeShareable(ContainerHeader* container) {
   if (!container->frozen())
     container->makeShared();
@@ -2304,6 +2381,7 @@ void updateHeapRefIfNull(ObjHeader** location, const ObjHeader* object) {
   }
 }
 
+#if USE_GC
 inline void checkIfGcNeeded(MemoryState* state) {
   if (state != nullptr && state->allocSinceLastGc > state->allocSinceLastGcThreshold && state->gcSuspendCount == 0) {
     // To avoid GC trashing check that at least 10ms passed since last GC.
@@ -2324,6 +2402,20 @@ inline void checkIfForceCyclicGcNeeded(MemoryState* state) {
     }
   }
 }
+#endif
+
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+ObjHeader* moveArcAllocationToReturnSlot(ContainerHeader* container, ObjHeader* object, ObjHeader** returnSlot) {
+  RuntimeAssert(returnSlot != nullptr, "ARC allocation requires a return slot");
+  RuntimeAssert(container->refCount() == 0, "new ARC allocation must start with an unowned zero count");
+  container->incRefCount</* Atomic = */ true>();
+
+  ObjHeader* old = *returnSlot;
+  *returnSlot = object;
+  if (old != nullptr) releaseHeapRef<false>(old);
+  return object;
+}
+#endif
 
 template <bool Strict>
 OBJ_GETTER(allocInstance, const TypeInfo* type_info) {
@@ -2352,6 +2444,11 @@ OBJ_GETTER(allocInstance, const TypeInfo* type_info) {
     cyclicAddAtomicRoot(obj);
   }
 #endif  // USE_CYCLIC_GC
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+  if constexpr (!Strict) {
+    return moveArcAllocationToReturnSlot(container.header(), obj, OBJ_RESULT);
+  }
+#endif
   RETURN_OBJ(obj);
 }
 
@@ -2371,6 +2468,11 @@ OBJ_GETTER(allocArrayInstance, const TypeInfo* type_info, int32_t elements) {
     makeShareable(container.header());
   }
 #endif  // USE_GC
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+  if constexpr (!Strict) {
+    return moveArcAllocationToReturnSlot(container.header(), container.GetPlace()->obj(), OBJ_RESULT);
+  }
+#endif
   RETURN_OBJ(container.GetPlace()->obj());
 }
 
@@ -2383,8 +2485,12 @@ OBJ_GETTER(allocArrayInstance, const TypeInfo* type_info, int32_t elements) {
  */
 inline int32_t computeCookie() {
   auto* state = memoryState;
+#if USE_GC
   auto epoque = state->gcEpoque;
   return (static_cast<int32_t>(reinterpret_cast<intptr_t>(state))) ^ static_cast<int32_t>(epoque);
+#else
+  return static_cast<int32_t>(reinterpret_cast<intptr_t>(state));
+#endif
 }
 
 OBJ_GETTER(swapHeapRefLocked,
@@ -2407,8 +2513,10 @@ OBJ_GETTER(swapHeapRefLocked,
   UpdateReturnRef(OBJ_RESULT, oldValue);
 
   if (IsStrictMemoryModel() && shallRemember && oldValue != nullptr && oldValue != expectedValue) {
+#if USE_GC
     // Only remember container if it is not known to this thread (i.e. != expectedValue).
     rememberNewContainer(containerFor(oldValue));
+#endif
   }
   unlock(spinlock);
 
@@ -2509,6 +2617,60 @@ void setCurrentFrame(ObjHeader** start) {
     }
 }
 
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+
+void checkArcFrameLayout(FrameOverlay* frame) {
+  RuntimeAssert(frame->parameters >= 0, "ARC frame parameter count must not be negative");
+  RuntimeAssert(frame->count >= frame->parameters + kFrameOverlaySlots,
+                "ARC frame slot count %d is too small for %d parameters and %d overlay slots",
+                frame->count, frame->parameters, kFrameOverlaySlots);
+}
+
+void releaseArcFrameLocals(FrameOverlay* frame) {
+  checkArcFrameLayout(frame);
+  ObjHeader** current = reinterpret_cast<ObjHeader**>(frame + 1) + frame->parameters;
+  ObjHeader** end = reinterpret_cast<ObjHeader**>(frame) + frame->count;
+  while (current < end) {
+    ObjHeader* object = *current;
+    // Clear the owning slot before releasing it. Destruction is deliberately performed without
+    // a frame or reference lock, and a reentrant path cannot release this slot a second time.
+    *current++ = nullptr;
+    if (object != nullptr) releaseHeapRef<false>(object);
+  }
+}
+
+void enterFrameArc(ObjHeader** start, int parameters, int count) {
+  MEMORY_LOG("EnterFrameArc %p: %d parameters %d slots\n", start, parameters, count)
+  FrameOverlay* frame = reinterpret_cast<FrameOverlay*>(start);
+  frame->previous = currentFrame;
+  frame->parameters = parameters;
+  frame->count = count;
+  checkArcFrameLayout(frame);
+  currentFrame = frame;
+}
+
+void leaveFrameArc(ObjHeader** start, int parameters, int count) {
+  MEMORY_LOG("LeaveFrameArc %p: %d parameters %d slots\n", start, parameters, count)
+  FrameOverlay* frame = reinterpret_cast<FrameOverlay*>(start);
+  RuntimeAssert(currentFrame == frame, "ARC frame to leave is expected to be %p, but current frame is %p", frame, currentFrame);
+  RuntimeAssert(frame->parameters == parameters,
+                "ARC frame parameter count is expected to be %d, but is %d", frame->parameters, parameters);
+  RuntimeAssert(frame->count == count, "ARC frame slot count is expected to be %d, but is %d", frame->count, count);
+  releaseArcFrameLocals(frame);
+  currentFrame = frame->previous;
+}
+
+void setCurrentFrameArc(ObjHeader** start) {
+  MEMORY_LOG("SetCurrentFrameArc %p\n", start)
+  // Native unwinding may already have invalidated skipped stack frames before an outer landingpad
+  // executes. Each ARC function therefore releases its own frame in its cleanup landingpad; this
+  // operation must only retarget the TLS cursor and must never inspect skipped frame storage.
+  currentFrame = reinterpret_cast<FrameOverlay*>(start);
+}
+
+#endif
+
+#if USE_GC
 void suspendGC() {
   GC_LOG("suspendGC\n")
   memoryState->gcSuspendCount++;
@@ -2595,6 +2757,7 @@ KBoolean getTuneGCThreshold() {
   GC_LOG("getTuneGCThreshold %d\n", memoryState->gcErgonomics)
   return memoryState->gcErgonomics;
 }
+#endif
 
 KNativePtr createStablePointer(KRef any) {
   if (any == nullptr) return nullptr;
@@ -3342,6 +3505,61 @@ RUNTIME_NOTHROW void UpdateHeapRefRelaxed(ObjHeader** location, const ObjHeader*
   updateHeapRef<false>(location, object);
 }
 
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+
+namespace {
+
+// ARC volatile references need to stabilize the old value before another thread can
+// remove the field's owning reference. Start with one shared lock for correctness;
+// a striped lock table is a later contention optimization that preserves this ABI.
+KInt arcVolatileHeapRefLock = 0;
+
+} // namespace
+
+ALWAYS_INLINE RUNTIME_NOTHROW void UpdateVolatileHeapRef(ObjHeader** location, const ObjHeader* object) {
+    lock(&arcVolatileHeapRefLock);
+    ObjHeader* oldValue = *location;
+    SetHeapRef(location, object);
+    unlock(&arcVolatileHeapRefLock);
+    if (oldValue != nullptr) ReleaseHeapRef(oldValue);
+}
+
+extern "C" ALWAYS_INLINE RUNTIME_NOTHROW OBJ_GETTER(
+        CompareAndSwapVolatileHeapRef, ObjHeader** location, ObjHeader* expectedValue, ObjHeader* newValue) {
+    lock(&arcVolatileHeapRefLock);
+    ObjHeader* oldValue = *location;
+    bool exchanged = oldValue == expectedValue;
+    if (exchanged) SetHeapRef(location, newValue);
+    UpdateReturnRef(OBJ_RESULT, oldValue);
+    unlock(&arcVolatileHeapRefLock);
+    if (exchanged && oldValue != nullptr) ReleaseHeapRef(oldValue);
+    return oldValue;
+}
+
+extern "C" ALWAYS_INLINE RUNTIME_NOTHROW bool CompareAndSetVolatileHeapRef(
+        ObjHeader** location, ObjHeader* expectedValue, ObjHeader* newValue) {
+    lock(&arcVolatileHeapRefLock);
+    ObjHeader* oldValue = *location;
+    bool exchanged = oldValue == expectedValue;
+    if (exchanged) SetHeapRef(location, newValue);
+    unlock(&arcVolatileHeapRefLock);
+    if (exchanged && oldValue != nullptr) ReleaseHeapRef(oldValue);
+    return exchanged;
+}
+
+extern "C" ALWAYS_INLINE RUNTIME_NOTHROW OBJ_GETTER(
+        GetAndSetVolatileHeapRef, ObjHeader** location, ObjHeader* newValue) {
+    lock(&arcVolatileHeapRefLock);
+    ObjHeader* oldValue = *location;
+    SetHeapRef(location, newValue);
+    UpdateReturnRef(OBJ_RESULT, oldValue);
+    unlock(&arcVolatileHeapRefLock);
+    if (oldValue != nullptr) ReleaseHeapRef(oldValue);
+    return oldValue;
+}
+
+#else
+
 ALWAYS_INLINE RUNTIME_NOTHROW void UpdateVolatileHeapRef(ObjHeader** location, const ObjHeader* object) {
     RuntimeFail("Shouldn't be used");
 }
@@ -3354,6 +3572,8 @@ extern "C" ALWAYS_INLINE RUNTIME_NOTHROW bool CompareAndSetVolatileHeapRef(ObjHe
 extern "C" ALWAYS_INLINE RUNTIME_NOTHROW OBJ_GETTER(GetAndSetVolatileHeapRef, ObjHeader** location, ObjHeader* newValue) {
     RuntimeFail("Shouldn't be used");
 }
+
+#endif
 
 
 RUNTIME_NOTHROW void UpdateHeapRefsInsideOneArrayStrict(const ArrayHeader* array, int fromIndex, int toIndex,
@@ -3421,6 +3641,20 @@ RUNTIME_NOTHROW void SetCurrentFrameRelaxed(ObjHeader** start) {
     setCurrentFrame<false>(start);
 }
 
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+RUNTIME_NOTHROW void EnterFrameArc(ObjHeader** start, int parameters, int count) {
+  enterFrameArc(start, parameters, count);
+}
+
+RUNTIME_NOTHROW void LeaveFrameArc(ObjHeader** start, int parameters, int count) {
+  leaveFrameArc(start, parameters, count);
+}
+
+RUNTIME_NOTHROW void SetCurrentFrameArc(ObjHeader** start) {
+  setCurrentFrameArc(start);
+}
+#endif
+
 void Kotlin_native_internal_GC_collect(KRef) {
 #if USE_GC
   garbageCollect();
@@ -3437,7 +3671,10 @@ extern "C" void Kotlin_Internal_GC_GCInfoBuilder_Fill(KRef builder, int id) {
 }
 
 void Kotlin_native_internal_GC_collectCyclic(KRef) {
-#if USE_CYCLIC_GC
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+  // Strong cycles are outside ARC's ownership contract and are intentionally retained.
+  ThrowIllegalArgumentException();
+#elif USE_CYCLIC_GC
   if (g_hasCyclicCollector)
     cyclicScheduleGarbageCollect();
 #else
@@ -3692,7 +3929,12 @@ bool Kotlin_Any_isShareable(KRef thiz) {
 }
 
 RUNTIME_NOTHROW void PerformFullGC(MemoryState* memory) {
+#if USE_GC
     garbageCollect(memory, true);
+#else
+    // ARC has no tracing or cycle collector; eager releases require no explicit collection pass.
+    (void)memory;
+#endif
 }
 
 void CheckGlobalsAccessible() {

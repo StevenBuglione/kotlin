@@ -72,12 +72,11 @@ class KonanConfig(val project: Project, val configuration: CompilerConfiguration
         return@takeIf true
     }
 
-    private val defaultMemoryModel get() =
-        if (target.supportsThreads()) {
-            MemoryModel.EXPERIMENTAL
-        } else {
-            MemoryModel.STRICT
-        }
+    private val defaultMemoryModel get() = when {
+        target == KonanTarget.LINUX_X64 -> MemoryModel.ARC
+        target.supportsThreads() -> MemoryModel.EXPERIMENTAL
+        else -> MemoryModel.STRICT
+    }
 
     val memoryModel: MemoryModel by lazy {
         when (configuration.get(BinaryOptions.memoryModel)) {
@@ -99,11 +98,20 @@ class KonanConfig(val project: Project, val configuration: CompilerConfiguration
                     MemoryModel.EXPERIMENTAL
                 }
             }
+            MemoryModel.ARC -> {
+                if (target != KonanTarget.LINUX_X64) {
+                    configuration.report(CompilerMessageSeverity.ERROR,
+                            "ARC memory model is currently supported only for linux_x64. Using the target default memory model.")
+                    defaultMemoryModel
+                } else {
+                    MemoryModel.ARC
+                }
+            }
             null -> defaultMemoryModel // If target does not support threads, it's deprecated, no need to spam with our own deprecation message.
         }.also {
-            if (it == MemoryModel.EXPERIMENTAL && destroyRuntimeMode == DestroyRuntimeMode.LEGACY) {
+            if (it.usesSharedHeap && destroyRuntimeMode == DestroyRuntimeMode.LEGACY) {
                 configuration.report(CompilerMessageSeverity.ERROR,
-                        "New MM is incompatible with 'legacy' destroy runtime mode.")
+                        "Shared-heap memory models are incompatible with 'legacy' destroy runtime mode.")
             }
         }
     }
@@ -124,26 +132,26 @@ class KonanConfig(val project: Project, val configuration: CompilerConfiguration
     }
     val runtimeAssertsMode: RuntimeAssertsMode get() = configuration.get(BinaryOptions.runtimeAssertionsMode) ?: RuntimeAssertsMode.IGNORE
     val workerExceptionHandling: WorkerExceptionHandling get() = configuration.get(KonanConfigKeys.WORKER_EXCEPTION_HANDLING) ?: when (memoryModel) {
-            MemoryModel.EXPERIMENTAL -> WorkerExceptionHandling.USE_HOOK
-            else -> WorkerExceptionHandling.LEGACY
+            MemoryModel.EXPERIMENTAL, MemoryModel.ARC -> WorkerExceptionHandling.USE_HOOK
+            MemoryModel.STRICT, MemoryModel.RELAXED -> WorkerExceptionHandling.LEGACY
         }
     val runtimeLogs: String? get() = configuration.get(KonanConfigKeys.RUNTIME_LOGS)
     val suspendFunctionsFromAnyThreadFromObjC: Boolean by lazy { configuration.get(BinaryOptions.objcExportSuspendFunctionLaunchThreadRestriction) == ObjCExportSuspendFunctionLaunchThreadRestriction.NONE }
     private val defaultFreezing get() = when (memoryModel) {
-        MemoryModel.EXPERIMENTAL -> Freezing.Disabled
-        else -> Freezing.Full
+        MemoryModel.EXPERIMENTAL, MemoryModel.ARC -> Freezing.Disabled
+        MemoryModel.STRICT, MemoryModel.RELAXED -> Freezing.Full
     }
     val freezing: Freezing by lazy {
         val freezingMode = configuration.get(BinaryOptions.freezing)
         when {
             freezingMode == null -> defaultFreezing
-            memoryModel != MemoryModel.EXPERIMENTAL && freezingMode != Freezing.Full -> {
+            !memoryModel.usesSharedHeap && freezingMode != Freezing.Full -> {
                 configuration.report(
                         CompilerMessageSeverity.ERROR,
                         "`freezing` can only be adjusted with new MM. Falling back to default behavior.")
                 Freezing.Full
             }
-            memoryModel == MemoryModel.EXPERIMENTAL && freezingMode != Freezing.Disabled -> {
+            memoryModel.usesSharedHeap && freezingMode != Freezing.Disabled -> {
                 // INFO because deprecation is currently ignorable via OptIn. Using WARNING will require silencing (for warnings-as-errors)
                 // by some compiler flag.
                 // TODO: When moving into proper deprecation cycle replace with WARNING.
@@ -277,7 +285,11 @@ class KonanConfig(val project: Project, val configuration: CompilerConfiguration
                 }
             }
             AllocationMode.CUSTOM -> {
-                if (gc == GC.CONCURRENT_MARK_AND_SWEEP) {
+                if (memoryModel == MemoryModel.ARC) {
+                    configuration.report(CompilerMessageSeverity.STRONG_WARNING,
+                            "Custom allocator is only integrated with tracing memory managers. Using standard allocator.")
+                    AllocationMode.STD
+                } else if (gc == GC.CONCURRENT_MARK_AND_SWEEP) {
                     AllocationMode.CUSTOM
                 } else {
                     configuration.report(CompilerMessageSeverity.STRONG_WARNING,
@@ -318,6 +330,10 @@ class KonanConfig(val project: Project, val configuration: CompilerConfiguration
                         }
                     }
                 }
+            }
+            MemoryModel.ARC -> {
+                add("arc.bc")
+                add("arc_memory_manager.bc")
             }
         }
         if (shouldCoverLibraries || shouldCoverSources) add("profileRuntime.bc")
@@ -376,8 +392,8 @@ class KonanConfig(val project: Project, val configuration: CompilerConfiguration
     internal val isInteropStubs: Boolean get() = manifestProperties?.getProperty("interop") == "true"
 
     private val defaultPropertyLazyInitialization get() = when (memoryModel) {
-        MemoryModel.EXPERIMENTAL -> true
-        else -> false
+        MemoryModel.EXPERIMENTAL, MemoryModel.ARC -> true
+        MemoryModel.STRICT, MemoryModel.RELAXED -> false
     }
     internal val propertyLazyInitialization: Boolean get() = configuration.get(KonanConfigKeys.PROPERTY_LAZY_INITIALIZATION) ?:
             defaultPropertyLazyInitialization
@@ -411,7 +427,7 @@ class KonanConfig(val project: Project, val configuration: CompilerConfiguration
         if (debug) append("-g")
         append("STATIC")
 
-        if (memoryModel != defaultMemoryModel)
+        if (memoryModel != defaultMemoryModel || memoryModel == MemoryModel.ARC)
             append("-mm$memoryModel")
         if (freezing != defaultFreezing)
             append("-freezing${freezing.name}")

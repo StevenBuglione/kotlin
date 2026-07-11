@@ -174,7 +174,7 @@ internal fun <T : BitcodePostProcessingContext> PhaseEngine<T>.runBitcodePostPro
     if (context is NativeGenerationState && context.coverage.enabled) {
         newEngine(context) { it.runPhase(CoveragePhase) }
     }
-    if (context.config.memoryModel == MemoryModel.EXPERIMENTAL) {
+    if (context.config.memoryModel.usesTracingGC) {
         runPhase(RemoveRedundantSafepointsPhase)
     }
     if (context.config.optimizationsEnabled) {

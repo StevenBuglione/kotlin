@@ -455,6 +455,7 @@ RUNTIME_NOTHROW void Kotlin_initRuntimeIfNeededFromKotlin() {
             return;
         case MemoryModel::kStrict:
         case MemoryModel::kRelaxed:
+        case MemoryModel::kArc:
             Kotlin_initRuntimeIfNeeded();
     }
 }

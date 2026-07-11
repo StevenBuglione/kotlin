@@ -236,7 +236,7 @@ fun IrFunctionSymbol.isComparisonFunction(map: Map<IrClassifierSymbol, IrSimpleF
         this in map.values
 
 internal fun IrClass.isFrozen(context: Context): Boolean {
-    val isLegacyMM = context.memoryModel != MemoryModel.EXPERIMENTAL
+    val isLegacyMM = !context.memoryModel.usesSharedHeap
     return when {
         !context.config.freezing.freezeImplicit -> false
         annotations.hasAnnotation(KonanFqNames.frozen) -> true

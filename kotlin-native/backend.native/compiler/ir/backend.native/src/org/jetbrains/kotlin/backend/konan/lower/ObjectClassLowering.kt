@@ -144,7 +144,7 @@ internal class ObjectClassLowering(val generationState: NativeGenerationState) :
         }
         if (declaration.annotations.hasAnnotation(KonanFqNames.threadLocal)) {
             property.annotations += buildSimpleAnnotation(context.irBuiltIns, SYNTHETIC_OFFSET, SYNTHETIC_OFFSET, context.ir.symbols.threadLocal.owner)
-        } else if (declaration.annotations.hasAnnotation(KonanFqNames.sharedImmutable) || context.memoryModel != MemoryModel.EXPERIMENTAL){
+        } else if (declaration.annotations.hasAnnotation(KonanFqNames.sharedImmutable) || !context.memoryModel.usesSharedHeap) {
             property.annotations += buildSimpleAnnotation(context.irBuiltIns, SYNTHETIC_OFFSET, SYNTHETIC_OFFSET, context.ir.symbols.sharedImmutable.owner)
         }
         function.body = context.createIrBuilder(function.symbol, SYNTHETIC_OFFSET, SYNTHETIC_OFFSET).irBlockBody {

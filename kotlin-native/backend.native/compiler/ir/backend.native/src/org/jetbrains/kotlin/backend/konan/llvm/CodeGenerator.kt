@@ -238,7 +238,7 @@ internal class StackLocalsManagerImpl(
     fun isEmpty() = stackLocals.isEmpty()
 
     private fun FunctionGenerationContext.createRootSetSlot() =
-            if (context.memoryModel == MemoryModel.EXPERIMENTAL) alloca(kObjHeaderPtr) else null
+            if (context.memoryModel.usesTracingGC) alloca(kObjHeaderPtr) else null
 
     override fun alloc(irClass: IrClass): LLVMValueRef = with(functionGenerationContext) {
         val classInfo = llvmDeclarations.forClass(irClass)
@@ -446,14 +446,15 @@ internal abstract class FunctionGenerationContext(
     // Functions that can be exported and called not only from Kotlin code should have cleanup_landingpad and `LeaveFrame`
     // because there is no guarantee of catching Kotlin exception in Kotlin code.
     protected open val needCleanupLandingpadAndLeaveFrame: Boolean
-        get() = irFunction?.annotations?.hasAnnotation(RuntimeNames.exportForCppRuntime) == true ||     // Exported to foreign code
-                (!stackLocalsManager.isEmpty() && context.memoryModel != MemoryModel.EXPERIMENTAL) ||
+        get() = (context.memoryModel == MemoryModel.ARC && needSlots) ||
+                irFunction?.annotations?.hasAnnotation(RuntimeNames.exportForCppRuntime) == true ||     // Exported to foreign code
+                (!stackLocalsManager.isEmpty() && !context.memoryModel.usesTracingGC) ||
                 switchToRunnable
 
     private var setCurrentFrameIsCalled: Boolean = false
 
     private val switchToRunnable: Boolean =
-            context.memoryModel == MemoryModel.EXPERIMENTAL && switchToRunnable
+            context.memoryModel.usesTracingGC && switchToRunnable
 
     val stackLocalsManager = StackLocalsManagerImpl(this, stackLocalsInitBb)
 
@@ -591,10 +592,11 @@ internal abstract class FunctionGenerationContext(
     }
 
     private fun updateReturnRef(value: LLVMValueRef, address: LLVMValueRef) {
-        if (context.memoryModel == MemoryModel.STRICT)
-            store(value, address)
-        else
-            call(llvm.updateReturnRefFunction, listOf(address, value))
+        when (context.memoryModel) {
+            MemoryModel.STRICT -> store(value, address)
+            MemoryModel.RELAXED, MemoryModel.EXPERIMENTAL, MemoryModel.ARC ->
+                call(llvm.updateReturnRefFunction, listOf(address, value))
+        }
     }
 
     private fun updateRef(value: LLVMValueRef, address: LLVMValueRef, onStack: Boolean,
@@ -602,12 +604,13 @@ internal abstract class FunctionGenerationContext(
         require(alignment == null || alignment % runtime.pointerAlignment == 0)
         if (onStack) {
             require(!isVolatile) { "Stack ref update can't be volatile"}
-            if (context.memoryModel == MemoryModel.STRICT)
-                store(value, address)
-            else
-                call(llvm.updateStackRefFunction, listOf(address, value))
+            when (context.memoryModel) {
+                MemoryModel.STRICT -> store(value, address)
+                MemoryModel.RELAXED, MemoryModel.EXPERIMENTAL, MemoryModel.ARC ->
+                    call(llvm.updateStackRefFunction, listOf(address, value))
+            }
         } else {
-            if (isVolatile && context.memoryModel == MemoryModel.EXPERIMENTAL) {
+            if (isVolatile && context.memoryModel.usesSharedHeap) {
                 call(llvm.UpdateVolatileHeapRef, listOf(address, value))
             } else {
                 call(llvm.updateHeapRefFunction, listOf(address, value))
@@ -618,8 +621,8 @@ internal abstract class FunctionGenerationContext(
     //-------------------------------------------------------------------------//
 
     fun switchThreadState(state: ThreadState) {
-        check(context.memoryModel == MemoryModel.EXPERIMENTAL) {
-            "Thread state switching is allowed in the new MM only."
+        check(context.memoryModel.usesTracingGC) {
+            "Thread state switching is allowed in the tracing-GC memory model only."
         }
         check(!forbidRuntime) {
             "Attempt to switch the thread state when runtime is forbidden"
@@ -631,7 +634,7 @@ internal abstract class FunctionGenerationContext(
     }
 
     fun switchThreadStateIfExperimentalMM(state: ThreadState) {
-        if (context.memoryModel == MemoryModel.EXPERIMENTAL) {
+        if (context.memoryModel.usesTracingGC) {
             switchThreadState(state)
         }
     }
@@ -1366,7 +1369,7 @@ internal abstract class FunctionGenerationContext(
             } else {
                 check(!setCurrentFrameIsCalled)
             }
-            if (context.memoryModel == MemoryModel.EXPERIMENTAL && !forbidRuntime) {
+            if (context.memoryModel.usesTracingGC && !forbidRuntime) {
                 call(llvm.Kotlin_mm_safePointFunctionPrologue, emptyList())
             }
             resetDebugLocation()
@@ -1560,7 +1563,7 @@ internal abstract class FunctionGenerationContext(
             call(llvm.leaveFrameFunction,
                     listOf(slotsPhi!!, llvm.int32(vars.skipSlots), llvm.int32(slotCount)))
         }
-        if (!stackLocalsManager.isEmpty() && context.memoryModel != MemoryModel.EXPERIMENTAL) {
+        if (!stackLocalsManager.isEmpty() && !context.memoryModel.usesTracingGC) {
             stackLocalsManager.clean(refsOnly = true) // Only bother about not leaving any dangling references.
         }
     }

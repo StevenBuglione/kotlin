@@ -8,4 +8,11 @@ enum class MemoryModel {
     STRICT,
     RELAXED,
     EXPERIMENTAL,
+    ARC;
+
+    val usesSharedHeap: Boolean
+        get() = this == EXPERIMENTAL || this == ARC
+
+    val usesTracingGC: Boolean
+        get() = this == EXPERIMENTAL
 }

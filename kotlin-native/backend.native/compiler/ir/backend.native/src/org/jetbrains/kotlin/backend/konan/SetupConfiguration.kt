@@ -124,6 +124,7 @@ fun CompilerConfiguration.setupFromArguments(arguments: K2NativeCompilerArgument
         "relaxed" -> MemoryModel.RELAXED
         "strict" -> MemoryModel.STRICT
         "experimental" -> MemoryModel.EXPERIMENTAL
+        "arc" -> MemoryModel.ARC
         null -> null
         else -> {
             report(ERROR, "Unsupported memory model ${arguments.memoryModel}")
