@@ -1,4 +1,7 @@
+import org.jetbrains.kotlin.cpp.CppUsage
 import org.jetbrains.kotlin.gradle.tasks.KotlinJvmCompile
+import org.jetbrains.kotlin.konan.target.TargetWithSanitizer
+import java.io.File
 
 plugins {
     id("common-configuration")
@@ -7,6 +10,16 @@ plugins {
     kotlin("jvm")
     id("project-tests-convention")
     id("test-inputs-check-v2")
+}
+
+val testCppRuntime by configurations.creating {
+    isCanBeConsumed = false
+    isCanBeResolved = true
+    attributes {
+        attribute(CppUsage.USAGE_ATTRIBUTE, objects.named(CppUsage.LIBRARY_RUNTIME))
+        attribute(LibraryElements.LIBRARY_ELEMENTS_ATTRIBUTE, objects.named(LibraryElements.DYNAMIC_LIB))
+        attribute(TargetWithSanitizer.TARGET_ATTRIBUTE, TargetWithSanitizer.host)
+    }
 }
 
 dependencies {
@@ -54,6 +67,26 @@ dependencies {
     compileOnly(project(":kotlin-metadata")) // Only to fix IDE reporting unresolved references (KTI-3323).
 
     testImplementation(kotlinTest("junit"))
+    testCppRuntime(project(":kotlin-native:Interop:Runtime"))
+    testCppRuntime(project(":kotlin-native:llvmInterop"))
+}
+
+open class RustBoundaryAbiTestArgumentProvider @Inject constructor(
+    objectFactory: ObjectFactory,
+) : CommandLineArgumentProvider {
+    @get:InputFiles
+    @get:PathSensitive(PathSensitivity.NONE)
+    val nativeLibraries: ConfigurableFileCollection = objectFactory.fileCollection()
+
+    override fun asArguments(): Iterable<String> = listOf(
+        "-Djava.library.path=${nativeLibraries.files.joinToString(File.pathSeparator) { it.parentFile.absolutePath }}"
+    )
+}
+
+tasks.withType<Test>().configureEach {
+    jvmArgumentProviders.add(objects.newInstance<RustBoundaryAbiTestArgumentProvider>().apply {
+        nativeLibraries.from(testCppRuntime)
+    })
 }
 
 tasks.withType<KotlinJvmCompile>().configureEach {

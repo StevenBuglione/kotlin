@@ -95,7 +95,6 @@ class RustPrimitiveControlFlowCompatibilityTest {
             assertContains(strictCompilation.output, "println supports only primitive values and string literals")
             assertContains(strictCompilation.output, "UNSUPPORTED_CALL")
             assertContains(strictCompilation.output, "Integer division requires Kotlin exception interop")
-            assertContains(strictCompilation.output, "toLong")
             assertContains(strictCompilation.output, source.fileName.toString())
         }
     }

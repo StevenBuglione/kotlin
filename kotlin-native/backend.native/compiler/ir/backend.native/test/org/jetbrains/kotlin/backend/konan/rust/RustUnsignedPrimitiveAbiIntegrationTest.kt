@@ -89,6 +89,11 @@ class RustUnsignedPrimitiveAbiIntegrationTest {
                     Files.isRegularFile(marker) && Files.size(marker) > 0L,
                     "Rust bitcode ABI preflight did not complete in $profile mode: $marker",
                 )
+                assertEquals(
+                    "rust-boundary-normalized.bc",
+                    Files.readAllBytes(marker).toString(StandardCharsets.UTF_8).trim(),
+                    "Hybrid final linking did not consume the ABI-normalized Rust module in $profile mode",
+                )
                 val generatedSource = Files.readAllBytes(workspace.resolve("src/lib.rs")).toString(StandardCharsets.UTF_8)
                 assertUnsignedSignature(generatedSource, "uintIdentity", "kotlin.UInt", "u32")
                 assertUnsignedSignature(generatedSource, "ulongIdentity", "kotlin.ULong", "u64")

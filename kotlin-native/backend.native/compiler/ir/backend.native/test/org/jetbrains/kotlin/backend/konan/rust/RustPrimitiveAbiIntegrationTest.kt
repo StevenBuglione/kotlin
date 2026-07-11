@@ -70,6 +70,11 @@ class RustPrimitiveAbiIntegrationTest {
                     Files.isRegularFile(preflightMarker) && Files.size(preflightMarker) > 0L,
                     "Rust bitcode ABI preflight did not complete in $profile mode: $preflightMarker",
                 )
+                assertEquals(
+                    "rust-boundary-normalized.bc",
+                    Files.readAllBytes(preflightMarker).toString(StandardCharsets.UTF_8).trim(),
+                    "Hybrid final linking did not consume the ABI-normalized Rust module in $profile mode",
+                )
                 val generatedSource = workspace.resolve("src/lib.rs")
                 assertTrue(Files.isRegularFile(generatedSource), "Generated Rust source not found: $generatedSource")
                 val generatedText = Files.readAllBytes(generatedSource).toString(StandardCharsets.UTF_8)

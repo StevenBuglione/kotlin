@@ -61,6 +61,7 @@ import org.jetbrains.kotlin.ir.util.isNullable
 import org.jetbrains.kotlin.ir.util.isTopLevel
 import org.jetbrains.kotlin.konan.target.KonanTarget
 import java.io.File
+import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -178,8 +179,10 @@ internal fun tryCompileRustHybridModule(
         .resolve(".kotlin-rust")
         .resolve(outputFile.nameWithoutExtension)
     val successMarker = workspace.resolve("rust-bitcode-preflight-ok")
+    val failureMarker = workspace.resolve("rust-bitcode-preflight-failure")
     return try {
         Files.deleteIfExists(successMarker.toPath())
+        Files.deleteIfExists(failureMarker.toPath())
         val artifact = RustBitcodeLibraryCompiler().compile(
             packageName = "kotlin_native_rust_module",
             targetTriple = targetTriple,
@@ -212,10 +215,16 @@ internal fun tryCompileRustHybridModule(
         )
         val generatedSymbols = generatedFunctions.associateWith(symbolNamer::linkerName)
         val fallbackSymbols = fallbackFunctions.associateWith(symbolNamer::linkerName)
-        if (!preflightRustBitcode(generationState, artifact.llvmBitcode, generatedSymbols, fallbackSymbols)) return null
-        Files.write(successMarker.toPath(), (artifact.llvmBitcode.fileName.toString() + "\n").toByteArray())
+        val preparedBitcode = prepareRustBitcode(
+            generationState,
+            artifact.llvmBitcode,
+            generatedSymbols,
+            fallbackSymbols,
+            failureMarker.toPath(),
+        ) ?: return null
+        Files.write(successMarker.toPath(), (preparedBitcode.fileName.toString() + "\n").toByteArray())
         RustHybridModuleArtifact(
-            artifact.llvmBitcode.toFile(),
+            preparedBitcode.toFile(),
             generatedFunctions,
             fallbackFunctions,
             needsRustEhPersonality = managedResults.isNotEmpty() || managedFieldResults.isNotEmpty() ||
@@ -256,57 +265,89 @@ private fun IrType.isPrimitiveRustParameterType(): Boolean =
 private fun IrType.isPrimitiveRustReturnType(): Boolean =
     !isNullable() && (isBoolean() || isInt() || isLong() || isFloat() || isDouble() || isUInt() || isULong() || isUnit())
 
-private fun preflightRustBitcode(
+private fun prepareRustBitcode(
     generationState: NativeGenerationState,
     bitcodePath: Path,
     generatedSymbols: Map<IrSimpleFunction, String>,
     fallbackSymbols: Map<IrSimpleFunction, String>,
-): Boolean {
+    failureMarker: Path,
+): Path? {
     var rustModule: LLVMModuleRef? = null
     var rustModuleConsumed = false
     var clone: LLVMModuleRef? = null
+    val normalizedBitcode = bitcodePath.resolveSibling("rust-boundary-normalized.bc")
+    var prepared = false
     return try {
+        fun fail(message: String): Nothing = throw RustBitcodePreparationException(message)
+
+        Files.deleteIfExists(normalizedBitcode)
         rustModule = parseBitcodeFile(
             generationState,
             generationState.diagnosticReporter,
             generationState.llvmContext,
             bitcodePath.toString(),
         )
-        if (moduleTarget(rustModule) != moduleTarget(generationState.llvm.module)) return false
-        if (moduleDataLayout(rustModule) != moduleDataLayout(generationState.llvm.module)) return false
+        if (moduleTarget(rustModule) != moduleTarget(generationState.llvm.module)) fail("Rust and Kotlin modules have different target triples")
+        if (moduleDataLayout(rustModule) != moduleDataLayout(generationState.llvm.module)) fail("Rust and Kotlin modules have different data layouts")
         verifyModule(rustModule, "generated Rust bitcode")
 
         val linkedBoundaryFunctions = LinkedHashMap<IrSimpleFunction, String>(generatedSymbols.size + fallbackSymbols.size)
+        val abiExpectations = ArrayList<RustBoundaryAbiExpectation>(generatedSymbols.size + fallbackSymbols.size)
         for (entry in generatedSymbols.entries) {
-            val kotlinType = generationState.llvmDeclarations.forFunction(entry.key).functionType
-            val rustType = rustBoundaryFunctionType(rustModule, entry.value) ?: return false
-            if (llvmtype2string(kotlinType) != llvmtype2string(rustType)) return false
+            val kotlinFunction = generationState.llvmDeclarations.forFunction(entry.key)
+            val rustType = rustBoundaryFunctionType(rustModule, entry.value)
+                ?: fail("generated Rust boundary '${entry.value}' is missing")
+            if (llvmtype2string(kotlinFunction.functionType) != llvmtype2string(rustType)) {
+                fail("generated Rust boundary '${entry.value}' has a different function type")
+            }
+            abiExpectations += RustBoundaryAbiExpectation.capture(entry.value, kotlinFunction.asCallback())
+                ?: fail("Kotlin boundary '${entry.value}' has unsupported extension attributes")
             linkedBoundaryFunctions[entry.key] = entry.value
         }
         for (entry in fallbackSymbols.entries) {
             val rustType = rustBoundaryFunctionType(rustModule, entry.value) ?: continue
-            val kotlinType = generationState.llvmDeclarations.forFunction(entry.key).functionType
-            if (llvmtype2string(kotlinType) != llvmtype2string(rustType)) return false
+            val kotlinFunction = generationState.llvmDeclarations.forFunction(entry.key)
+            if (llvmtype2string(kotlinFunction.functionType) != llvmtype2string(rustType)) {
+                fail("Rust fallback boundary '${entry.value}' has a different function type")
+            }
+            abiExpectations += RustBoundaryAbiExpectation.capture(entry.value, kotlinFunction.asCallback())
+                ?: fail("Kotlin fallback boundary '${entry.value}' has unsupported extension attributes")
             linkedBoundaryFunctions[entry.key] = entry.value
         }
+        val normalization = normalizeRustBoundaryAbi(rustModule, abiExpectations)
+        if (!normalization.isSuccess) fail(normalization.failure ?: "Rust boundary ABI normalization failed")
+        verifyModule(rustModule, "ABI-normalized generated Rust bitcode")
+        if (!writeRustBoundaryBitcodeAtomically(rustModule, normalizedBitcode)) fail("could not write ABI-normalized Rust bitcode")
 
         clone = LLVMCloneModule(generationState.llvm.module)
             ?: error("Could not clone the Kotlin/Native LLVM module for Rust preflight")
         linkedBoundaryFunctions.values.forEach { symbolName ->
-            val clonedFunction = LLVMGetNamedFunction(clone, symbolName) ?: return false
+            val clonedFunction = LLVMGetNamedFunction(clone, symbolName)
+                ?: fail("Kotlin preflight module is missing boundary '$symbolName'")
             LLVMSetLinkage(clonedFunction, LLVMLinkage.LLVMExternalLinkage)
         }
         rustModuleConsumed = true
-        if (llvmLinkModules2(generationState, clone, rustModule) != 0) return false
-        true
+        if (llvmLinkModules2(generationState, clone, rustModule) != 0) fail("LLVM rejected the normalized Rust module")
+        val linkedVerification = verifyRustBoundaryAbi(clone, abiExpectations)
+        if (!linkedVerification.isSuccess) {
+            fail(linkedVerification.failure ?: "linked Rust boundary ABI verification failed")
+        }
+        prepared = true
+        Files.deleteIfExists(failureMarker)
+        normalizedBitcode
     } catch (failure: Throwable) {
         if (failure is VirtualMachineError || failure is ThreadDeath) throw failure
-        false
+        val message = failure.message ?: failure::class.java.name
+        Files.write(failureMarker, (message + "\n").toByteArray(StandardCharsets.UTF_8))
+        null
     } finally {
         if (!rustModuleConsumed) rustModule?.let { LLVMDisposeModule(it) }
         clone?.let { LLVMDisposeModule(it) }
+        if (!prepared) Files.deleteIfExists(normalizedBitcode)
     }
 }
+
+private class RustBitcodePreparationException(message: String) : Exception(message)
 
 private fun moduleTarget(module: LLVMModuleRef): String = LLVMGetTarget(module)?.toKString().orEmpty()
 
