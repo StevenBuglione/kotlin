@@ -249,6 +249,7 @@ internal class RustIrCodegen(
         private var nextValueIndex = 0
         private var nextLoopIndex = 0
         private var nextReturnableBlockIndex = 0
+        private var nextDirectInteropCallIndex = 0
 
         init {
             function.parameters.forEach { valueName(it) }
@@ -491,15 +492,14 @@ internal class RustIrCodegen(
             primitiveCarrierArgument(call)?.let { return expression(it) }
             if (isUnitSingleton(callee)) return "()"
             directInteropCallResolver.resolve(callee)?.let { directCall ->
-                val renderedArguments = arguments.joinToString { expression(it) }
-                return when (directCall.panicPolicy) {
-                    RustDirectInteropPanicPolicy.ABORT -> buildString {
-                        append("match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ")
-                        append(directCall.rustPath).append('(').append(renderedArguments).appendLine("))) {")
-                        appendLine("    Ok(value) => value,")
-                        appendLine("    Err(_) => std::process::abort(),")
-                        append('}')
-                    }
+                return when (val boundaryPolicy = directCall.boundaryPolicy) {
+                    RustDirectInteropBoundaryPolicy.CatchRustPanicAndAbort ->
+                        renderPanicContainedDirectCall(directCall, arguments)
+                    is RustDirectInteropBoundaryPolicy.Unsupported -> unsupported(
+                        call,
+                        RustUnsupportedCode.UNSUPPORTED_DIRECT_INTEROP_BOUNDARY,
+                        boundaryPolicy.reason,
+                    )
                 }
             }
             if (callee in moduleFunctions) {
@@ -514,6 +514,30 @@ internal class RustIrCodegen(
                 }
             }
             unsupported(call, RustUnsupportedCode.UNSUPPORTED_CALL, "Unsupported call to ${displayName(callee)}")
+        }
+
+        /**
+         * Kotlin argument evaluation may call an `extern "C-unwind"` LLVM fallback and throw a Kotlin exception.
+         * Keep that evaluation outside `catch_unwind`: Rust must catch only a panic originating in the direct crate call.
+         */
+        private fun renderPanicContainedDirectCall(
+            directCall: RustDirectInteropCall,
+            arguments: List<IrExpression>,
+        ): String {
+            val callIndex = nextDirectInteropCallIndex++
+            val argumentNames = arguments.indices.map { index -> "__kn_direct_arg_${callIndex}_$index" }
+            return buildString {
+                appendLine("{")
+                arguments.forEachIndexed { index, argument ->
+                    append("    let ").append(argumentNames[index]).append(" = ").append(expression(argument)).appendLine(";")
+                }
+                append("    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ")
+                append(directCall.rustPath).append('(').append(argumentNames.joinToString()).appendLine("))) {")
+                appendLine("        Ok(value) => value,")
+                appendLine("        Err(_) => std::process::abort(),")
+                appendLine("    }")
+                append('}')
+            }
         }
 
         private fun renderPrintln(callee: IrSimpleFunction, arguments: List<IrExpression>): String? {

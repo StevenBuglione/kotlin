@@ -130,6 +130,32 @@ class RustInteropBridgeArtifactGeneratorTest {
     }
 
     @Test
+    fun opaqueHandlesAreArcOwnedExactlyOnceAndPanicContained() {
+        val plan = RustInteropTomlParser.parsePlan(REGEX_DEFINITION)
+        val artifacts = RustInteropBridgeArtifactGenerator.generate(plan)
+        val close = plan.operations.single { it.kind == RustInteropOperationKind.CLOSE }
+        val closeSymbol = RustInteropBridgeSymbols.bindingSymbol(plan, close)
+        val closeStart = artifacts.rustSource.indexOf("pub unsafe extern \"C\" fn $closeSymbol")
+        val closeEnd = artifacts.rustSource.indexOf("#[no_mangle]", closeStart)
+        val closeBody = artifacts.rustSource.substring(closeStart, closeEnd)
+
+        assertContains(artifacts.rustSource, "HashMap<u64, Arc<regex::Regex>>")
+        assertContains(artifacts.rustSource, "token != 0 && !values.contains_key(&token)")
+        assertContains(artifacts.rustSource, "values.insert(token, Arc::new(value))")
+        assertContains(artifacts.rustSource, "opaque handle registry is exhausted")
+        assertContains(closeBody, ".remove(&handle)")
+        assertContains(closeBody, "KNRI_CLOSED_HANDLE")
+        assertContains(closeBody, "closed handle")
+
+        val exportedShimCount = plan.operations.size + 1 // Operations plus free_utf8.
+        assertEquals(exportedShimCount, artifacts.rustSource.split("contain_boundary(||").size - 1)
+        assertEquals(plan.operations.size + 1, artifacts.rustSource.split("catch_unwind(AssertUnwindSafe").size - 1)
+        assertContains(artifacts.rustSource, "fn contain_boundary(operation: impl FnOnce() -> i32) -> i32")
+        assertContains(artifacts.rustSource, "Err(_) => std::process::abort()")
+        assertContains(artifacts.rustSource, "Err(payload) => report_failure(error")
+    }
+
+    @Test
     fun generatesPrimitiveFreeFunctionArtifactsWithContainedPanicsAndStableSymbols() {
         val plan = primitiveFunctionPlan()
         val operation = plan.operations.single()
@@ -169,7 +195,7 @@ class RustInteropBridgeArtifactGeneratorTest {
         assertContains(artifacts.rustSource, "left: i32, right: i32, output: *mut i32, error: *mut KnriUtf8")
         assertContains(artifacts.rustSource, "if output.is_null()")
         assertContains(artifacts.rustSource, "*output = kn_direct_fixture::add(left, right);")
-        assertEquals(1, artifacts.rustSource.split("catch_unwind(AssertUnwindSafe").size - 1)
+        assertEquals(2, artifacts.rustSource.split("catch_unwind(AssertUnwindSafe").size - 1)
         assertContains(
             artifacts.rustSource,
             "Err(payload) => report_failure(error, Failure { status: KNRI_PANIC, message: panic_message(payload) })",
@@ -393,7 +419,7 @@ class RustInteropBridgeArtifactGeneratorTest {
             panic = "unwind"
         """.trimIndent() + "\n"
         const val EXPECTED_C_HEADER_SHA256 = "c5d3fd5dda2ffcc1385f8c900f7325205240f4bb5553d5710268d690f9289033"
-        const val EXPECTED_RUST_SOURCE_SHA256 = "a6e130ddc8e87a14f4651dfb5577659f874b7d6f5857c1538b6bf5d738536ff2"
+        const val EXPECTED_RUST_SOURCE_SHA256 = "7f7b02945793a49bfb696db5435b0a70e7151121c80e71e4183800dadd871c62"
         const val EXPECTED_KOTLIN_PATH = "rust/regex/knri_dc70ff53756f.kt"
         const val EXPECTED_KOTLIN_FACADE_SHA256 = "9abdd6fa916d40e620207960be1614bfff41af0daa22b362f5b1b3357acf1f31"
     }

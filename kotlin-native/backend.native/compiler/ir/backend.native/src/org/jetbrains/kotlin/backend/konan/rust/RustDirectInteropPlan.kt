@@ -7,7 +7,7 @@ package org.jetbrains.kotlin.backend.konan.rust
 
 import org.jetbrains.kotlin.backend.konan.rust.codegen.RustDirectInteropCall
 import org.jetbrains.kotlin.backend.konan.rust.codegen.RustDirectInteropCallResolver
-import org.jetbrains.kotlin.backend.konan.rust.codegen.RustDirectInteropPanicPolicy
+import org.jetbrains.kotlin.backend.konan.rust.codegen.RustDirectInteropBoundaryPolicy
 import org.jetbrains.kotlin.ir.IrElement
 import org.jetbrains.kotlin.ir.declarations.IrParameterKind
 import org.jetbrains.kotlin.ir.declarations.IrSimpleFunction
@@ -50,14 +50,15 @@ internal class RustDirectInteropPlan private constructor(
     private val bindingsByKotlinName: Map<String, Binding>,
 ) : RustDirectInteropCallResolver {
     private val usedBindings = linkedSetOf<Binding>()
-    internal val bindingCount: Int get() = bindingsByKotlinName.size
+    internal val bindingCount: Int get() = bindingsByKotlinName.values.count { it.boundaryPolicy.isSupported }
+    internal val fallbackBindingCount: Int get() = bindingsByKotlinName.size - bindingCount
 
     override fun resolve(callee: IrSimpleFunction): RustDirectInteropCall? {
         val kotlinName = callee.fqNameWhenAvailable?.asString() ?: return null
         val binding = bindingsByKotlinName[kotlinName] ?: return null
         if (!binding.matchesSignature(callee) || !callee.callsBindingSymbol(binding.bindingSymbol)) return null
-        usedBindings += binding
-        return RustDirectInteropCall(binding.rustPath, RustDirectInteropPanicPolicy.ABORT)
+        if (binding.boundaryPolicy.isSupported) usedBindings += binding
+        return RustDirectInteropCall(binding.rustPath, binding.boundaryPolicy)
     }
 
     fun usedCargoDependencies(cratePathOverrides: Map<String, java.nio.file.Path> = emptyMap()): List<RustCargoDependency> = usedBindings
@@ -81,6 +82,7 @@ internal class RustDirectInteropPlan private constructor(
         val parameters: List<RustInteropPrimitive>,
         val returnType: RustInteropPrimitive,
         val crate: RustInteropCrate,
+        val boundaryPolicy: RustDirectInteropBoundaryPolicy,
     ) {
         fun matchesSignature(function: IrSimpleFunction): Boolean =
             function.parameters.size == parameters.size &&
@@ -132,11 +134,22 @@ internal class RustDirectInteropPlan private constructor(
             if (targetName in targetPolicy.excludedTargets) return null
             if (operation.kind != RustInteropOperationKind.FUNCTION || '.' in operation.kotlinName) return null
             if (operation.receiver.ownership != RustInteropReceiverOwnership.NONE || operation.receiver.handleId != null) return null
-            if (operation.errorPolicy.mode != RustInteropErrorMode.NONE) return null
-            if (operation.panicPolicy.mode != RustInteropPanicMode.ABORT) return null
             if (operation.asyncPolicy != RustInteropAsyncPolicy.SYNCHRONOUS) return null
             val parameters = operation.parameters.map { (it.type as? RustInteropBridgeType.Primitive)?.kind ?: return null }
             val returnType = (operation.returnType as? RustInteropBridgeType.Primitive)?.kind ?: return null
+            val boundaryPolicy = when {
+                operation.errorPolicy.mode != RustInteropErrorMode.NONE -> RustDirectInteropBoundaryPolicy.Unsupported(
+                    "Rust direct interop operation '${operation.id}' requests error policy " +
+                            "'${operation.errorPolicy.mode.externalName}', but direct Rust calls cannot convert Rust errors " +
+                            "to Kotlin exceptions yet",
+                )
+                operation.panicPolicy.mode != RustInteropPanicMode.ABORT -> RustDirectInteropBoundaryPolicy.Unsupported(
+                    "Rust direct interop operation '${operation.id}' requests panic policy " +
+                            "'${operation.panicPolicy.mode.externalName}', but direct Rust calls currently require 'abort' " +
+                            "so a Rust panic cannot cross the Kotlin boundary",
+                )
+                else -> RustDirectInteropBoundaryPolicy.CatchRustPanicAndAbort
+            }
             return Binding(
                 kotlinName = "$kotlinPackage.${operation.kotlinName}",
                 rustPath = operation.rustPath,
@@ -144,10 +157,14 @@ internal class RustDirectInteropPlan private constructor(
                 parameters = parameters,
                 returnType = returnType,
                 crate = crate,
+                boundaryPolicy = boundaryPolicy,
             )
         }
     }
 }
+
+private val RustDirectInteropBoundaryPolicy.isSupported: Boolean
+    get() = this === RustDirectInteropBoundaryPolicy.CatchRustPanicAndAbort
 
 private fun IrSimpleFunction.callsBindingSymbol(bindingSymbol: String): Boolean {
     var found = false

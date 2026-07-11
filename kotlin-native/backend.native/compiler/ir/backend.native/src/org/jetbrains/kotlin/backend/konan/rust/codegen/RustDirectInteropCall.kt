@@ -7,13 +7,21 @@ package org.jetbrains.kotlin.backend.konan.rust.codegen
 
 import org.jetbrains.kotlin.ir.declarations.IrSimpleFunction
 
-internal enum class RustDirectInteropPanicPolicy {
-    ABORT,
+internal sealed interface RustDirectInteropBoundaryPolicy {
+    /** Evaluate Kotlin arguments first, then catch a Rust panic from the crate call and abort. */
+    data object CatchRustPanicAndAbort : RustDirectInteropBoundaryPolicy
+
+    /** The bridge plan requests a conversion that this backend cannot represent safely yet. */
+    data class Unsupported(val reason: String) : RustDirectInteropBoundaryPolicy {
+        init {
+            require(reason.isNotBlank()) { "An unsupported Rust boundary must have a diagnostic reason" }
+        }
+    }
 }
 
 internal data class RustDirectInteropCall(
     val rustPath: String,
-    val panicPolicy: RustDirectInteropPanicPolicy = RustDirectInteropPanicPolicy.ABORT,
+    val boundaryPolicy: RustDirectInteropBoundaryPolicy = RustDirectInteropBoundaryPolicy.CatchRustPanicAndAbort,
 ) {
     init {
         require(RUST_ITEM_PATH.matches(rustPath)) { "Invalid direct Rust item path: $rustPath" }

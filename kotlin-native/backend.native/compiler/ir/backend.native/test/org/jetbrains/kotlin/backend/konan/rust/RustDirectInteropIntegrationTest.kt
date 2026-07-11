@@ -32,6 +32,7 @@ import kotlin.io.path.writeText
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 class RustDirectInteropIntegrationTest {
@@ -54,16 +55,20 @@ class RustDirectInteropIntegrationTest {
                     """.trimIndent()
                 )
                 crate.resolve("src/lib.rs").writeText(
-                    "pub fn add(left: i32, right: i32) -> i32 { left + right }\n"
+                    """
+                        pub fn add(left: i32, right: i32) -> i32 { left + right }
+                        pub fn panic_value(left: i32, right: i32) -> i32 { panic!("fixture panic: {}", left + right) }
+                    """.trimIndent() + "\n"
                 )
             }
             val operation = operation()
+            val panicOperation = operation(id = "panic", rustPath = "direct_fixture::panic_value", kotlinName = "panicValue")
             val plan = RustInteropBridgePlan(
                 schemaVersion = 1,
                 kotlinPackage = "rust.fixture",
                 crate = RustInteropCrate("direct_fixture", FIXTURE_VERSION, emptyList(), true),
                 handles = emptyList(),
-                operations = listOf(operation),
+                operations = listOf(operation, panicOperation),
             )
             val bindingSymbol = RustInteropBridgeSymbols.bindingSymbol(plan, operation)
             val planFile = directory.resolve("bridge-plan.json").apply {
@@ -123,6 +128,31 @@ class RustDirectInteropIntegrationTest {
                 "direct_fixture = { version = \"=$FIXTURE_VERSION\"",
             )
             assertContains(strictWorkspace.resolve("Cargo.toml").readText(), localCrate.absolutePathString())
+
+            val panicBindingSymbol = RustInteropBridgeSymbols.bindingSymbol(plan, panicOperation)
+            val panicSource = directory.resolve("direct-panic.kt").apply {
+                writeText(
+                    """
+                        package rust.fixture
+
+                        private fun $panicBindingSymbol(left: Int, right: Int): Int = -999
+
+                        fun panicValue(left: Int, right: Int): Int = $panicBindingSymbol(left, right)
+
+                        fun main() {
+                            println(panicValue(20, 22))
+                        }
+                    """.trimIndent()
+                )
+            }
+            val panicOutput = directory.resolve("direct-panic-strict")
+            val panicCompilation = compile(compiler, panicSource, planFile, localCrate, panicOutput, "rust-strict")
+            assertEquals(0, panicCompilation.exitCode, panicCompilation.output)
+            val panicRun = runProcess(panicOutput.resolveSibling("direct-panic-strict.kexe").absolutePathString())
+            assertNotEquals(0, panicRun.exitCode, "A Rust panic must be caught and converted to process abort")
+            val panicRustSource = directory.resolve(".kotlin-rust/direct-panic-strict/src/main.rs").readText()
+            assertContains(panicRustSource, "catch_unwind")
+            assertContains(panicRustSource, "Err(_) => std::process::abort()")
         }
     }
 
@@ -166,11 +196,15 @@ class RustDirectInteropIntegrationTest {
         }
     }
 
-    private fun operation() = RustInteropOperation(
-        id = "add",
+    private fun operation(
+        id: String = "add",
+        rustPath: String = "direct_fixture::add",
+        kotlinName: String = "add",
+    ) = RustInteropOperation(
+        id = id,
         kind = RustInteropOperationKind.FUNCTION,
-        rustPath = "direct_fixture::add",
-        kotlinName = "add",
+        rustPath = rustPath,
+        kotlinName = kotlinName,
         receiver = RustInteropReceiver(RustInteropReceiverOwnership.NONE, null),
         parameters = listOf(
             RustInteropParameter("left", RustInteropBridgeType.Primitive(RustInteropPrimitive.INT32)),

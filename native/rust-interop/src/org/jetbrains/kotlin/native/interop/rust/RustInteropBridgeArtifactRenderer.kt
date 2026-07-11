@@ -240,8 +240,13 @@ object RustInteropBridgeArtifactGenerator {
             append("fn panic_message(payload: Box<dyn Any + Send>) -> String {\n")
             append("    if let Some(value) = payload.downcast_ref::<&str>() { (*value).to_owned() } else if let Some(value) = payload.downcast_ref::<String>() { value.clone() } else { \"Rust panic\".into() }\n}\n\n")
         }
+        append("fn contain_boundary(operation: impl FnOnce() -> i32) -> i32 {\n")
+        append("    match catch_unwind(AssertUnwindSafe(operation)) {\n")
+        append("        Ok(status) => status,\n        Err(_) => std::process::abort(),\n    }\n}\n\n")
         append("#[no_mangle]\npub unsafe extern \"C\" fn ").append(aggregate.prefix).append("_free_utf8(data: *mut u8, len: usize) {\n")
-        append("    if !data.is_null() { drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(data, len))); }\n}\n\n")
+        append("    let _ = contain_boundary(|| {\n")
+        append("        if !data.is_null() { unsafe { drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(data, len))); } }\n")
+        append("        KNRI_OK\n    });\n}\n\n")
 
         aggregate.plans.forEach { plan ->
             plan.handles.forEach { handle -> appendRegistry(plan, handle) }
@@ -257,6 +262,15 @@ object RustInteropBridgeArtifactGenerator {
         append("static ").append(name).append("_NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);\n")
         append("fn ").append(name.lowercase()).append("() -> &'static Mutex<HashMap<u64, Arc<").append(handle.rustType).append(">>> {\n")
         append("    ").append(name).append(".get_or_init(|| Mutex::new(HashMap::new()))\n}\n\n")
+        append("fn ").append(name.lowercase()).append("_insert(value: ").append(handle.rustType).append(") -> Result<u64, Failure> {\n")
+        append("    let mut values = ").append(name.lowercase()).append("().lock().unwrap_or_else(|poisoned| poisoned.into_inner());\n")
+        append("    let attempts = values.len().saturating_add(2);\n")
+        append("    for _ in 0..attempts {\n")
+        append("        let token = ").append(name).append("_NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);\n")
+        append("        if token != 0 && !values.contains_key(&token) {\n")
+        append("            values.insert(token, Arc::new(value));\n")
+        append("            return Ok(token);\n        }\n    }\n")
+        append("    Err(Failure { status: KNRI_ERROR, message: \"opaque handle registry is exhausted\".into() })\n}\n\n")
     }
 
     private fun StringBuilder.appendOperation(plan: RustInteropBridgePlan, operation: RustInteropOperation) {
@@ -278,7 +292,7 @@ object RustInteropBridgeArtifactGenerator {
                 append("output: *mut ").append(operation.returnType.rustPrimitiveType()).append(", error: *mut KnriUtf8")
             }
         }
-        append(") -> i32 {\n    let result = catch_unwind(AssertUnwindSafe(|| -> Result<(), Failure> {\n")
+        append(") -> i32 {\n    contain_boundary(|| {\n        let result = catch_unwind(AssertUnwindSafe(|| -> Result<(), Failure> {\n")
         when (operation.kind) {
             RustInteropOperationKind.CONSTRUCTOR -> {
                 val handle = (operation.returnType as RustInteropBridgeType.Handle).id
@@ -286,9 +300,7 @@ object RustInteropBridgeArtifactGenerator {
                 append("        if output.is_null() { return Err(Failure { status: KNRI_INVALID_INPUT, message: \"null output pointer\".into() }); }\n")
                 append("        let ").append(parameter).append(" = read_utf8(").append(parameter).append("_data, ").append(parameter).append("_len)?;\n")
                 append("        let value = ").append(operation.rustPath).append('(').append(parameter).append(").map_err(|error| Failure { status: KNRI_ERROR, message: error.to_string() })?;\n")
-                append("        let token = ").append(outputRegistry).append("_NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);\n")
-                append("        ").append(outputRegistry.lowercase()).append("().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(token, Arc::new(value));\n")
-                append("        *output = token;\n")
+                append("        *output = ").append(outputRegistry.lowercase()).append("_insert(value)?;\n")
             }
             RustInteropOperationKind.METHOD -> {
                 append("        if output.is_null() { return Err(Failure { status: KNRI_INVALID_INPUT, message: \"null output pointer\".into() }); }\n")
@@ -313,13 +325,13 @@ object RustInteropBridgeArtifactGenerator {
                 append(");\n")
             }
         }
-        append("        Ok(())\n    }));\n    match result {\n        Ok(Ok(())) => KNRI_OK,\n        Ok(Err(failure)) => report_failure(error, failure),\n")
+        append("        Ok(())\n        }));\n        match result {\n            Ok(Ok(())) => KNRI_OK,\n            Ok(Err(failure)) => report_failure(error, failure),\n")
         when (panicMode) {
-            RustInteropPanicMode.ABORT -> append("        Err(_) => std::process::abort(),\n")
+            RustInteropPanicMode.ABORT -> append("            Err(_) => std::process::abort(),\n")
             RustInteropPanicMode.FATAL, RustInteropPanicMode.KOTLIN_EXCEPTION ->
-                append("        Err(payload) => report_failure(error, Failure { status: KNRI_PANIC, message: panic_message(payload) }),\n")
+                append("            Err(payload) => report_failure(error, Failure { status: KNRI_PANIC, message: panic_message(payload) }),\n")
         }
-        append("    }\n}\n\n")
+        append("        }\n    })\n}\n\n")
     }
 
     private fun renderCHeader(aggregate: Aggregate): String = buildString {

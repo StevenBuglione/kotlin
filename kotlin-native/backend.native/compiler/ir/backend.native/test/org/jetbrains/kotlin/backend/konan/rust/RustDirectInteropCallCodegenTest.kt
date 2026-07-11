@@ -7,8 +7,10 @@ package org.jetbrains.kotlin.backend.konan.rust
 
 import org.jetbrains.kotlin.backend.konan.rust.codegen.RustDirectInteropCall
 import org.jetbrains.kotlin.backend.konan.rust.codegen.RustDirectInteropCallResolver
+import org.jetbrains.kotlin.backend.konan.rust.codegen.RustDirectInteropBoundaryPolicy
 import org.jetbrains.kotlin.backend.konan.rust.codegen.RustIrCodegen
 import org.jetbrains.kotlin.backend.konan.rust.codegen.RustLinkerSymbolNamer
+import org.jetbrains.kotlin.backend.konan.rust.codegen.RustUnsupportedCode
 import org.jetbrains.kotlin.builtins.DefaultBuiltIns
 import org.jetbrains.kotlin.descriptors.impl.ModuleDescriptorImpl
 import org.jetbrains.kotlin.ir.UNDEFINED_OFFSET
@@ -37,22 +39,21 @@ import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
 
 class RustDirectInteropCallCodegenTest {
     @Test
-    fun rendersContainedDirectCallWithoutMakingFacadeReachable() {
+    fun evaluatesKotlinArgumentsBeforeContainingOnlyTheRustCall() {
         val fixture = IrFixture()
-        val helper = fixture.function("argumentHelper") { function ->
-            IrGetValueImpl(UNDEFINED_OFFSET, UNDEFINED_OFFSET, function.parameters.single().symbol)
-        }
+        val kotlinArgument = fixture.function("kotlinArgument", isExternal = true)
         val facade = fixture.function("interopFacade", isExternal = true)
         val entry = fixture.function("entry") { function ->
-            val helperCall = call(helper, fixture.intType, IrGetValueImpl(
+            val kotlinArgumentCall = call(kotlinArgument, fixture.intType, IrGetValueImpl(
                 UNDEFINED_OFFSET,
                 UNDEFINED_OFFSET,
                 function.parameters.single().symbol,
             ))
-            call(facade, fixture.intType, helperCall)
+            call(facade, fixture.intType, kotlinArgumentCall)
         }
         val resolver = RustDirectInteropCallResolver { callee ->
             RustDirectInteropCall("direct_fixture::double").takeIf { callee === facade }
@@ -63,22 +64,47 @@ class RustDirectInteropCallCodegenTest {
             directInteropCallResolver = resolver,
         ).generate(fixture.module, listOf(entry))
 
-        assertEquals(listOf(entry, helper).toSet(), result.generatedFunctions.map { it.declaration }.toSet())
-        assertEquals(emptyList(), result.fallbackFunctions)
+        assertEquals(setOf(entry), result.generatedFunctions.map { it.declaration }.toSet())
+        assertEquals(listOf(kotlinArgument), result.fallbackFunctions.map { it.declaration })
         assertFalse(result.generatedFunctions.any { it.declaration === facade })
         assertFalse(result.fallbackFunctions.any { it.declaration === facade })
         assertFalse("interopFacade" in result.source)
-        val helperRustName = result.generatedFunctions.single { it.declaration === helper }.rustName
-        assertContains(
-            result.source,
-            "match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| " +
-                    "direct_fixture::double($helperRustName(value_0)))) {\n" +
-                    "        Ok(value) => value,\n" +
-                    "        Err(_) => std::process::abort(),\n" +
-                    "    }",
+        assertContains(result.source, "let __kn_direct_arg_0_0 = unsafe { ")
+        assertContains(result.source, "__llvm(value_0) };")
+        assertContains(result.source, "catch_unwind(std::panic::AssertUnwindSafe(|| direct_fixture::double(__kn_direct_arg_0_0)))")
+        assertTrue(
+            result.source.indexOf("let __kn_direct_arg_0_0") < result.source.indexOf("catch_unwind"),
+            "A potentially throwing Kotlin argument must be evaluated before the Rust panic catcher",
         )
-        assertContains(result.source, "#[export_name = \"link_argumentHelper\"]")
+        assertFalse("resume_unwind" in result.source)
         assertContains(result.source, "#[export_name = \"link_entry\"]")
+    }
+
+    @Test
+    fun reportsUnsupportedBoundaryConversionInsteadOfEmittingACall() {
+        val fixture = IrFixture()
+        val facade = fixture.function("interopFacade", isExternal = true)
+        val entry = fixture.function("entry") { function ->
+            call(facade, fixture.intType, IrGetValueImpl(
+                UNDEFINED_OFFSET,
+                UNDEFINED_OFFSET,
+                function.parameters.single().symbol,
+            ))
+        }
+        val resolver = RustDirectInteropCallResolver { callee ->
+            RustDirectInteropCall(
+                "direct_fixture::fallible",
+                RustDirectInteropBoundaryPolicy.Unsupported("Rust errors cannot be converted to Kotlin exceptions yet"),
+            ).takeIf { callee === facade }
+        }
+
+        val result = RustIrCodegen(directInteropCallResolver = resolver).generate(fixture.module, listOf(entry))
+
+        assertTrue(result.generatedFunctions.isEmpty())
+        assertEquals(listOf(entry), result.fallbackFunctions.map { it.declaration })
+        assertEquals(RustUnsupportedCode.UNSUPPORTED_DIRECT_INTEROP_BOUNDARY, result.diagnostics.single().code)
+        assertContains(result.diagnostics.single().message, "cannot be converted")
+        assertFalse("direct_fixture::fallible" in result.source)
     }
 
     @Test

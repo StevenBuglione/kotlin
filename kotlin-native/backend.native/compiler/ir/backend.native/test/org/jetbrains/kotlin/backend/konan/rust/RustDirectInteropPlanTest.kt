@@ -35,13 +35,17 @@ class RustDirectInteropPlanTest {
         val throwing = operation(id = "throwing", kotlinName = "throwing").copy(
             panicPolicy = RustInteropPanicPolicy(RustInteropPanicMode.KOTLIN_EXCEPTION, "FixtureException")
         )
+        val errorConversion = operation(id = "result", kotlinName = "result").copy(
+            errorPolicy = RustInteropErrorPolicy(RustInteropErrorMode.KOTLIN_EXCEPTION, "FixtureException")
+        )
 
         val plan = RustDirectInteropPlan.fromPlans(
-            listOf(plan(operations = listOf(direct, wrongTarget, throwing))),
+            listOf(plan(operations = listOf(direct, wrongTarget, throwing, errorConversion))),
             targetName = "linuxX64",
         )
 
         assertEquals(1, plan.bindingCount)
+        assertEquals(2, plan.fallbackBindingCount)
     }
 
     @Test
