@@ -76,16 +76,22 @@ if [[ -n "${ARC_FIXTURE_SANITIZER:-}" ]]; then
 fi
 
 if [[ "$profile" == unowned-death ]]; then
+    expected_diagnostic='Uncaught Kotlin exception: kotlin.IllegalStateException: attempted to access an expired @ArcUnowned reference'
     set +e
     "$executable" >"$artifacts/runtime.log" 2>&1
     exit_code=$?
     set -e
     cat "$artifacts/runtime.log"
     (( exit_code != 0 )) || { echo "expired @ArcUnowned access unexpectedly returned successfully" >&2; exit 1; }
-    grep -Fq 'attempted to access an expired @ArcUnowned reference' "$artifacts/runtime.log" || {
-        echo "expired @ArcUnowned access did not emit its lifetime diagnostic" >&2
+    grep -Fxq "$expected_diagnostic" "$artifacts/runtime.log" || {
+        echo "expired @ArcUnowned access did not emit its exact typed lifetime diagnostic" >&2
         exit 1
     }
+    if grep -Fq 'expired @ArcUnowned access was catchable' "$artifacts/runtime.log" ||
+            grep -Fq 'expired @ArcUnowned access unexpectedly survived' "$artifacts/runtime.log"; then
+        echo "expired @ArcUnowned access continued after its lifetime failure" >&2
+        exit 1
+    fi
     echo "ARC_UNOWNED_DEATH_OK exitCode=$exit_code"
 elif [[ "$profile" == stress ]]; then
     command -v /usr/bin/time >/dev/null || { echo "/usr/bin/time is required for the ARC RSS bound" >&2; exit 1; }

@@ -47,7 +47,18 @@ class ArcProfileTest(unittest.TestCase):
             command = arc.profile_command("arc-unowned-death")
         self.assertEqual(["bash", "tools/arc/run_fixture.sh", "unowned-death"], command)
         script = (Path(__file__).parent / "run_fixture.sh").read_text()
+        self.assertIn("grep -Fxq", script)
+        self.assertIn("kotlin.IllegalStateException", script)
         self.assertIn("attempted to access an expired @ArcUnowned reference", script)
+        self.assertIn("expired @ArcUnowned access was catchable", script)
+        self.assertIn("expired @ArcUnowned access unexpectedly survived", script)
+
+        fixture = (Path(__file__).parent / "fixtures" / "unowned-death.kt").read_text()
+        self.assertIn("holder.reassign(second)", fixture)
+        self.assertIn("holderWithReassignedExpiredTarget()", fixture)
+        self.assertIn("check(holder.weakTarget == null)", fixture)
+        self.assertIn("churnAllocator()", fixture)
+        self.assertIn("catch (failure: Throwable)", fixture)
 
     def test_no_collector_profile_uses_ordinary_arc_fixture(self):
         with patch.dict(os.environ, {}, clear=True):
