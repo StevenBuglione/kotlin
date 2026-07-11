@@ -60,9 +60,18 @@ struct WeakCounterPayload {
     static constexpr std::array<ObjHeader* WeakCounterPayload::*, 0> kFields{};
 };
 
+struct RecycledPayload {
+    ObjHeader* reference = nullptr;
+    uint64_t marker = 0;
+    static constexpr std::array<ObjHeader* RecycledPayload::*, 1> kFields{&RecycledPayload::reference};
+};
+
 using Object = kotlin::test_support::Object<Payload>;
 using Node = kotlin::test_support::Object<NodePayload>;
 using WeakCounter = kotlin::test_support::Object<WeakCounterPayload>;
+using RecycledObject = kotlin::test_support::Object<RecycledPayload>;
+
+void recycledArcDestroy(ObjHeader* object);
 
 struct FrameStorage {
     FrameOverlay overlay{};
@@ -83,7 +92,14 @@ kotlin::test_support::TypeInfoHolder nodeTypeInfo{
         kotlin::test_support::TypeInfoHolder::ObjectBuilder<NodePayload>().addFlag(TF_HAS_FINALIZER)};
 kotlin::test_support::TypeInfoHolder weakCounterTypeInfo{
         kotlin::test_support::TypeInfoHolder::ObjectBuilder<WeakCounterPayload>()};
+kotlin::test_support::TypeInfoHolder recycledTypeInfo{
+        kotlin::test_support::TypeInfoHolder::ObjectBuilder<RecycledPayload>()
+                .addFlag(TF_HAS_FINALIZER)
+                .setArcDestroy(recycledArcDestroy)};
 std::atomic<int> finalizedNodes = 0;
+std::atomic<int> finalizedRecycledObjects = 0;
+std::atomic<int> recycledArcDeinitCount = 0;
+std::atomic<bool> recycledArcDeinitSawInitializedPayload = false;
 std::atomic<bool> finalizerSawRegisteredRuntime = false;
 std::atomic<FrameOverlay*> finalizerObservedFrame = nullptr;
 std::atomic<bool> resurrectionRejected = false;
@@ -103,6 +119,10 @@ ObjHeader* permanentHeader() {
 }
 
 void countNodeFinalizer(ObjHeader* object) {
+    if (object->type_info() == recycledTypeInfo.typeInfo()) {
+        finalizedRecycledObjects.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
     if (object->type_info() != nodeTypeInfo.typeInfo()) return;
     finalizedNodes.fetch_add(1, std::memory_order_relaxed);
     finalizerSawRegisteredRuntime.store(kotlin::mm::IsCurrentThreadRegistered(), std::memory_order_relaxed);
@@ -114,6 +134,14 @@ void countNodeFinalizer(ObjHeader* object) {
         weakWasZeroBeforeFinalizer.store(promoted == nullptr, std::memory_order_relaxed);
         if (promoted != nullptr) ReleaseHeapRef(promoted);
     }
+}
+
+void recycledArcDestroy(ObjHeader* object) {
+    auto& payload = *RecycledObject::FromObjHeader(object);
+    recycledArcDeinitSawInitializedPayload.store(
+            payload.reference == permanentHeader() && payload.marker == 0xfeedfacecafebeefULL,
+            std::memory_order_relaxed);
+    recycledArcDeinitCount.fetch_add(1, std::memory_order_relaxed);
 }
 
 void baseArcDestroy(ObjHeader* object) {
@@ -143,6 +171,9 @@ class ScopedNodeFinalizerHook {
 public:
     ScopedNodeFinalizerHook() {
         finalizedNodes.store(0, std::memory_order_relaxed);
+        finalizedRecycledObjects.store(0, std::memory_order_relaxed);
+        recycledArcDeinitCount.store(0, std::memory_order_relaxed);
+        recycledArcDeinitSawInitializedPayload.store(false, std::memory_order_relaxed);
         finalizerSawRegisteredRuntime.store(false, std::memory_order_relaxed);
         finalizerObservedFrame.store(nullptr, std::memory_order_relaxed);
         resurrectionRejected.store(false, std::memory_order_relaxed);
@@ -291,6 +322,44 @@ TEST(ArcDestructionTest, NewAllocationMovesInitialOwnershipIntoResultSlot) {
     });
 }
 
+TEST(ArcRecyclingTest, ReusesExactSizeAfterCompleteFinalizationAndZeroesPayload) {
+    ScopedNodeFinalizerHook finalizers;
+    kotlin::RunInNewThread([] {
+        uintptr_t firstAddress = 0;
+        {
+            ObjHolder first;
+            ObjHeader* allocated = AllocInstance(recycledTypeInfo.typeInfo(), first.slot());
+            firstAddress = reinterpret_cast<uintptr_t>(allocated);
+            auto& payload = *RecycledObject::FromObjHeader(allocated);
+            UpdateHeapRef(&payload.reference, permanentHeader());
+            payload.marker = 0xfeedfacecafebeefULL;
+            Kotlin_ArcMarkDeinitInitialized(allocated, recycledTypeInfo.typeInfo());
+
+            first.clear();
+
+            EXPECT_EQ(finalizedRecycledObjects.load(std::memory_order_relaxed), 1);
+            EXPECT_EQ(recycledArcDeinitCount.load(std::memory_order_relaxed), 1);
+            EXPECT_TRUE(recycledArcDeinitSawInitializedPayload.load(std::memory_order_relaxed));
+        }
+
+        ObjHolder second;
+        ObjHeader* recycled = AllocInstance(recycledTypeInfo.typeInfo(), second.slot());
+        EXPECT_EQ(reinterpret_cast<uintptr_t>(recycled), firstAddress);
+        auto& recycledPayload = *RecycledObject::FromObjHeader(recycled);
+        EXPECT_EQ(recycledPayload.reference, nullptr);
+        EXPECT_EQ(recycledPayload.marker, 0u);
+
+        UpdateHeapRef(&recycledPayload.reference, permanentHeader());
+        recycledPayload.marker = 0xfeedfacecafebeefULL;
+        Kotlin_ArcMarkDeinitInitialized(recycled, recycledTypeInfo.typeInfo());
+        second.clear();
+
+        EXPECT_EQ(finalizedRecycledObjects.load(std::memory_order_relaxed), 2);
+        EXPECT_EQ(recycledArcDeinitCount.load(std::memory_order_relaxed), 2);
+        EXPECT_TRUE(recycledArcDeinitSawInitializedPayload.load(std::memory_order_relaxed));
+    });
+}
+
 TEST(ArcForeignReferenceTest, FinalReleaseOnInitiallyUnregisteredThreadRegistersRuntimeBeforeFinalization) {
     ScopedNodeFinalizerHook finalizers;
     kotlin::RunInNewThread([] {
@@ -313,6 +382,38 @@ TEST(ArcForeignReferenceTest, FinalReleaseOnInitiallyUnregisteredThreadRegisters
         EXPECT_TRUE(registeredAfterDispose.load(std::memory_order_relaxed));
         EXPECT_TRUE(finalizerSawRegisteredRuntime.load(std::memory_order_relaxed));
         EXPECT_EQ(finalizedNodes.load(std::memory_order_relaxed), 1);
+    });
+}
+
+TEST(ArcRecyclingTest, CrossThreadFinalReleaseRecyclesOnTheReleasingThread) {
+    ScopedNodeFinalizerHook finalizers;
+    kotlin::RunInNewThread([] {
+        ObjHolder object;
+        ObjHeader* allocatedObject = AllocInstance(nodeTypeInfo.typeInfo(), object.slot());
+        uintptr_t originalAddress = reinterpret_cast<uintptr_t>(allocatedObject);
+        KRefSharedHolder holder;
+        holder.init(allocatedObject);
+        object.clear();
+
+        std::atomic<bool> initiallyRegistered = true;
+        std::atomic<bool> registeredAfterDispose = false;
+        std::atomic<uintptr_t> recycledAddress = 0;
+        std::thread foreignThread([&] {
+            initiallyRegistered.store(kotlin::mm::IsCurrentThreadRegistered(), std::memory_order_relaxed);
+            holder.dispose();
+            registeredAfterDispose.store(kotlin::mm::IsCurrentThreadRegistered(), std::memory_order_relaxed);
+
+            ObjHolder replacement;
+            ObjHeader* replacementObject = AllocInstance(nodeTypeInfo.typeInfo(), replacement.slot());
+            recycledAddress.store(reinterpret_cast<uintptr_t>(replacementObject), std::memory_order_relaxed);
+            replacement.clear();
+        });
+        foreignThread.join();
+
+        EXPECT_FALSE(initiallyRegistered.load(std::memory_order_relaxed));
+        EXPECT_TRUE(registeredAfterDispose.load(std::memory_order_relaxed));
+        EXPECT_EQ(recycledAddress.load(std::memory_order_relaxed), originalAddress);
+        EXPECT_EQ(finalizedNodes.load(std::memory_order_relaxed), 2);
     });
 }
 
@@ -340,6 +441,32 @@ TEST(ArcDestructionTest, WeakTargetIsZeroBeforeFinalizerAndCannotResurrect) {
         EXPECT_TRUE(resurrectionRejected.load(std::memory_order_relaxed));
         EXPECT_TRUE(weakWasZeroBeforeFinalizer.load(std::memory_order_relaxed));
         EXPECT_EQ(WeakCounter::FromObjHeader(allocatedCounter)->referred, nullptr);
+    });
+}
+
+TEST(ArcRecyclingTest, RecycledAddressDoesNotResurrectClearedWeakReference) {
+    ScopedNodeFinalizerHook finalizers;
+    kotlin::RunInNewThread([] {
+        ObjHolder object;
+        ObjHolder counter;
+        ObjHeader* allocatedObject = AllocInstance(nodeTypeInfo.typeInfo(), object.slot());
+        uintptr_t originalAddress = reinterpret_cast<uintptr_t>(allocatedObject);
+        ObjHeader* allocatedCounter = AllocInstance(weakCounterTypeInfo.typeInfo(), counter.slot());
+        installWeakCounter(allocatedObject, allocatedCounter);
+
+        object.clear();
+        EXPECT_EQ(finalizedNodes.load(std::memory_order_relaxed), 1);
+
+        ObjHolder replacement;
+        ObjHeader* replacementObject = AllocInstance(nodeTypeInfo.typeInfo(), replacement.slot());
+        EXPECT_EQ(reinterpret_cast<uintptr_t>(replacementObject), originalAddress);
+
+        ObjHeader* promoted = nullptr;
+        Konan_WeakReferenceCounterLegacyMM_get(allocatedCounter, &promoted);
+        EXPECT_EQ(promoted, nullptr);
+
+        replacement.clear();
+        EXPECT_EQ(finalizedNodes.load(std::memory_order_relaxed), 2);
     });
 }
 

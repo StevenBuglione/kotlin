@@ -863,6 +863,12 @@ struct MemoryState {
 
 #if !USE_GC
   ForeignRefManager* foreignRefManager;
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+  // Keep one small, fully destroyed allocation close to the thread that released it.
+  // This avoids repeatedly entering the allocator for homogeneous ARC workloads while
+  // bounding retained memory independently of the number of objects being destroyed.
+  ContainerHeader* arcRecycledContainer = nullptr;
+#endif
 #endif
 
   // A stack of initializing singletons.
@@ -1186,8 +1192,41 @@ inline bool isFreezableAtomic(ContainerHeader* container) {
   return isFreezableAtomic(obj);
 }
 
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+constexpr size_t kArcRecycledContainerMaxSize = 4 * 1024;
+
+void flushArcRecycledContainer(MemoryState* state) {
+  ContainerHeader* container = state->arcRecycledContainer;
+  if (container == nullptr) return;
+
+  state->arcRecycledContainer = nullptr;
+  CONTAINER_DESTROY_EVENT(state, container);
+  freeInObjectPool(container, 0);
+  atomicAdd(&allocCount, -1);
+}
+#endif
+
 ContainerHeader* allocContainer(MemoryState* state, size_t size) {
  ContainerHeader* result = nullptr;
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+  bool reusedArcContainer = false;
+  if (state != nullptr && state->arcRecycledContainer != nullptr) {
+    ContainerHeader* container = state->arcRecycledContainer;
+    if (container->hasContainerSize() && container->containerSize() == size) {
+      MEMORY_LOG("ARC recycle %p for request %zu\n", container, size)
+      state->arcRecycledContainer = nullptr;
+      result = container;
+      reusedArcContainer = true;
+      // Restore the complete allocation, including the ARC deallocating bit and all
+      // object payload, to the same state as a fresh zero-initialized pool allocation.
+      memset(container, 0, kotlin::AlignUp(size, kObjectAlignment));
+    } else {
+      // Do not let a stale size monopolize the bounded slot after an allocation phase
+      // changes to another object layout.
+      flushArcRecycledContainer(state);
+    }
+  }
+#endif
 #if USE_GC
   // We recycle elements of finalizer queue for new allocations, to avoid trashing memory manager.
   ContainerHeader* container = state != nullptr ? state->finalizerQueue : nullptr;
@@ -1218,12 +1257,23 @@ ContainerHeader* allocContainer(MemoryState* state, size_t size) {
     result = new (allocateInObjectPool(kotlin::AlignUp(size, kObjectAlignment))) ContainerHeader();
     atomicAdd(&allocCount, 1);
   }
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+  // Container events account for physical pool allocations. Logical object
+  // allocation is still recorded by OBJECT_ALLOC_EVENT below this layer.
+  if (state != nullptr && !reusedArcContainer) {
+    CONTAINER_ALLOC_EVENT(state, size, result);
+#if TRACE_MEMORY
+    state->containers->insert(result);
+#endif
+  }
+#else
   if (state != nullptr) {
     CONTAINER_ALLOC_EVENT(state, size, result);
 #if TRACE_MEMORY
     state->containers->insert(result);
 #endif
   }
+#endif
   return result;
 }
 
@@ -1297,6 +1347,15 @@ void scheduleDestroyContainer(MemoryState* state, ContainerHeader* container) {
     processFinalizerQueue(state);
   }
 #else
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+  RuntimeAssert(container != nullptr, "Cannot destroy null container");
+  if (state != nullptr && state->arcRecycledContainer == nullptr &&
+      !isAggregatingFrozenContainer(container) && container->hasContainerSize() &&
+      container->containerSize() <= kArcRecycledContainerMaxSize) {
+    state->arcRecycledContainer = container;
+    return;
+  }
+#endif
   CONTAINER_DESTROY_EVENT(state, container);
   freeInObjectPool(container, 0);
   atomicAdd(&allocCount, -1);
@@ -2399,6 +2458,9 @@ void deinitMemory(MemoryState* memoryState, bool destroyRuntime) {
   }
   memoryState->foreignRefManager = nullptr;
   memoryState->tls.Deinit();
+  // Foreign-reference draining and TLS teardown may both perform final ARC releases.
+  // Return the last cached physical allocation only after those release sources stop.
+  flushArcRecycledContainer(memoryState);
 #if KONAN_ARC_DIAGNOSTICS
   // Only the final orderly runtime teardown owns process-wide leak reporting. Concurrent
   // foreign-thread teardown is not an orderly shutdown and is deliberately not diagnosed.
