@@ -42,8 +42,8 @@ bitcode {
             sourceSets {
                 main {
                     // TODO: Split out out `base` module and merge it together with `main` into `runtime.bc`
-                    if (sanitizer == null) {
-                        outputFile.set(layout.buildDirectory.file("bitcode/main/$target/runtime.bc"))
+                    if (sanitizer == null || sanitizer == BuildToolsSanitizer.UNDEFINED) {
+                        outputFile.set(layout.buildDirectory.file("bitcode/main/${target}${sanitizer?.targetSuffix.orEmpty()}/runtime.bc"))
                     }
                 }
                 testFixtures {}
@@ -64,14 +64,14 @@ bitcode {
             compiler.set("clang")
             compilerArgs.set(listOfNotNull(
                     "-std=gnu11",
-                    if (sanitizer == SanitizerKind.THREAD) { "-O1" } else { "-O3" },
+                    if (sanitizer == BuildToolsSanitizer.THREAD) { "-O1" } else { "-O3" },
                     "-DKONAN_MI_MALLOC=1",
                     "-Wno-unknown-pragmas",
                     "-ftls-model=initial-exec",
                     "-Wno-unused-function",
                     "-Wno-error=atomic-alignment",
                     "-Wno-unused-parameter", /* for windows 32 */
-                    "-DMI_TSAN=1".takeIf { sanitizer == SanitizerKind.THREAD },
+                    "-DMI_TSAN=1".takeIf { sanitizer == BuildToolsSanitizer.THREAD },
             ))
 
             onlyIf { target.supportsMimallocAllocator() }
@@ -367,8 +367,8 @@ bitcode {
             testedModules.addAll("main", "legacy_memory_manager", "strict", "std_alloc", "objc")
         }
 
-        // Keep the ARC manager itself under the same instrumentation as generated
-        // Kotlin code. Linux x64 exposes both the ordinary and ASan target variants.
+        // Keep the ARC manager itself under the selected native instrumentation.
+        // Linux x64 exposes ordinary, ASan, and UBSan target variants.
         if (target == KonanTarget.LINUX_X64) {
             testsGroup("arc_runtime_tests") {
                 testedModules.addAll("main", "arc_memory_manager", "arc", "std_alloc", "objc")
@@ -559,6 +559,17 @@ targetList.forEach { targetName ->
 
         destinationDir = project.buildDir.resolve("${targetName}Stdlib")
 
+        if (targetName == KonanTarget.LINUX_X64.name) {
+            doFirst {
+                // Remove files produced by the initial sibling-file UBSAN layout.
+                // Copy tasks do not delete obsolete outputs when layouts evolve.
+                delete(
+                        destinationDir.resolve("default/targets/$targetName/native/runtime_ubsan.bc"),
+                        destinationDir.resolve("default/targets/$targetName/native/compiler_interface_ubsan.bc"),
+                )
+            }
+        }
+
         from(project.buildDir.resolve("stdlib/${hostName}/stdlib"))
         val runtimeFiles = runtimeBitcode.incoming.artifactView {
             attributes {
@@ -568,6 +579,24 @@ targetList.forEach { targetName ->
         from(runtimeFiles) {
             include("runtime.bc", "compiler_interface.bc")
             into("default/targets/$targetName/native")
+        }
+
+        if (targetName == KonanTarget.LINUX_X64.name) {
+            val ubsanRuntimeFiles = runtimeBitcode.incoming.artifactView {
+                attributes {
+                    attribute(
+                            TargetWithSanitizer.TARGET_ATTRIBUTE,
+                            project.platformManager.targetByName(targetName).withSanitizer(BuildToolsSanitizer.UNDEFINED)
+                    )
+                }
+            }.files
+            from(ubsanRuntimeFiles) {
+                include("runtime.bc", "compiler_interface.bc")
+                // Keep instrumented stdlib bitcode outside `native`: KLIB discovers
+                // every bitcode file in that component and would otherwise link both
+                // ordinary and UBSAN definitions into non-sanitized caches.
+                into("default/targets/$targetName/ubsan")
+            }
         }
 
         if (targetName != hostName) {

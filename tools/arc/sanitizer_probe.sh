@@ -48,17 +48,17 @@ fi
 
 case "$requested" in
     asan)
-        compiler_name=address
+        compiler_option='-Xbinary=sanitizer=address'
         symbol_regex='__asan_(init|report|load|store)'
         runtime_env=(env 'ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1')
         ;;
     ubsan)
-        compiler_name=undefined
+        compiler_option='-Xbinary=undefinedBehaviorSanitizer=true'
         symbol_regex='__ubsan_handle_'
         runtime_env=(env 'UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1')
         ;;
     tsan)
-        compiler_name=thread
+        compiler_option='-Xbinary=sanitizer=thread'
         symbol_regex='__tsan_(init|func_entry|read|write)'
         runtime_env=(env 'TSAN_OPTIONS=halt_on_error=1:history_size=7:second_deadlock_stack=1')
         ;;
@@ -70,10 +70,11 @@ executable="$output.kexe"
 compiler_log="$artifacts/compiler.log"
 runtime_log="$artifacts/runtime.log"
 symbols="$artifacts/symbols.txt"
+disassembly="$artifacts/disassembly.txt"
 result_tsv="$artifacts/result.tsv"
 result_json="$artifacts/result.json"
 mkdir -p "$artifacts"
-rm -f "$output" "$executable" "$compiler_log" "$runtime_log" "$symbols" "$result_tsv" "$result_json"
+rm -f "$output" "$executable" "$compiler_log" "$runtime_log" "$symbols" "$disassembly" "$result_tsv" "$result_json"
 
 publish_result() {
     local status=$1 reason=$2
@@ -83,7 +84,7 @@ publish_result() {
 }
 
 "$compiler" "$source" -target linux_x64 -memory-model arc -opt \
-    "-Xbinary=sanitizer=$compiler_name" -o "$output" >"$compiler_log" 2>&1
+    "$compiler_option" -o "$output" >"$compiler_log" 2>&1
 compile_status=$?
 cat "$compiler_log"
 
@@ -112,6 +113,17 @@ readelf -Ws "$executable" >"$symbols"
 if ! grep -Eq "$symbol_regex" "$symbols"; then
     publish_result UNSUPPORTED no_instrumentation_symbols
     exit 77
+fi
+if [[ "$requested" == ubsan ]]; then
+    if ! command -v objdump >/dev/null; then
+        publish_result FAIL objdump_unavailable
+        exit 1
+    fi
+    objdump -d "$executable" >"$disassembly"
+    if ! grep -Eq 'call[q]?[[:space:]]+.*<__ubsan_handle_' "$disassembly"; then
+        publish_result UNSUPPORTED no_ubsan_instrumentation_calls
+        exit 77
+    fi
 fi
 
 "${runtime_env[@]}" "$executable" >"$runtime_log" 2>&1

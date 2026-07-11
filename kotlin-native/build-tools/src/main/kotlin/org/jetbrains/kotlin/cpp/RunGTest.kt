@@ -25,6 +25,7 @@ private abstract class RunGTestJob : WorkAction<RunGTestJob.Parameters> {
         val reportFileUnprocessed: RegularFileProperty
         val filter: Property<String>
         val tsanSuppressionsFile: RegularFileProperty
+        val ubsanEnabled: Property<Boolean>
         val platformManager: Property<PlatformManager>
         // TODO: Figure out a way to pass KonanTarget, but it is used as a key into PlatformManager,
         //       so object identity matters, and platform managers are different between project and worker sides.
@@ -57,6 +58,9 @@ private abstract class RunGTestJob : WorkAction<RunGTestJob.Parameters> {
                 }
                 tsanSuppressionsFile.orNull?.also {
                     this.environment.put("TSAN_OPTIONS", "suppressions=${it.asFile.absolutePath}")
+                }
+                if (ubsanEnabled.get()) {
+                    this.environment.put("UBSAN_OPTIONS", "halt_on_error=1:print_stacktrace=1")
                 }
             }).assertSuccess()
 
@@ -128,6 +132,9 @@ abstract class RunGTest : DefaultTask() {
     @get:Optional
     abstract val tsanSuppressionsFile: RegularFileProperty
 
+    @get:Input
+    abstract val ubsanEnabled: Property<Boolean>
+
     @get:Inject
     protected abstract val workerExecutor: WorkerExecutor
 
@@ -145,6 +152,7 @@ abstract class RunGTest : DefaultTask() {
             reportFileUnprocessed.set(this@RunGTest.reportFileUnprocessed)
             filter.set(this@RunGTest.filter)
             tsanSuppressionsFile.set(this@RunGTest.tsanSuppressionsFile)
+            ubsanEnabled.set(this@RunGTest.ubsanEnabled)
             platformManager.set(project.extensions.getByType<PlatformManager>())
             targetName.set(this@RunGTest.target.get().name)
         }

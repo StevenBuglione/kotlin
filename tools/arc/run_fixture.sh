@@ -28,7 +28,11 @@ rm -f "$output" "$executable" "$artifacts/max-rss-kib" "$compiler_log"
 
 compiler_args=("$source" -target linux_x64 -memory-model arc -o "$output")
 if [[ -n "${ARC_FIXTURE_SANITIZER:-}" ]]; then
-    compiler_args+=("-Xbinary=sanitizer=$ARC_FIXTURE_SANITIZER")
+    if [[ "$ARC_FIXTURE_SANITIZER" == undefined ]]; then
+        compiler_args+=("-Xbinary=undefinedBehaviorSanitizer=true")
+    else
+        compiler_args+=("-Xbinary=sanitizer=$ARC_FIXTURE_SANITIZER")
+    fi
     echo "ARC_FIXTURE_SANITIZER=$ARC_FIXTURE_SANITIZER"
 fi
 "$compiler" "${compiler_args[@]}" 2>&1 | tee "$compiler_log"
@@ -55,6 +59,14 @@ if [[ -n "${ARC_FIXTURE_SANITIZER:-}" ]]; then
         echo "requested $ARC_FIXTURE_SANITIZER sanitizer produced no instrumentation symbols" >&2
         exit 1
     }
+    if [[ "$ARC_FIXTURE_SANITIZER" == undefined ]]; then
+        command -v objdump >/dev/null || { echo "objdump is required to verify UBSAN call sites" >&2; exit 1; }
+        objdump -d "$executable" >"$artifacts/sanitizer-disassembly.txt"
+        grep -Eq 'call[q]?[[:space:]]+.*<__ubsan_handle_' "$artifacts/sanitizer-disassembly.txt" || {
+            echo "requested undefined sanitizer produced no instrumentation calls" >&2
+            exit 1
+        }
+    fi
 fi
 
 if [[ "$profile" == unowned-death ]]; then

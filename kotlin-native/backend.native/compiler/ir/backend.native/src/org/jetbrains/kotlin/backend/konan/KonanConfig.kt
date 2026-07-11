@@ -71,6 +71,23 @@ class KonanConfig(val project: Project, val configuration: CompilerConfiguration
         return@takeIf true
     }
 
+    val undefinedBehaviorSanitizer = if (configuration.get(BinaryOptions.undefinedBehaviorSanitizer) == true) {
+        val unsupportedReason = when {
+            produce == CompilerOutputKind.STATIC -> "undefined behavior sanitizer is unsupported for static library"
+            target != KonanTarget.LINUX_X64 -> "undefined behavior sanitizer is unsupported on ${target.name}"
+            sanitizer != null -> "undefined behavior sanitizer cannot be combined with ${sanitizer.name} sanitizer"
+            else -> null
+        }
+        if (unsupportedReason != null) {
+            configuration.report(CompilerMessageSeverity.STRONG_WARNING, unsupportedReason)
+            false
+        } else {
+            true
+        }
+    } else {
+        false
+    }
+
     private val defaultMemoryModel get() = when {
         target == KonanTarget.LINUX_X64 -> MemoryModel.ARC
         target.supportsThreads() -> MemoryModel.EXPERIMENTAL
@@ -323,6 +340,15 @@ class KonanConfig(val project: Project, val configuration: CompilerConfiguration
         }
     }
 
+    private fun runtimeNativeLibrary(name: String): String {
+        val selectedName = if (undefinedBehaviorSanitizer) {
+            name.removeSuffix(".bc") + "_ubsan.bc"
+        } else {
+            name
+        }
+        return File(distribution.defaultNatives(target)).child(selectedName).absolutePath
+    }
+
     internal val runtimeNativeLibraries: List<String> = mutableListOf<String>().apply {
         if (debug) add("debug.bc")
         when (memoryModel) {
@@ -383,19 +409,17 @@ class KonanConfig(val project: Project, val configuration: CompilerConfiguration
                 add("custom_alloc.bc")
             }
         }
-    }.map {
-        File(distribution.defaultNatives(target)).child(it).absolutePath
-    }
+    }.map(::runtimeNativeLibrary)
 
     internal val launcherNativeLibraries: List<String> = distribution.launcherFiles.map {
-        File(distribution.defaultNatives(target)).child(it).absolutePath
+        runtimeNativeLibrary(it)
     }
 
     internal val objCNativeLibrary: String =
-            File(distribution.defaultNatives(target)).child("objc.bc").absolutePath
+            runtimeNativeLibrary("objc.bc")
 
     internal val exceptionsSupportNativeLibrary: String =
-            File(distribution.defaultNatives(target)).child("exceptionsSupport.bc").absolutePath
+            runtimeNativeLibrary("exceptionsSupport.bc")
 
     internal val nativeLibraries: List<String> =
             configuration.getList(KonanConfigKeys.NATIVE_LIBRARY_FILES)
@@ -498,7 +522,7 @@ class KonanConfig(val project: Project, val configuration: CompilerConfiguration
 
     internal val ignoreCacheReason = when {
         optimizationsEnabled -> "for optimized compilation"
-        sanitizer != null -> "with sanitizers enabled"
+        sanitizer != null || undefinedBehaviorSanitizer -> "with sanitizers enabled"
         runtimeLogs != null -> "with runtime logs"
         else -> null
     }

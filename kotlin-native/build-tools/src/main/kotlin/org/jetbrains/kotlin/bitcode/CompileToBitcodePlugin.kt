@@ -25,7 +25,7 @@ import org.gradle.kotlin.dsl.*
 import org.gradle.language.base.plugins.LifecycleBasePlugin
 import org.jetbrains.kotlin.ExecClang
 import org.jetbrains.kotlin.cpp.*
-import org.jetbrains.kotlin.konan.target.SanitizerKind
+import org.jetbrains.kotlin.konan.target.BuildToolsSanitizer
 import org.jetbrains.kotlin.konan.target.TargetDomainObjectContainer
 import org.jetbrains.kotlin.konan.target.TargetWithSanitizer
 import org.jetbrains.kotlin.testing.native.GoogleTestExtension
@@ -34,20 +34,22 @@ import javax.inject.Inject
 
 private fun String.snakeCaseToUpperCamelCase() = split('_').joinToString(separator = "") { it.capitalized }
 
-private fun fullTaskName(name: String, targetName: String, sanitizer: SanitizerKind?) = "${targetName}${name.snakeCaseToUpperCamelCase()}${sanitizer.taskSuffix}"
+private fun fullTaskName(name: String, targetName: String, sanitizer: BuildToolsSanitizer?) = "${targetName}${name.snakeCaseToUpperCamelCase()}${sanitizer.taskSuffix}"
 
-private val SanitizerKind?.taskSuffix
+private val BuildToolsSanitizer?.taskSuffix
     get() = when (this) {
         null -> ""
-        SanitizerKind.ADDRESS -> "_ASAN"
-        SanitizerKind.THREAD -> "_TSAN"
+        BuildToolsSanitizer.ADDRESS -> "_ASAN"
+        BuildToolsSanitizer.THREAD -> "_TSAN"
+        BuildToolsSanitizer.UNDEFINED -> "_UBSAN"
     }
 
-private val SanitizerKind?.description
+private val BuildToolsSanitizer?.description
     get() = when (this) {
         null -> ""
-        SanitizerKind.ADDRESS -> " with ASAN"
-        SanitizerKind.THREAD -> " with TSAN"
+        BuildToolsSanitizer.ADDRESS -> " with ASAN"
+        BuildToolsSanitizer.THREAD -> " with TSAN"
+        BuildToolsSanitizer.UNDEFINED -> " with UBSAN"
     }
 
 /**
@@ -216,11 +218,7 @@ open class CompileToBitcodeExtension @Inject constructor(val project: Project) :
                 this.targetName.set(target.name)
                 this.compiler.set(module.compiler)
                 this.arguments.set(module.compilerArgs)
-                this.arguments.addAll(when (sanitizer) {
-                    null -> emptyList()
-                    SanitizerKind.ADDRESS -> listOf("-fsanitize=address")
-                    SanitizerKind.THREAD -> listOf("-fsanitize=thread")
-                })
+                this.arguments.addAll(sanitizer?.let { listOf(it.clangFlag) }.orEmpty())
                 this.headersDirs.from(this@SourceSet.headersDirs)
                 this.inputFiles.from(this@SourceSet.inputFiles.dir)
                 this.inputFiles.setIncludes(this@SourceSet.inputFiles.includes)
@@ -601,6 +599,7 @@ open class CompileToBitcodeExtension @Inject constructor(val project: Project) :
                 reportFile.set(project.layout.buildDirectory.file("testReports/$testName/report-with-prefixes.xml"))
                 filter.set(project.findProperty("gtest_filter") as? String)
                 tsanSuppressionsFile.set(project.layout.projectDirectory.file("tsan_suppressions.txt"))
+                ubsanEnabled.set(sanitizer == BuildToolsSanitizer.UNDEFINED)
                 this.target.set(target)
 
                 usesService(runGTestSemaphore)

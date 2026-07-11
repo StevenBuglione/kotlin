@@ -414,6 +414,14 @@ targetList.each { target ->
 
         destinationDir project.file("$distDir/$stdlib")
 
+        if (target == 'linux_x64') {
+            doFirst {
+                delete(
+                        file("$destinationDir/default/targets/$target/native/runtime_ubsan.bc"),
+                        file("$destinationDir/default/targets/$target/native/compiler_interface_ubsan.bc"))
+            }
+        }
+
         from(project(':kotlin-native:runtime').file("build/${target}Stdlib")) {
             if (target == hostName) {
                 include('**')
@@ -453,9 +461,32 @@ targetList.each { target ->
         }
     }
 
+    if (target == 'linux_x64') {
+        task("${target}CrossDistUbsanBitcodeCopy", type: Copy) {
+            def bitcodeFiles = configurations.runtimeBitcode.incoming.artifactView {
+                attributes {
+                    attribute(TargetWithSanitizer.TARGET_ATTRIBUTE,
+                            new TargetWithSanitizer(platformManager.targetByName(target), BuildToolsSanitizer.UNDEFINED))
+                }
+            }.files
+
+            destinationDir project.file("$distDir/konan/targets/")
+
+            from(bitcodeFiles) {
+                include("*.bc")
+                exclude("runtime.bc", "compiler_interface.bc")
+                rename { name -> name.replaceFirst(/\.bc$/, '_ubsan.bc') }
+                into("$target/native")
+            }
+        }
+    }
+
     task("${target}CrossDistRuntime", type: Copy) {
         dependsOn ":kotlin-native:${target}CrossDistStdlib"
         dependsOn "${target}CrossDistBitcodeCopy"
+        if (target == 'linux_x64') {
+            dependsOn "${target}CrossDistUbsanBitcodeCopy"
+        }
 
         destinationDir project.file("$distDir/$stdlibDefaultComponent")
 

@@ -49,6 +49,8 @@ object BinaryOptions : BinaryOptionRegistry() {
 
     val sanitizer by option<SanitizerKind>()
 
+    val undefinedBehaviorSanitizer by booleanOption()
+
     val mimallocUseDefaultOptions by booleanOption()
 
     val mimallocUseCompaction by booleanOption()

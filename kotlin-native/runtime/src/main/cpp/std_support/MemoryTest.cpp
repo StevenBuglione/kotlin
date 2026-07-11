@@ -86,6 +86,10 @@ static_assert(sizeof(MockClass) > sizeof(EmptyClass));
 // static
 MockClass::Mocker* MockClass::Mocker::instance_ = nullptr;
 
+MockClass* mockClassAddress() noexcept {
+    return reinterpret_cast<MockClass*>(alignof(MockClass) * 16);
+}
+
 } // namespace
 
 TEST(StdSupportMemoryTest, Allocator) {
@@ -132,7 +136,7 @@ TEST(StdSupportMemoryTest, AllocatorNew) {
     testing::StrictMock<test_support::MockAllocatorCore> allocatorCore;
     testing::StrictMock<MockClass::Mocker> mocker;
 
-    MockClass* expectedPtr = reinterpret_cast<MockClass*>(13);
+    MockClass* expectedPtr = mockClassAddress();
 
     {
         testing::InSequence s;
@@ -147,7 +151,7 @@ TEST(StdSupportMemoryTest, AllocatorNewThrows) {
     testing::StrictMock<test_support::MockAllocatorCore> allocatorCore;
     testing::StrictMock<MockClass::Mocker> mocker;
 
-    MockClass* expectedPtr = reinterpret_cast<MockClass*>(13);
+    MockClass* expectedPtr = mockClassAddress();
 
     {
         testing::InSequence s;
@@ -162,7 +166,7 @@ TEST(StdSupportMemoryTest, AllocatorNewWrongType) {
     testing::StrictMock<test_support::MockAllocatorCore> allocatorCore;
     testing::StrictMock<MockClass::Mocker> mocker;
 
-    MockClass* expectedPtr = reinterpret_cast<MockClass*>(13);
+    MockClass* expectedPtr = mockClassAddress();
 
     {
         testing::InSequence s;
@@ -177,7 +181,7 @@ TEST(StdSupportMemoryTest, AllocatorDelete) {
     testing::StrictMock<test_support::MockAllocatorCore> allocatorCore;
     testing::StrictMock<MockClass::Mocker> mocker;
 
-    MockClass* expectedPtr = reinterpret_cast<MockClass*>(13);
+    MockClass* expectedPtr = mockClassAddress();
 
     {
         testing::InSequence s;
@@ -191,7 +195,7 @@ TEST(StdSupportMemoryTest, AllocatorDeleteWrongType) {
     testing::StrictMock<test_support::MockAllocatorCore> allocatorCore;
     testing::StrictMock<MockClass::Mocker> mocker;
 
-    MockClass* expectedPtr = reinterpret_cast<MockClass*>(13);
+    MockClass* expectedPtr = mockClassAddress();
 
     {
         testing::InSequence s;
@@ -205,7 +209,7 @@ TEST(StdSupportMemoryTest, AllocateUnique) {
     testing::StrictMock<test_support::MockAllocatorCore> allocatorCore;
     testing::StrictMock<MockClass::Mocker> mocker;
 
-    MockClass* expectedPtr = reinterpret_cast<MockClass*>(13);
+    MockClass* expectedPtr = mockClassAddress();
 
     {
         testing::InSequence s;
@@ -227,7 +231,7 @@ TEST(StdSupportMemoryTest, AllocateUniqueThrows) {
     testing::StrictMock<test_support::MockAllocatorCore> allocatorCore;
     testing::StrictMock<MockClass::Mocker> mocker;
 
-    MockClass* expectedPtr = reinterpret_cast<MockClass*>(13);
+    MockClass* expectedPtr = mockClassAddress();
 
     {
         testing::InSequence s;
@@ -242,7 +246,7 @@ TEST(StdSupportMemoryTest, AllocateUniqueWrongType) {
     testing::StrictMock<test_support::MockAllocatorCore> allocatorCore;
     testing::StrictMock<MockClass::Mocker> mocker;
 
-    MockClass* expectedPtr = reinterpret_cast<MockClass*>(13);
+    MockClass* expectedPtr = mockClassAddress();
 
     {
         testing::InSequence s;

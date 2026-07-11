@@ -13,7 +13,7 @@ import org.gradle.api.provider.ProviderFactory
 import org.gradle.kotlin.dsl.getByType
 
 /**
- * Associative container from a [KonanTarget] with optional [SanitizerKind] to [T].
+ * Associative container from a [KonanTarget] with an optional [BuildToolsSanitizer] to [T].
  *
  * Serves similar purpose to [NamedDomainObjectContainer][org.gradle.api.NamedDomainObjectContainer]
  * except this is keyed on a target instead of a name. Also, this implementation does not support lazy

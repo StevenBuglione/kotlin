@@ -192,8 +192,8 @@ private:
 template <typename Payload>
 TypeInfoHolder::ObjectBuilder<Payload>::ObjectBuilder() noexcept {
     instanceSize_ = sizeof(Object<Payload>);
-    char c;
-    Object<Payload>& object = *reinterpret_cast<Object<Payload>*>(&c);
+    std::aligned_storage_t<sizeof(Object<Payload>), alignof(Object<Payload>)> storage;
+    Object<Payload>& object = *reinterpret_cast<Object<Payload>*>(&storage);
     auto& payload = *object;
     using Field = ObjHeader* Payload::*;
     for (Field field : Payload::kFields) {

@@ -150,7 +150,8 @@ internal enum class ThreadStateChecker(val compilerFlag: String?) {
 internal enum class Sanitizer(val compilerFlag: String?) {
     NONE(null),
     ADDRESS("-Xbinary=sanitizer=address"),
-    THREAD("-Xbinary=sanitizer=thread");
+    THREAD("-Xbinary=sanitizer=thread"),
+    UNDEFINED("-Xbinary=undefinedBehaviorSanitizer=true");
 
     override fun toString() = compilerFlag?.let { "($it)" }.orEmpty()
 }

@@ -10,15 +10,32 @@ import org.gradle.api.attributes.Attribute
 import java.io.Serializable
 
 /**
- * [Target][KonanTarget] with optional [sanitizer][SanitizerKind].
+ * Sanitizer variants used while building Kotlin/Native's native components.
+ *
+ * This deliberately does not extend [SanitizerKind]: root Gradle scripts may
+ * load that class from the bootstrap compiler, so its shape must remain stable.
+ */
+enum class BuildToolsSanitizer(val targetSuffix: String, val clangFlag: String) {
+    ADDRESS("_asan", "-fsanitize=address"),
+    THREAD("_tsan", "-fsanitize=thread"),
+    UNDEFINED("_ubsan", "-fsanitize=undefined"),
+}
+
+private fun SanitizerKind.toBuildToolsSanitizer(): BuildToolsSanitizer = when (this) {
+    SanitizerKind.ADDRESS -> BuildToolsSanitizer.ADDRESS
+    SanitizerKind.THREAD -> BuildToolsSanitizer.THREAD
+}
+
+/**
+ * [Target][KonanTarget] with an optional build-tools-local sanitizer.
  *
  * Can be used as a gradle attribute: `attribute(TargetWithSanitizer.TARGET_ATTRIBUTE, target.withSanitizer())`
  */
 class TargetWithSanitizer(
         val target: KonanTarget,
-        val sanitizer: SanitizerKind?,
+        val sanitizer: BuildToolsSanitizer?,
 ) : Named, Serializable {
-    override fun getName(): String = "$target${sanitizer.targetSuffix}"
+    override fun getName(): String = "$target${sanitizer?.targetSuffix.orEmpty()}"
 
     override fun toString(): String = name
 
@@ -41,16 +58,24 @@ class TargetWithSanitizer(
 }
 
 /**
- * Construct [TargetWithSanitizer] from [target][KonanTarget] and optional [sanitizer][SanitizerKind].
+ * Construct [TargetWithSanitizer] from a compiler-supported sanitizer.
  */
-fun KonanTarget.withSanitizer(sanitizer: SanitizerKind? = null) = TargetWithSanitizer(this, sanitizer)
+fun KonanTarget.withSanitizer(sanitizer: SanitizerKind? = null) =
+        TargetWithSanitizer(this, sanitizer?.toBuildToolsSanitizer())
+
+/** Construct [TargetWithSanitizer] from a build-only sanitizer variant. */
+fun KonanTarget.withSanitizer(sanitizer: BuildToolsSanitizer) = TargetWithSanitizer(this, sanitizer)
 
 /**
  * All known targets with their sanitizers.
  */
 val PlatformManager.allTargetsWithSanitizers
     get() = this.enabled.flatMap { target ->
-        listOf(target.withSanitizer()) + target.supportedSanitizers().map {
-            target.withSanitizer(it)
+        val compilerSanitizers = target.supportedSanitizers().map { target.withSanitizer(it) }
+        val buildOnlySanitizers = if (target == KonanTarget.LINUX_X64) {
+            listOf(target.withSanitizer(BuildToolsSanitizer.UNDEFINED))
+        } else {
+            emptyList()
         }
+        listOf(target.withSanitizer()) + compilerSanitizers + buildOnlySanitizers
     }

@@ -122,7 +122,7 @@ internal class Linker(
                 caches.dynamic +
                 libraryProvidedLinkerFlags + additionalLinkerArgs
 
-        return linker.finalLinkCommands(
+        val commands = linker.finalLinkCommands(
                 objectFiles = objectFiles,
                 executable = executable,
                 libraries = linker.linkStaticLibraries(includedBinaries) + caches.static,
@@ -135,6 +135,31 @@ internal class Linker(
                 mimallocEnabled = config.allocationMode == AllocationMode.MIMALLOC,
                 sanitizer = config.sanitizer
         )
+        if (!config.undefinedBehaviorSanitizer) return commands
+
+        val ubsanLibraries = listOf(
+                "--whole-archive",
+                linker.provideCompilerRtLibrary("ubsan_standalone")!!,
+                "--no-whole-archive",
+                "--whole-archive",
+                linker.provideCompilerRtLibrary("ubsan_standalone_cxx")!!,
+                "--no-whole-archive",
+                "--export-dynamic",
+                "--no-as-needed",
+        )
+        return commands.map { command ->
+            val arguments = command.argsWithExecutable
+            // Static compiler-rt archives must precede the ordinary C++ and C
+            // libraries that satisfy their RTTI, atexit, and libc dependencies.
+            val systemLibraries = arguments.indexOfFirst { it == "-lstdc++" }
+            val insertionPoint = if (systemLibraries >= 0) {
+                systemLibraries
+            } else {
+                arguments.indexOfFirst { it.contains("/crtend") }
+                        .let { if (it >= 0) it else arguments.size }
+            }
+            Command(arguments.take(insertionPoint) + ubsanLibraries + arguments.drop(insertionPoint))
+        }
     }
 }
 

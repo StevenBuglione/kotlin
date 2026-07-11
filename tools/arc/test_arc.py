@@ -66,6 +66,9 @@ class ArcProfileTest(unittest.TestCase):
     def test_sanitizer_probe_requires_binary_instrumentation_evidence(self):
         script = (Path(__file__).parent / "sanitizer_probe.sh").read_text()
         self.assertIn("readelf -Ws", script)
+        self.assertIn("objdump -d", script)
+        self.assertIn("no_ubsan_instrumentation_calls", script)
+        self.assertIn("-Xbinary=undefinedBehaviorSanitizer=true", script)
         self.assertIn("UNSUPPORTED", script)
         self.assertIn("exit 77", script)
 

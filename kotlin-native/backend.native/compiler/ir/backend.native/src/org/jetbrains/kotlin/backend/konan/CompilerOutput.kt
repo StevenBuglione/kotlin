@@ -72,6 +72,17 @@ private data class LlvmModules(
         val additionalModules: List<LLVMModuleRef>
 )
 
+private fun KonanConfig.selectSanitizedStdlibBitcode(path: String): String {
+    if (!undefinedBehaviorSanitizer) return path
+    val file = File(path)
+    return when (file.name) {
+        "runtime.bc", "compiler_interface.bc" -> {
+            File(file.parentFile.parentFile, "ubsan/${file.name}").absolutePath
+        }
+        else -> path
+    }
+}
+
 /**
  * Deserialize, generate, patch all bitcode dependencies and classify them into two sets:
  * - Runtime modules. These may be used as an input for a separate LTO (e.g. for debug builds).
@@ -80,12 +91,13 @@ private data class LlvmModules(
 private fun collectLlvmModules(generationState: NativeGenerationState, generatedBitcodeFiles: List<String>): LlvmModules {
     val config = generationState.config
 
-    val (bitcodePartOfStdlib, bitcodeLibraries) = generationState.dependenciesTracker.bitcodeToLink
+    val (stdlibBitcode, bitcodeLibraries) = generationState.dependenciesTracker.bitcodeToLink
             .partition { it.isStdlib && generationState.producedLlvmModuleContainsStdlib }
             .toList()
             .map { libraries ->
                 libraries.flatMap { it.bitcodePaths }.filter { it.isBitcode }
             }
+    val bitcodePartOfStdlib = stdlibBitcode.map(config::selectSanitizedStdlibBitcode)
 
     val nativeLibraries = config.nativeLibraries + config.launcherNativeLibraries
             .takeIf { config.produce == CompilerOutputKind.PROGRAM }.orEmpty()

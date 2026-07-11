@@ -24,6 +24,11 @@ internal class CStubsManager(private val target: KonanTarget, private val genera
 
         val bitcodes = languageToStubs.entries.map { (language, stubs) ->
             val compilerOptions = mutableListOf<String>()
+            if (generationState.config.undefinedBehaviorSanitizer) {
+                // UBSAN is a Clang frontend instrumentation pass in LLVM 11, so
+                // generated native bridges must opt in before they become bitcode.
+                compilerOptions += "-fsanitize=undefined"
+            }
             val sourceFileExtension = when {
                 language == "C++" -> ".cpp"
                 target.family.isAppleFamily -> {

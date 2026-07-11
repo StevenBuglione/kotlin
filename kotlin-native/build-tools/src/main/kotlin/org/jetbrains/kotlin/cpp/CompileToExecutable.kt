@@ -152,7 +152,7 @@ abstract class CompileToExecutable : DefaultTask() {
      */
     @get:Input
     @get:Optional
-    abstract val sanitizer: Property<SanitizerKind>
+    abstract val sanitizer: Property<BuildToolsSanitizer>
 
     // TODO: Should be replaced by a list of libraries to be linked with.
     /**
@@ -216,7 +216,9 @@ abstract class CompileToExecutable : DefaultTask() {
     protected val linkCommands: Provider<List<List<String>>> = project.provider {
         // Getting link commands requires presence of a target toolchain.
         // Thus we cannot get them at the configuration stage because the toolchain may be not downloaded yet.
-        platformManager.platform(target.get()).linker.finalLinkCommands(
+        val selectedSanitizer = sanitizer.orNull
+        val linker = platformManager.platform(target.get()).linker
+        val commands = linker.finalLinkCommands(
                 listOf(compilerOutputFile.asFile.get().absolutePath),
                 outputFile.asFile.get().absolutePath,
                 listOf(),
@@ -227,8 +229,36 @@ abstract class CompileToExecutable : DefaultTask() {
                 outputDsymBundle = outputFile.asFile.get().absolutePath + ".dSYM",
                 needsProfileLibrary = false,
                 mimallocEnabled = mimallocEnabled.get(),
-                sanitizer = sanitizer.orNull
+                sanitizer = when (selectedSanitizer) {
+                    BuildToolsSanitizer.ADDRESS -> SanitizerKind.ADDRESS
+                    BuildToolsSanitizer.THREAD -> SanitizerKind.THREAD
+                    BuildToolsSanitizer.UNDEFINED, null -> null
+                }
         ).map { it.argsWithExecutable }
+        if (selectedSanitizer != BuildToolsSanitizer.UNDEFINED) {
+            commands
+        } else {
+            val ubsanLibraries = listOf(
+                    "--whole-archive",
+                    linker.provideCompilerRtLibrary("ubsan_standalone")!!,
+                    "--no-whole-archive",
+                    "--whole-archive",
+                    linker.provideCompilerRtLibrary("ubsan_standalone_cxx")!!,
+                    "--no-whole-archive",
+                    "--export-dynamic",
+                    "--no-as-needed",
+            )
+            commands.map { arguments ->
+                val systemLibraries = arguments.indexOfFirst { it == "-lstdc++" }
+                val insertionPoint = if (systemLibraries >= 0) {
+                    systemLibraries
+                } else {
+                    arguments.indexOfFirst { it.contains("/crtend") }
+                            .let { if (it >= 0) it else arguments.size }
+                }
+                arguments.take(insertionPoint) + ubsanLibraries + arguments.drop(insertionPoint)
+            }
+        }
     }
 
     @get:Inject
@@ -239,10 +269,12 @@ abstract class CompileToExecutable : DefaultTask() {
         val workQueue = workerExecutor.noIsolation()
 
         val defaultClangFlags = buildClangFlags(platformManager.platform(target.get()).configurables)
-        val sanitizerFlags = when (sanitizer.orNull) {
-            null -> listOf()
-            SanitizerKind.ADDRESS -> listOf("-fsanitize=address")
-            SanitizerKind.THREAD -> listOf("-fsanitize=thread")
+        // Runtime/test bitcode is already UBSAN-instrumented by ClangFrontend.
+        // This path invokes clang++ in cc1 mode for the tiny executable wrapper,
+        // where the aggregate `undefined` sanitizer group is not accepted.
+        val sanitizerFlags = when (val selected = sanitizer.orNull) {
+            null, BuildToolsSanitizer.UNDEFINED -> emptyList()
+            else -> listOf(selected.clangFlag)
         }
 
         workQueue.submit(CompileToExecutableJob::class.java) {
