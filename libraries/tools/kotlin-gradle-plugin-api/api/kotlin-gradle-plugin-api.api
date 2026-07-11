@@ -1334,6 +1334,19 @@ public abstract interface class org/jetbrains/kotlin/gradle/plugin/LanguageSetti
 	public abstract fun setProgressiveMode (Z)V
 }
 
+public abstract interface class org/jetbrains/kotlin/gradle/plugin/RustInteropSettings : org/gradle/api/Named {
+	public abstract fun crate (Ljava/lang/String;Ljava/lang/String;)V
+	public abstract fun getCrateName ()Lorg/gradle/api/provider/Property;
+	public abstract fun getCrateVersion ()Lorg/gradle/api/provider/Property;
+	public abstract fun getDefinitionFile ()Lorg/gradle/api/file/RegularFileProperty;
+	public abstract fun getFeatures ()Lorg/gradle/api/provider/SetProperty;
+	public abstract fun getPackageName ()Lorg/gradle/api/provider/Property;
+}
+
+public final class org/jetbrains/kotlin/gradle/plugin/RustInteropSettings$DefaultImpls {
+	public static fun crate (Lorg/jetbrains/kotlin/gradle/plugin/RustInteropSettings;Ljava/lang/String;Ljava/lang/String;)V
+}
+
 public class org/jetbrains/kotlin/gradle/plugin/SubpluginArtifact {
 	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
 	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V

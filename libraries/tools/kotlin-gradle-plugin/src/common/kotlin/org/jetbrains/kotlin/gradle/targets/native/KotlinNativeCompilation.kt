@@ -11,6 +11,7 @@ import org.gradle.api.NamedDomainObjectContainer
 import org.gradle.api.file.ConfigurableFileCollection
 import org.gradle.api.provider.Provider
 import org.gradle.api.tasks.TaskProvider
+import org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi
 import org.jetbrains.kotlin.gradle.dsl.KotlinNativeCompilerOptions
 import org.jetbrains.kotlin.gradle.plugin.*
 import org.jetbrains.kotlin.gradle.plugin.PropertiesProvider.Companion.kotlinPropertiesProvider
@@ -70,6 +71,15 @@ open class KotlinNativeCompilation @Inject internal constructor(
     )
 
     fun cinterops(action: Action<NamedDomainObjectContainer<DefaultCInteropSettings>>) = action.execute(cinterops)
+
+    @ExperimentalKotlinGradlePluginApi
+    val rustInterops: NamedDomainObjectContainer<RustInteropSettings> = compilation.project.objects.domainObjectContainer(
+        RustInteropSettings::class.java,
+        DefaultRustInteropSettingsFactory(compilation)
+    )
+
+    @ExperimentalKotlinGradlePluginApi
+    fun rustInterops(action: Action<NamedDomainObjectContainer<RustInteropSettings>>) = action.execute(rustInterops)
 
     // Naming
     final override val processResourcesTaskName: String

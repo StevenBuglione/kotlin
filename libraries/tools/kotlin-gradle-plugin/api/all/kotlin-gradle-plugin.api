@@ -1179,8 +1179,10 @@ public class org/jetbrains/kotlin/gradle/plugin/mpp/KotlinNativeCompilation : or
 	public fun getCompilerOptions ()Lorg/jetbrains/kotlin/gradle/targets/native/NativeCompilerOptions;
 	public final fun getCrossCompilationSupported ()Lorg/gradle/api/provider/Provider;
 	public final fun getProcessResourcesTaskName ()Ljava/lang/String;
+	public final fun getRustInterops ()Lorg/gradle/api/NamedDomainObjectContainer;
 	public synthetic fun getTarget ()Lorg/jetbrains/kotlin/gradle/plugin/KotlinTarget;
 	public final fun getTarget ()Lorg/jetbrains/kotlin/gradle/plugin/mpp/KotlinNativeTarget;
+	public final fun rustInterops (Lorg/gradle/api/Action;)V
 }
 
 public class org/jetbrains/kotlin/gradle/plugin/mpp/KotlinNativeCompilationFactory : org/jetbrains/kotlin/gradle/plugin/mpp/KotlinCompilationFactory {
