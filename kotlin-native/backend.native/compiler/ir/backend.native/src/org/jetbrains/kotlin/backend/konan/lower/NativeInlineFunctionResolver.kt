@@ -86,6 +86,10 @@ internal class NativeInlineFunctionResolver(override val context: Context, val g
         NullableFieldsDeclarationLowering(context).lowerWithLocalDeclarations(function)
         LateinitUsageLowering(context).lower(body, function)
 
+        ArcReferenceFieldsCreationLowering(context).lowerWithLocalDeclarations(function)
+        ArcReferenceFieldsDeclarationLowering(context).lowerWithLocalDeclarations(function)
+        ArcReferenceUsageLowering(context).lower(body, function)
+
         SharedVariablesLowering(context).lower(body, function)
 
         OuterThisLowering(context).lower(function)

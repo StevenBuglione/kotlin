@@ -81,6 +81,21 @@ struct ContainerHeader {
   // Number of objects in the container.
   uint32_t objectCount_;
 
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+  // The most-derived class whose @ArcDeinit-bearing constructor completed successfully.
+  // Kept in the container rather than the object so partially initialized objects retain
+  // their dynamic TypeInfo in typeInfoOrMeta_ while destruction starts from the right class.
+  const TypeInfo* arcInitializedDeinitType_;
+
+  inline void setArcInitializedDeinitType(const TypeInfo* typeInfo) {
+    __atomic_store_n(&arcInitializedDeinitType_, typeInfo, __ATOMIC_RELEASE);
+  }
+
+  inline const TypeInfo* takeArcInitializedDeinitType() {
+    return __atomic_exchange_n(&arcInitializedDeinitType_, nullptr, __ATOMIC_ACQ_REL);
+  }
+#endif
+
   inline bool local() const {
       return (refCount_ & CONTAINER_TAG_MASK) == CONTAINER_TAG_LOCAL;
   }

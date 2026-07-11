@@ -2505,27 +2505,57 @@ internal class CodeGeneratorVisitor(
         context.log{"evaluateConstructorCall        : ${ir2string(callee)}"}
         return memScoped {
             val constructedClass = callee.symbol.owner.constructedClass
+            val requestedLifetime = resultLifetime(callee)
+            val allocationLifetime = if (context.config.memoryModel == MemoryModel.ARC &&
+                    constructedClass.hasArcDeinitInHierarchy() &&
+                    (requestedLifetime == Lifetime.STACK || requestedLifetime == Lifetime.LOCAL)) {
+                Lifetime.GLOBAL
+            } else {
+                requestedLifetime
+            }
             val thisValue = when {
                 constructedClass.isArray -> {
                     assert(args.isNotEmpty() && args[0].type == llvm.int32Type)
                     functionGenerationContext.allocArray(constructedClass, args[0],
-                            resultLifetime(callee), currentCodeContext.exceptionHandler, resultSlot = resultSlot)
+                            allocationLifetime, currentCodeContext.exceptionHandler, resultSlot = resultSlot)
                 }
                 constructedClass == context.ir.symbols.string.owner -> {
                     // TODO: consider returning the empty string literal instead.
                     assert(args.isEmpty())
                     functionGenerationContext.allocArray(constructedClass, count = llvm.kImmInt32Zero,
-                            lifetime = resultLifetime(callee), exceptionHandler = currentCodeContext.exceptionHandler, resultSlot = resultSlot)
+                            lifetime = allocationLifetime, exceptionHandler = currentCodeContext.exceptionHandler, resultSlot = resultSlot)
                 }
 
                 constructedClass.isObjCClass() -> error("Call should've been lowered: ${callee.dump()}")
 
-                else -> functionGenerationContext.allocInstance(constructedClass, resultLifetime(callee), resultSlot = resultSlot)
+                else -> functionGenerationContext.allocInstance(constructedClass, allocationLifetime, resultSlot = resultSlot)
             }
             evaluateSimpleFunctionCall(callee.symbol.owner,
                     listOf(thisValue) + args, Lifetime.IRRELEVANT /* constructor doesn't return anything */)
+            markArcDeinitInitialized(callee.symbol.owner, thisValue)
             thisValue
         }
+    }
+
+    private fun IrClass.hasArcDeinitInHierarchy(): Boolean =
+            generateSequence(this) { it.getSuperClassNotAny() }.any { irClass ->
+                irClass.declarations.any {
+                    it is IrSimpleFunction && it.annotations.hasAnnotation(KonanFqNames.arcDeinit)
+                }
+            }
+
+    private fun markArcDeinitInitialized(constructor: IrConstructor, instance: LLVMValueRef) {
+        if (context.config.memoryModel != MemoryModel.ARC) return
+        val constructedClass = constructor.constructedClass
+        if (constructedClass.declarations.none {
+                    it is IrSimpleFunction && it.annotations.hasAnnotation(KonanFqNames.arcDeinit)
+                }) return
+
+        call(
+                llvm.Kotlin_ArcMarkDeinitInitialized,
+                listOf(instance, with(codegen) { constructedClass.typeInfoPtr.llvm }),
+                Lifetime.IRRELEVANT,
+        )
     }
 
     private fun genGetObjCClass(irClass: IrClass): LLVMValueRef {
@@ -2705,8 +2735,10 @@ internal class CodeGeneratorVisitor(
             functionGenerationContext.bitcast(thisPtrArgType, thisPtr)
         }
 
-        return callDirect(constructor, listOf(thisPtrArg) + args,
+        val result = callDirect(constructor, listOf(thisPtrArg) + args,
                 Lifetime.IRRELEVANT /* no value returned */, null)
+        markArcDeinitInitialized(constructor, thisPtrArg)
+        return result
     }
 
     //-------------------------------------------------------------------------//

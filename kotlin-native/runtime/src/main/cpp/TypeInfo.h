@@ -143,6 +143,11 @@ struct TypeInfo {
     // Required alignment of instance
     uint32_t instanceAlignment_;
 
+    // ARC-only hook for a class-local @ArcDeinit body. The ARC memory manager walks
+    // superType_ and invokes these hooks from the most-derived initialized class to its bases.
+    // Null for classes without @ArcDeinit and for all compiler-generated array types.
+    void (*arcDestroy_)(ObjHeader* object);
+
 
     // vtable starts just after declared contents of the TypeInfo:
     // void* const vtable_[];

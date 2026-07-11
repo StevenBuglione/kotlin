@@ -436,7 +436,11 @@ internal class ClassLayoutBuilder(val irClass: IrClass, val context: Context) {
      * The order respects the class hierarchy, i.e. a class [fields] contains superclass [fields] as a prefix.
      */
     fun getFields(llvm: CodegenLlvmHelpers): List<FieldInfo> = getFieldsInternal(llvm).map { fieldInfo ->
-        val mappedField = fieldInfo.irField?.let { context.mapping.lateInitFieldToNullableField[it] ?: it }
+        val mappedField = fieldInfo.irField?.let {
+            context.mapping.arcReferenceFieldToStorageField[it]
+                    ?: context.mapping.lateInitFieldToNullableField[it]
+                    ?: it
+        }
         if (mappedField == fieldInfo.irField)
             fieldInfo
         else

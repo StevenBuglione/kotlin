@@ -104,6 +104,7 @@ internal class RTTIGenerator(
             associatedObjects: ConstPointer?,
             processObjectInMark: ConstPointer?,
             requiredAlignment: Int,
+            arcDestroy: ConstPointer?,
     ) : Struct(
                     runtime.typeInfoType,
 
@@ -142,6 +143,7 @@ internal class RTTIGenerator(
 
                     processObjectInMark,
                     llvm.constInt32(requiredAlignment),
+                    arcDestroy,
     )
 
     private fun kotlinStringLiteral(string: String?): ConstPointer = if (string == null) {
@@ -247,6 +249,13 @@ internal class RTTIGenerator(
 
         val reflectionInfo = getReflectionInfo(irClass)
         val typeInfoGlobal = llvmDeclarations.typeInfoGlobal
+        val arcDestroy = if (context.config.memoryModel == MemoryModel.ARC) {
+            irClass.declarations.filterIsInstance<IrSimpleFunction>()
+                    .singleOrNull { it.annotations.hasAnnotation(KonanFqNames.arcDeinit) }
+                    ?.let { generationState.llvmDeclarations.forFunction(it).toConstPointer() }
+        } else {
+            null
+        }
         val typeInfo = TypeInfo(
                 irClass.typeInfoPtr,
                 makeExtendedInfo(irClass),
@@ -261,11 +270,12 @@ internal class RTTIGenerator(
                 context.getLayoutBuilder(irClass).classId,
                 llvmDeclarations.writableTypeInfoGlobal?.pointer,
                 associatedObjects = genAssociatedObjects(irClass),
-                processObjectInMark = when {
+                processObjectInMark = if (context.config.memoryModel == MemoryModel.ARC) null else when {
                     irClass.symbol == context.ir.symbols.array -> llvm.Kotlin_processArrayInMark.toConstPointer()
                     else -> genProcessObjectInMark(bodyType)
                 },
-                requiredAlignment = llvmDeclarations.alignment
+                requiredAlignment = llvmDeclarations.alignment,
+                arcDestroy = arcDestroy,
         )
 
         val typeInfoGlobalValue = if (!irClass.typeInfoHasVtableAttached) {
@@ -568,8 +578,9 @@ internal class RTTIGenerator(
                 classId = typeHierarchyInfo.classIdLo,
                 writableTypeInfo = writableTypeInfo,
                 associatedObjects = null,
-                processObjectInMark = genProcessObjectInMark(bodyType),
-                requiredAlignment = runtime.objectAlignment
+                processObjectInMark = if (context.config.memoryModel == MemoryModel.ARC) null else genProcessObjectInMark(bodyType),
+                requiredAlignment = runtime.objectAlignment,
+                arcDestroy = null,
         ), vtable)
 
         typeInfoWithVtableGlobal.setInitializer(typeInfoWithVtable)

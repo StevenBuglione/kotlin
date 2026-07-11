@@ -33,6 +33,7 @@ private:
         int32_t instanceAlignment_ = 8;
         const TypeInfo* superType_ = nullptr;
         void (*processObjectInMark_)(void*, ObjHeader*) = nullptr;
+        void (*arcDestroy_)(ObjHeader*) = nullptr;
     };
 
 public:
@@ -53,6 +54,11 @@ public:
 
         ObjectBuilder&& setSuperType(const TypeInfo* superType) noexcept {
             superType_ = superType;
+            return std::move(*this);
+        }
+
+        ObjectBuilder&& setArcDestroy(void (*destroy)(ObjHeader*)) noexcept {
+            arcDestroy_ = destroy;
             return std::move(*this);
         }
     };
@@ -92,6 +98,7 @@ public:
         typeInfo_.flags_ = builder.flags_;
         typeInfo_.superType_ = builder.superType_;
         typeInfo_.instanceAlignment_ = builder.instanceAlignment_;
+        typeInfo_.arcDestroy_ = builder.arcDestroy_;
     }
 
     TypeInfo* typeInfo() noexcept { return &typeInfo_; }

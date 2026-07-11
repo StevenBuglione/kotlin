@@ -646,6 +646,8 @@ private class BackendChecker(
                 isMutable = declaration.isVar,
                 hasStorage = backingField != null,
                 isDelegated = declaration.isDelegated,
+                isLateinit = declaration.isLateinit,
+                isVolatile = backingField?.annotations?.hasAnnotation(KonanFqNames.volatile) == true,
                 fieldAnnotations = backingField,
         )
     }
@@ -656,6 +658,8 @@ private class BackendChecker(
             isMutable: Boolean,
             hasStorage: Boolean,
             isDelegated: Boolean,
+            isLateinit: Boolean = false,
+            isVolatile: Boolean = false,
             fieldAnnotations: IrField? = null,
     ) {
         val weak = declaration.annotations.findAnnotation(KonanFqNames.arcWeak)
@@ -673,6 +677,12 @@ private class BackendChecker(
         val annotation = weak ?: unowned!!
         if (isDelegated) {
             reportError(annotation, "ARC reference annotations are not supported on delegated properties")
+        }
+        if (isLateinit) {
+            reportError(annotation, "ARC reference annotations are not supported on lateinit properties")
+        }
+        if (isVolatile) {
+            reportError(annotation, "ARC reference annotations are not supported on volatile properties")
         }
         if (!hasStorage || type == null) {
             reportError(annotation, "ARC reference annotations require a declaration with storage")
@@ -703,6 +713,13 @@ private class BackendChecker(
         deinits.forEach { (_, annotation) -> checkArcMode(annotation, "ArcDeinit") }
         if (deinits.size > 1) {
             reportError(deinits[1].second, "A class may declare only one @ArcDeinit member function")
+        }
+        if (deinits.isNotEmpty() &&
+                (declaration.kind != ClassKind.CLASS || declaration.isValue || declaration.isExternal)) {
+            reportError(
+                    deinits.first().second,
+                    "@ArcDeinit is supported only on non-external, non-value classes with mortal instances"
+            )
         }
         if (declaration.isKotlinObjCClass()) {
             checkKotlinObjCClass(declaration)

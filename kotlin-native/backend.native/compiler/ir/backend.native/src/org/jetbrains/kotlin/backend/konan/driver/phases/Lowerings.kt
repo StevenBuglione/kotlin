@@ -97,11 +97,18 @@ private val lateinitPhase = createFileLoweringPhase(
         description = "Lateinit properties lowering"
 )
 
+private val arcReferencesPhase = createFileLoweringPhase(
+        ::ArcReferencesLowering,
+        name = "ArcReferences",
+        description = "Lower ARC weak and checked-unowned storage",
+        prerequisite = setOf(lateinitPhase),
+)
+
 private val sharedVariablesPhase = createFileLoweringPhase(
         ::SharedVariablesLowering,
         name = "SharedVariables",
         description = "Shared variable lowering",
-        prerequisite = setOf(lateinitPhase)
+        prerequisite = setOf(arcReferencesPhase)
 )
 
 private val lowerOuterThisInInlineFunctionsPhase = createFileLoweringPhase(
@@ -512,6 +519,7 @@ private fun PhaseEngine<NativeGenerationState>.getAllLowerings() = listOfNotNull
         lowerBeforeInlinePhase,
         arrayConstructorPhase,
         lateinitPhase,
+        arcReferencesPhase,
         sharedVariablesPhase,
         lowerOuterThisInInlineFunctionsPhase,
         inventNamesForLocalClasses,
@@ -615,4 +623,3 @@ private fun createFileLoweringPhase(
             irFile
         }
 )
-

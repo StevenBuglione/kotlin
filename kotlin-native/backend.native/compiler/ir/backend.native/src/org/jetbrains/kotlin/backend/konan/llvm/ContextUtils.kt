@@ -445,6 +445,7 @@ internal class CodegenLlvmHelpers(private val generationState: NativeGenerationS
 
     val Kotlin_mm_switchThreadStateNative by lazy { importRtFunction("Kotlin_mm_switchThreadStateNative") }
     val Kotlin_mm_switchThreadStateRunnable by lazy { importRtFunction("Kotlin_mm_switchThreadStateRunnable") }
+    val Kotlin_ArcMarkDeinitInitialized by lazyRtFunction
 
     val Kotlin_Interop_DoesObjectConformToProtocol by lazyRtFunction
     val Kotlin_Interop_IsObjectKindOfClass by lazyRtFunction

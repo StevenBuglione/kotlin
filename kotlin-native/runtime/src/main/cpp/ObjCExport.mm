@@ -633,6 +633,7 @@ static const TypeInfo* createTypeInfo(
 ) {
   TypeInfo* result = (TypeInfo*)std_support::calloc(1, sizeof(TypeInfo) + vtable.size() * sizeof(void*));
   result->typeInfo_ = result;
+  result->arcDestroy_ = fieldsInfo != nullptr ? fieldsInfo->arcDestroy_ : nullptr;
 
   result->flags_ = TF_OBJC_DYNAMIC;
 

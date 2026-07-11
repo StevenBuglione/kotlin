@@ -46,6 +46,8 @@ internal class NativeMapping : DefaultMapping() {
     val enumEntriesMaps = mutableMapOf<IrClass, Map<Name, LoweredEnumEntryDescription>>()
     val bridges = ConcurrentHashMap<BridgeKey, IrSimpleFunction>()
     val partiallyLoweredInlineFunctions = mutableMapOf<IrFunctionSymbol, IrFunction>()
+    val arcReferenceFieldToStorageField =
+            DefaultDelegateFactory.newDeclarationToDeclarationMapping<IrField, IrField>()
     val outerThisCacheAccessors = DefaultDelegateFactory.newDeclarationToDeclarationMapping<IrClass, IrSimpleFunction>()
     val lateinitPropertyCacheAccessors = DefaultDelegateFactory.newDeclarationToDeclarationMapping<IrProperty, IrSimpleFunction>()
     val objectInstanceGetter = DefaultDelegateFactory.newDeclarationToDeclarationMapping<IrClass, IrSimpleFunction>()

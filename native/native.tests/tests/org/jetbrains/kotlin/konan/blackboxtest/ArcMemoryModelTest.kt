@@ -176,6 +176,88 @@ class ArcExplicitMemoryModelTest : AbstractNativeSimpleTest() {
     }
 
     @Test
+    fun weakUnownedAndDeinitRuntimeSemantics() {
+        compileAndRun(
+            "arcReferenceAndDeinitSemantics",
+            """
+            import kotlin.native.arc.ArcDeinit
+            import kotlin.native.arc.ArcUnowned
+            import kotlin.native.arc.ArcWeak
+
+            private class Target(val value: Int)
+
+            private class References(target: Target) {
+                @ArcWeak var weak: Target? = target
+                @ArcUnowned var unowned: Target = target
+            }
+
+            private fun referencesWithoutOwner(): References {
+                val target = Target(42)
+                val references = References(target)
+                check(references.weak?.value == 42)
+                check(references.unowned.value == 42)
+                return references
+            }
+
+            private fun weakIsNull(references: References): Boolean = references.weak == null
+
+            private var deinitOrder = ""
+
+            private open class Base(private val baseValue: Int = 1) {
+                @ArcDeinit
+                private fun deinitBase() {
+                    check(baseValue == 1)
+                    deinitOrder += "B"
+                }
+            }
+
+            private class Derived(private val derivedValue: Int = 2) : Base() {
+                @ArcDeinit
+                private fun deinitDerived() {
+                    check(derivedValue == 2)
+                    deinitOrder += "D"
+                }
+            }
+
+            private class ConstructorFailure : Base() {
+                init { throw IllegalStateException("expected") }
+
+                @ArcDeinit
+                private fun deinitFailure() {
+                    deinitOrder += "F"
+                }
+            }
+
+            private fun releaseDerived() {
+                val first = Derived()
+                val second = first
+                check(second === first)
+            }
+
+            private fun failConstruction() {
+                try {
+                    ConstructorFailure()
+                    error("constructor unexpectedly returned")
+                } catch (_: IllegalStateException) {
+                }
+            }
+
+            fun main() {
+                val references = referencesWithoutOwner()
+                check(weakIsNull(references))
+
+                releaseDerived()
+                check(deinitOrder == "DB") { "unexpected deinit order: ${'$'}deinitOrder" }
+
+                deinitOrder = ""
+                failConstruction()
+                check(deinitOrder == "B") { "unexpected constructor-failure order: ${'$'}deinitOrder" }
+            }
+            """
+        )
+    }
+
+    @Test
     fun weakRequiresMutableNullableReferenceStorage() {
         assumeLinuxHost()
         assertFails(

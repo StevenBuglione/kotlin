@@ -216,6 +216,10 @@ internal abstract class KonanSymbols(
     val createCleaner =
             irBuiltIns.findFunctions(Name.identifier("createCleaner"),"kotlin", "native", "ref").single()
 
+    val arcReferenceStorage = internalFunction("arcReferenceStorage")
+    val arcWeakReferenceLoad = internalFunction("arcWeakReferenceLoad")
+    val arcUnownedReferenceLoad = internalFunction("arcUnownedReferenceLoad")
+
     val areEqualByValue = internalFunctions("areEqualByValue").associateBy {
         it.descriptor.valueParameters[0].type.computePrimitiveBinaryTypeOrNull()!!
     }

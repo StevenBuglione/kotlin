@@ -7,11 +7,13 @@ package org.jetbrains.kotlin.backend.konan.optimizations
 
 import org.jetbrains.kotlin.backend.konan.Context
 import org.jetbrains.kotlin.backend.konan.InteropFqNames
+import org.jetbrains.kotlin.backend.konan.KonanFqNames
 import org.jetbrains.kotlin.ir.IrElement
 import org.jetbrains.kotlin.ir.IrStatement
 import org.jetbrains.kotlin.ir.declarations.*
 import org.jetbrains.kotlin.ir.util.defaultType
 import org.jetbrains.kotlin.ir.util.isFunction
+import org.jetbrains.kotlin.ir.util.hasAnnotation
 import org.jetbrains.kotlin.ir.util.isReal
 import org.jetbrains.kotlin.ir.util.parentAsClass
 import org.jetbrains.kotlin.ir.visitors.IrElementTransformerVoid
@@ -58,6 +60,9 @@ internal fun dce(
         }
 
         override fun visitFunction(declaration: IrFunction) {
+            if (declaration.annotations.hasAnnotation(KonanFqNames.arcDeinit)) {
+                referencedFunctions.add(declaration)
+            }
             // TODO: Generalize somehow, not that graceful.
             if (declaration.name == OperatorNameConventions.INVOKE
                     && declaration.parent.let { it is IrClass && it.defaultType.isFunction() }) {
@@ -107,4 +112,3 @@ internal fun dce(
 
     return referencedFunctions
 }
-

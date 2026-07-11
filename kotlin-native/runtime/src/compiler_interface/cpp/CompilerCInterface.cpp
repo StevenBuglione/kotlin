@@ -68,6 +68,7 @@ touchFunction(AddTLSRecord)
 touchFunction(LookupTLS)
 
 touchFunction(Kotlin_initRuntimeIfNeeded)
+touchFunction(Kotlin_ArcMarkDeinitInitialized)
 
 touchFunction(KRefSharedHolder_initLocal)
 touchFunction(KRefSharedHolder_init)

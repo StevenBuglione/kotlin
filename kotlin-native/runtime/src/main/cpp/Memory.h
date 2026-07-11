@@ -202,6 +202,10 @@ OBJ_GETTER(AllocInstance, const TypeInfo* type_info) RUNTIME_NOTHROW;
 
 OBJ_GETTER(AllocArrayInstance, const TypeInfo* type_info, int32_t elements);
 
+// Records that the constructor for `initializedType` completed successfully.
+// This is emitted only by the ARC backend and is a no-op in other memory managers.
+void Kotlin_ArcMarkDeinitInitialized(ObjHeader* object, const TypeInfo* initializedType) RUNTIME_NOTHROW;
+
 
 // `initialValue` may be `nullptr`, which signifies that the appropriate initial value was already
 // set by static initialization.

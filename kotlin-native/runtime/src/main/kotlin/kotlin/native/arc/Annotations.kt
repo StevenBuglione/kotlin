@@ -11,7 +11,10 @@ package kotlin.native.arc
 @MustBeDocumented
 public annotation class ArcWeak
 
-/** Marks a non-null reference as a non-retaining, non-zeroing ARC reference. */
+/**
+ * Marks a non-null reference as a checked, non-retaining ARC reference.
+ * Accessing the reference after its target has been deinitialized terminates the process.
+ */
 @Target(AnnotationTarget.PROPERTY, AnnotationTarget.FIELD, AnnotationTarget.LOCAL_VARIABLE)
 @Retention(AnnotationRetention.BINARY)
 @MustBeDocumented

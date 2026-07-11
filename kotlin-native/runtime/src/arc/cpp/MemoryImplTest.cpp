@@ -9,6 +9,7 @@
 #include <thread>
 #include <vector>
 
+#include "Exceptions.h"
 #include "FinalizerHooks.hpp"
 #include "gtest/gtest.h"
 #include "MemorySharedRefs.hpp"
@@ -87,6 +88,10 @@ std::atomic<bool> finalizerSawRegisteredRuntime = false;
 std::atomic<bool> resurrectionRejected = false;
 std::atomic<bool> weakWasZeroBeforeFinalizer = false;
 std::atomic<ObjHeader*> weakCounterForFinalizer = nullptr;
+std::vector<const char*> arcDeinitOrder;
+std::atomic<bool> arcDeinitFieldWasAlive = false;
+std::atomic<bool> arcDeinitResurrectionRejected = false;
+ObjHeader* arcDeinitException = nullptr;
 
 extern "C" OBJ_GETTER(Konan_WeakReferenceCounterLegacyMM_get, ObjHeader* counter);
 
@@ -107,6 +112,29 @@ void countNodeFinalizer(ObjHeader* object) {
         weakWasZeroBeforeFinalizer.store(promoted == nullptr, std::memory_order_relaxed);
         if (promoted != nullptr) ReleaseHeapRef(promoted);
     }
+}
+
+void baseArcDestroy(ObjHeader* object) {
+    arcDeinitOrder.push_back("base");
+    arcDeinitResurrectionRejected.store(!TryAddHeapRef(object), std::memory_order_relaxed);
+}
+
+void derivedArcDestroy(ObjHeader* object) {
+    arcDeinitOrder.push_back("derived");
+    arcDeinitResurrectionRejected.store(!TryAddHeapRef(object), std::memory_order_relaxed);
+}
+
+void derivedArcDestroyWithField(ObjHeader* object) {
+    derivedArcDestroy(object);
+    arcDeinitFieldWasAlive.store(Node::FromObjHeader(object)->next != nullptr, std::memory_order_relaxed);
+}
+
+void throwingArcDestroy(ObjHeader*) {
+    throw std::runtime_error("exception escaped from ARC destroy hook");
+}
+
+void throwingKotlinArcDestroy(ObjHeader*) {
+    ThrowException(arcDeinitException);
 }
 
 class ScopedNodeFinalizerHook {
@@ -280,6 +308,104 @@ TEST(ArcDestructionTest, WeakTargetIsZeroBeforeFinalizerAndCannotResurrect) {
         EXPECT_TRUE(weakWasZeroBeforeFinalizer.load(std::memory_order_relaxed));
         EXPECT_EQ(WeakCounter::FromObjHeader(allocatedCounter)->referred, nullptr);
     });
+}
+
+TEST(ArcDeinitTest, RunsInitializedHooksDerivedToBaseExactlyOnceBeforeFieldsAreReleased) {
+    kotlin::RunInNewThread([] {
+        arcDeinitOrder.clear();
+        arcDeinitFieldWasAlive.store(false, std::memory_order_relaxed);
+        arcDeinitResurrectionRejected.store(false, std::memory_order_relaxed);
+
+        kotlin::test_support::TypeInfoHolder baseType{
+                kotlin::test_support::TypeInfoHolder::ObjectBuilder<NodePayload>().setArcDestroy(baseArcDestroy)};
+        kotlin::test_support::TypeInfoHolder middleType{
+                kotlin::test_support::TypeInfoHolder::ObjectBuilder<NodePayload>().setSuperType(baseType.typeInfo())};
+        kotlin::test_support::TypeInfoHolder derivedType{
+                kotlin::test_support::TypeInfoHolder::ObjectBuilder<NodePayload>()
+                        .setSuperType(middleType.typeInfo())
+                        .setArcDestroy(derivedArcDestroyWithField)};
+
+        ObjHolder object;
+        ObjHolder child;
+        ObjHeader* allocated = AllocInstance(derivedType.typeInfo(), object.slot());
+        ObjHeader* allocatedChild = AllocInstance(nodeTypeInfo.typeInfo(), child.slot());
+        UpdateHeapRef(nextSlot(allocated), allocatedChild);
+        child.clear();
+
+        Kotlin_ArcMarkDeinitInitialized(allocated, baseType.typeInfo());
+        Kotlin_ArcMarkDeinitInitialized(allocated, derivedType.typeInfo());
+        object.clear();
+
+        ASSERT_EQ(arcDeinitOrder.size(), 2u);
+        EXPECT_STREQ(arcDeinitOrder[0], "derived");
+        EXPECT_STREQ(arcDeinitOrder[1], "base");
+        EXPECT_TRUE(arcDeinitFieldWasAlive.load(std::memory_order_relaxed));
+        EXPECT_TRUE(arcDeinitResurrectionRejected.load(std::memory_order_relaxed));
+    });
+}
+
+TEST(ArcDeinitTest, ConstructorFailureRunsOnlyTheSuccessfullyInitializedPrefix) {
+    kotlin::RunInNewThread([] {
+        arcDeinitOrder.clear();
+        kotlin::test_support::TypeInfoHolder baseType{
+                kotlin::test_support::TypeInfoHolder::ObjectBuilder<Payload>().setArcDestroy(baseArcDestroy)};
+        kotlin::test_support::TypeInfoHolder derivedType{
+                kotlin::test_support::TypeInfoHolder::ObjectBuilder<Payload>()
+                        .setSuperType(baseType.typeInfo())
+                        .setArcDestroy(derivedArcDestroy)};
+
+        ObjHolder object;
+        ObjHeader* allocated = AllocInstance(derivedType.typeInfo(), object.slot());
+        Kotlin_ArcMarkDeinitInitialized(allocated, baseType.typeInfo());
+        object.clear();
+
+        ASSERT_EQ(arcDeinitOrder.size(), 1u);
+        EXPECT_STREQ(arcDeinitOrder[0], "base");
+    });
+}
+
+TEST(ArcDeinitTest, UninitializedObjectDoesNotRunDestroyHooks) {
+    kotlin::RunInNewThread([] {
+        arcDeinitOrder.clear();
+        kotlin::test_support::TypeInfoHolder type{
+                kotlin::test_support::TypeInfoHolder::ObjectBuilder<Payload>().setArcDestroy(derivedArcDestroy)};
+
+        ObjHolder object;
+        AllocInstance(type.typeInfo(), object.slot());
+        object.clear();
+
+        EXPECT_TRUE(arcDeinitOrder.empty());
+    });
+}
+
+TEST(ArcDeinitDeathTest, EscapingForeignExceptionTerminates) {
+    EXPECT_DEATH(
+            kotlin::RunInNewThread([] {
+                kotlin::test_support::TypeInfoHolder type{
+                        kotlin::test_support::TypeInfoHolder::ObjectBuilder<Payload>().setArcDestroy(throwingArcDestroy)};
+                ObjHolder object;
+                ObjHeader* allocated = AllocInstance(type.typeInfo(), object.slot());
+                Kotlin_ArcMarkDeinitInitialized(allocated, type.typeInfo());
+                object.clear();
+            }),
+            "");
+}
+
+TEST(ArcDeinitDeathTest, EscapingKotlinExceptionTerminates) {
+    EXPECT_DEATH(
+            kotlin::RunInNewThread([] {
+                kotlin::test_support::TypeInfoHolder exceptionType{
+                        kotlin::test_support::TypeInfoHolder::ObjectBuilder<Payload>().setSuperType(theThrowableTypeInfo)};
+                kotlin::test_support::TypeInfoHolder deinitType{
+                        kotlin::test_support::TypeInfoHolder::ObjectBuilder<Payload>().setArcDestroy(throwingKotlinArcDestroy)};
+                ObjHolder exception;
+                ObjHolder object;
+                arcDeinitException = AllocInstance(exceptionType.typeInfo(), exception.slot());
+                ObjHeader* allocated = AllocInstance(deinitType.typeInfo(), object.slot());
+                Kotlin_ArcMarkDeinitInitialized(allocated, deinitType.typeInfo());
+                object.clear();
+            }),
+            "");
 }
 
 TEST(ArcDestructionTest, WeakPromotionRacesFinalReleaseWithoutResurrection) {

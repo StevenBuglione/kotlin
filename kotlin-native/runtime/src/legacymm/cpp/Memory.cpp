@@ -1241,6 +1241,30 @@ ALWAYS_INLINE void runDeallocationHooks(ContainerHeader* container) {
   }
 }
 
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+RUNTIME_NOTHROW void runArcDeinitHooks(ContainerHeader* container) {
+  const TypeInfo* initializedType = container->takeArcInitializedDeinitType();
+  if (initializedType == nullptr) return;
+
+  RuntimeCheck(container->objectCount() == 1, "ARC deinit requires a single-object container");
+  ObjHeader* object = reinterpret_cast<ObjHeader*>(container + 1);
+  for (const TypeInfo* type = initializedType; type != nullptr; type = type->superType_) {
+    if (type->arcDestroy_ == nullptr) continue;
+#if KONAN_NO_EXCEPTIONS
+    type->arcDestroy_(object);
+#else
+    try {
+      type->arcDestroy_(object);
+    } catch (ExceptionObjHolder& exception) {
+      kotlin::TerminateWithUnhandledException(exception.GetExceptionObject());
+    } catch (...) {
+      std::terminate();
+    }
+#endif
+  }
+}
+#endif
+
 void freeContainer(ContainerHeader* container) {
   RuntimeAssert(container != nullptr, "this kind of container shalln't be freed");
 
@@ -1252,6 +1276,9 @@ void freeContainer(ContainerHeader* container) {
 #if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
   // Weak promotion is disabled before user finalizers run, preventing resurrection from hooks.
   clearArcWeakTargets(container);
+  // Kotlin @ArcDeinit bodies observe initialized fields. They run after weak zeroing has
+  // made resurrection impossible and before built-in hooks, meta teardown, and field release.
+  runArcDeinitHooks(container);
 #endif
   runDeallocationHooks(container);
 
@@ -3460,6 +3487,23 @@ RUNTIME_NOTHROW void ReleaseHeapRefNoCollectStrict(const ObjHeader* object) {
 }
 RUNTIME_NOTHROW void ReleaseHeapRefNoCollectRelaxed(const ObjHeader* object) {
   releaseHeapRef<false, /* CanCollect = */ false>(const_cast<ObjHeader*>(object));
+}
+
+RUNTIME_NOTHROW void Kotlin_ArcMarkDeinitInitialized(ObjHeader* object, const TypeInfo* initializedType) {
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+  RuntimeCheck(object != nullptr, "Cannot initialize ARC deinit state for a null object");
+  RuntimeCheck(initializedType != nullptr && initializedType->arcDestroy_ != nullptr,
+               "ARC deinit initialization requires a class-local destroy hook");
+  ContainerHeader* container = containerFor(object);
+  RuntimeCheck(container != nullptr && !container->stack(),
+               "ARC deinit objects must use individual heap containers");
+  RuntimeCheck(!container->arcDeallocating(), "Cannot initialize ARC deinit state during destruction");
+  RuntimeCheck(container->objectCount() == 1, "ARC deinit requires a single-object container");
+  container->setArcInitializedDeinitType(initializedType);
+#else
+  (void)object;
+  (void)initializedType;
+#endif
 }
 
 ForeignRefContext InitLocalForeignRef(ObjHeader* object) {
