@@ -24,6 +24,15 @@ EXPECTED_BRANCH = "codex/kotlin-native-arc-1.9.10"
 DEFAULT_BASE_REF = "v1.9.10"
 MAX_WORKERS = 28
 MIN_AVAILABLE_GIB = 60
+MACHINE_PROFILES = {
+    "primary": {},
+    "ci2": {
+        "ARC_REMOTE": "olfa@10.10.10.12",
+        "ARC_REMOTE_DIR": "/home/olfa/codex-kotlin-arc-ci2",
+        "ARC_REMOTE_GIT": "/home/olfa/codex-kotlin-rust",
+        "ARC_MAX_WORKERS": "16",
+    },
+}
 EXCLUDED_PATHS = (
     ".arc-runs",
     "wasm/wasm.debug.browsers",
@@ -63,6 +72,12 @@ def output(command: list[str], *, cwd: Path = ROOT, env: dict[str, str] | None =
 
 def setting(name: str, default: str) -> str:
     return os.environ.get(name, default)
+
+
+def select_machine(name: str) -> None:
+    """Apply named-machine defaults while preserving explicit environment overrides."""
+    for key, value in MACHINE_PROFILES[name].items():
+        os.environ.setdefault(key, value)
 
 
 def workers() -> int:
@@ -229,6 +244,12 @@ def remote_log(profile: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--machine",
+        choices=MACHINE_PROFILES,
+        default=os.environ.get("ARC_MACHINE", "primary"),
+        help="named remote machine (explicit ARC_* environment variables still take precedence)",
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("doctor")
     subparsers.add_parser("remote-init")
@@ -240,6 +261,7 @@ def main() -> None:
     log_parser = subparsers.add_parser("log")
     log_parser.add_argument("profile", choices=PROFILES)
     arguments = parser.parse_args()
+    select_machine(arguments.machine)
     if arguments.command == "doctor":
         doctor()
     elif arguments.command == "remote-init":

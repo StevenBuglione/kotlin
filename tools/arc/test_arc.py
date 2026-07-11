@@ -12,6 +12,24 @@ import no_collector_symbols
 
 
 class ArcProfileTest(unittest.TestCase):
+    def test_ci2_machine_defaults_are_independent(self):
+        with patch.dict(os.environ, {}, clear=True):
+            arc.select_machine("ci2")
+            self.assertEqual("olfa@10.10.10.12", os.environ["ARC_REMOTE"])
+            self.assertEqual("/home/olfa/codex-kotlin-arc-ci2", os.environ["ARC_REMOTE_DIR"])
+            self.assertEqual("/home/olfa/codex-kotlin-rust", os.environ["ARC_REMOTE_GIT"])
+            self.assertEqual(16, arc.workers())
+            self.assertEqual(
+                "ssh://olfa@10.10.10.12/home/olfa/codex-kotlin-rust/.git",
+                arc.remote_url(),
+            )
+
+    def test_ci2_machine_preserves_explicit_overrides(self):
+        with patch.dict(os.environ, {"ARC_REMOTE": "builder@example"}, clear=True):
+            arc.select_machine("ci2")
+            self.assertEqual("builder@example", os.environ["ARC_REMOTE"])
+            self.assertEqual(16, arc.workers())
+
     def test_distribution_includes_linux_platform_libraries(self):
         with patch.dict(os.environ, {}, clear=True):
             command = arc.profile_command("dist")

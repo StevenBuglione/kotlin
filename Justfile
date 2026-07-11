@@ -62,3 +62,34 @@ remote-status profile:
 
 remote-log profile:
     {{python}} tools/arc/arc.py log {{profile}}
+
+# Independent secondary Linux builder (olfa@10.10.10.12).
+ci2-doctor:
+    {{python}} tools/arc/arc.py --machine ci2 doctor
+
+ci2-init:
+    {{python}} tools/arc/arc.py --machine ci2 remote-init
+
+ci2-snapshot: ci2-init
+    {{python}} tools/arc/arc.py --machine ci2 remote-snapshot
+
+ci2-run profile: ci2-snapshot
+    {{python}} tools/arc/arc.py --machine ci2 run {{profile}}
+
+ci2-dist: ci2-snapshot
+    {{python}} tools/arc/arc.py --machine ci2 run dist
+
+ci2-runtime: ci2-snapshot
+    {{python}} tools/arc/arc.py --machine ci2 run runtime
+
+ci2-sanity: ci2-snapshot
+    {{python}} tools/arc/arc.py --machine ci2 run sanity
+
+ci2-full: ci2-snapshot
+    {{python}} tools/arc/arc.py --machine ci2 run full
+
+ci2-status profile:
+    {{python}} tools/arc/arc.py --machine ci2 status {{profile}}
+
+ci2-log profile:
+    {{python}} tools/arc/arc.py --machine ci2 log {{profile}}
