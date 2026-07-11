@@ -355,7 +355,19 @@ private class CuratedArcOwnershipPlanBuilder(
         if (function.returnType.isUnit()) return expression.value.type.isUnit()
         if (!function.returnType.binaryTypeIsReference()) return true
         val getValue = expression.value as? IrGetValue ?: return false
-        returnedValue = values[getValue.symbol] ?: return false
+        val value = values[getValue.symbol] ?: return false
+        returnedValue = if (ownership[value] == ArcOwnership.Guaranteed) {
+            // Parameters and receivers are +0 at the Kotlin ABI boundary, while object results
+            // are +1. Model that transfer explicitly so returning a borrowed parameter (for
+            // example intArrayOf's vararg array) has a balanced ownership plan.
+            val ownedResult = newValue("return")
+            operations += ArcOperation.Copy(value, ownedResult, location(expression, "owned return copy"))
+            ownership[ownedResult] = ArcOwnership.Owned
+            localDefinitionOrder += ownedResult
+            ownedResult
+        } else {
+            value
+        }
         return true
     }
 
