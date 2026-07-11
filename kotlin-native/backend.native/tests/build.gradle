@@ -3350,6 +3350,41 @@ standaloneTest("cycle_detector") {
     source = "runtime/memory/cycle_detector.kt"
 }
 
+standaloneTest("arc_debug_detect_cycles") {
+    flags = ['-tr', '-Xbinary=arcLeakCheck=report']
+    source = "runtime/memory/arc_debug_detect_cycles.kt"
+}
+
+standaloneTest("arc_leak_check_report") {
+    flags = ['-Xbinary=arcLeakCheck=report']
+    source = "runtime/memory/arc_leak_check_shutdown.kt"
+    outputChecker = { output ->
+        output.contains("ARC_LEAK_CHECK_FIXTURE") &&
+                output.contains("Kotlin/Native ARC leak check:") &&
+                output.contains("Cycles were not collected.")
+    }
+}
+
+standaloneTest("arc_leak_check_no_cycle") {
+    flags = ['-Xbinary=arcLeakCheck=report']
+    source = "runtime/memory/arc_leak_check_no_cycle.kt"
+    outputChecker = { output ->
+        output.contains("ARC_LEAK_CHECK_NO_CYCLE") &&
+                !output.contains("Kotlin/Native ARC leak check:")
+    }
+}
+
+standaloneTest("arc_leak_check_fail") {
+    flags = ['-Xbinary=arcLeakCheck=fail']
+    source = "runtime/memory/arc_leak_check_shutdown.kt"
+    expectedExitStatusChecker = { it != 0 }
+    outputChecker = { output ->
+        output.contains("ARC_LEAK_CHECK_FIXTURE") &&
+                output.contains("Kotlin/Native ARC leak check:") &&
+                output.contains("Cycles were not collected.")
+    }
+}
+
 standaloneTest("cycle_collector") {
     disabled = true // Needs USE_CYCLIC_GC, which is disabled.
     source = "runtime/memory/cycle_collector.kt"

@@ -271,7 +271,19 @@ bitcode {
                 testFixtures {}
             }
 
-            compilerArgs.add("-DKONAN_ARC_MEMORY_MANAGER=1")
+            compilerArgs.addAll("-DKONAN_ARC_MEMORY_MANAGER=1", "-DKONAN_ARC_DIAGNOSTICS=0")
+            onlyIf { target == KonanTarget.LINUX_X64 }
+        }
+
+        module("arc_diagnostic_memory_manager") {
+            srcRoot.set(layout.projectDirectory.dir("src/legacymm"))
+            headersDirs.from(files("src/main/cpp"))
+            sourceSets {
+                main {}
+                testFixtures {}
+            }
+
+            compilerArgs.addAll("-DKONAN_ARC_MEMORY_MANAGER=1", "-DKONAN_ARC_DIAGNOSTICS=1")
             onlyIf { target == KonanTarget.LINUX_X64 }
         }
 

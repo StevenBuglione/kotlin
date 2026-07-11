@@ -342,6 +342,7 @@ int64_t Kotlin_native_internal_GC_getThresholdAllocations(ObjHeader*);
 void Kotlin_native_internal_GC_setTuneThreshold(ObjHeader*, bool value);
 bool Kotlin_native_internal_GC_getTuneThreshold(ObjHeader*);
 OBJ_GETTER(Kotlin_native_internal_GC_detectCycles, ObjHeader*);
+OBJ_GETTER(Kotlin_ArcDebug_detectCycles, ObjHeader*);
 OBJ_GETTER(Kotlin_native_internal_GC_findCycle, ObjHeader*, ObjHeader* root);
 bool Kotlin_native_internal_GC_getCyclicCollector(ObjHeader* gc);
 void Kotlin_native_internal_GC_setCyclicCollector(ObjHeader* gc, bool value);

@@ -224,6 +224,8 @@ void Kotlin_deinitRuntimeIfNeeded() {
 void Kotlin_shutdownRuntime() {
     auto* runtime = ::runtimeState;
     RuntimeAssert(runtime != kInvalidRuntime, "Current thread must have Kotlin runtime initialized on it");
+    const bool arcLeakCheckEnabled =
+            kotlin::compiler::arcLeakCheck() != kotlin::compiler::ArcLeakCheck::kDisabled;
 
     bool needsFullShutdown = false;
     switch (kotlin::compiler::destroyRuntimeMode()) {
@@ -231,7 +233,8 @@ void Kotlin_shutdownRuntime() {
             needsFullShutdown = true;
             break;
         case kotlin::compiler::DestroyRuntimeMode::kOnShutdown:
-            needsFullShutdown = Kotlin_forceCheckedShutdown() || Kotlin_memoryLeakCheckerEnabled() || Kotlin_cleanersLeakCheckerEnabled();
+            needsFullShutdown = Kotlin_forceCheckedShutdown() || Kotlin_memoryLeakCheckerEnabled() ||
+                    Kotlin_cleanersLeakCheckerEnabled() || arcLeakCheckEnabled;
             break;
     }
     if (!needsFullShutdown) {
@@ -262,7 +265,8 @@ void Kotlin_shutdownRuntime() {
     bool canDestroyRuntime = true;
 
     // TODO: When legacy mode is gone, this `if` will become unnecessary.
-    if (Kotlin_forceCheckedShutdown() || Kotlin_memoryLeakCheckerEnabled() || Kotlin_cleanersLeakCheckerEnabled()) {
+    if (Kotlin_forceCheckedShutdown() || Kotlin_memoryLeakCheckerEnabled() ||
+            Kotlin_cleanersLeakCheckerEnabled() || arcLeakCheckEnabled) {
         // First make sure workers are gone.
         WaitNativeWorkersTermination();
 

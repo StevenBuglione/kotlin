@@ -19,7 +19,12 @@
 
 #include <cinttypes>
 #include <cstddef> // for offsetof
+#include <algorithm>
 #include <mutex>
+
+#ifndef KONAN_ARC_DIAGNOSTICS
+#define KONAN_ARC_DIAGNOSTICS 0
+#endif
 
 // Allow concurrent global cycle collector.
 #define USE_CYCLIC_GC 0
@@ -271,6 +276,117 @@ class CycleDetector : private kotlin::Pinned {
 };
 
 #endif  // USE_CYCLE_DETECTOR
+
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER && KONAN_ARC_DIAGNOSTICS
+
+inline container_size_t objectSize(const ObjHeader* obj);
+
+// Diagnostic ARC binaries track from their first allocation so an explicit scan cannot miss
+// cycles that predate the call. Ordinary ARC binaries compile this entire block out.
+struct ArcGraphSnapshot {
+  std_support::vector<KRef> nodes;
+  std_support::vector<std_support::vector<size_t>> edges;
+
+  ArcGraphSnapshot() = default;
+  ArcGraphSnapshot(ArcGraphSnapshot&& other) noexcept {
+    nodes.swap(other.nodes);
+    edges.swap(other.edges);
+  }
+  ~ArcGraphSnapshot() {
+    for (KRef object : nodes) ReleaseHeapRef(object);
+  }
+};
+
+class ArcCycleRegistry : private kotlin::Pinned {
+ public:
+  class MutationGuard : private kotlin::Pinned {
+   public:
+    MutationGuard() noexcept { instance().lock_.lock_shared(); }
+    ~MutationGuard() { unlock(); }
+    void unlock() noexcept {
+      if (!locked_) return;
+      locked_ = false;
+      instance().lock_.unlock_shared();
+    }
+
+   private:
+    bool locked_ = true;
+  };
+
+  static void registerObject(KRef object) {
+    auto& registry = instance();
+    std::lock_guard guard(registry.lock_);
+    registry.objects_.insert(object);
+  }
+
+  static void unregisterContainer(ContainerHeader* container) {
+    auto& registry = instance();
+    std::lock_guard guard(registry.lock_);
+    ObjHeader* object = reinterpret_cast<ObjHeader*>(container + 1);
+    for (uint32_t index = 0; index < container->objectCount(); ++index) {
+      registry.objects_.erase(object);
+      object = reinterpret_cast<ObjHeader*>(reinterpret_cast<uintptr_t>(object) + objectSize(object));
+    }
+  }
+
+  static ArcGraphSnapshot snapshotGraph() {
+    auto& registry = instance();
+    ArcGraphSnapshot result;
+    std::lock_guard guard(registry.lock_);
+
+    result.nodes.reserve(registry.objects_.size());
+    for (KRef object : registry.objects_) {
+      // Final release atomically marks a container deallocating. Because final free also takes
+      // this lock before removing the raw registry entry, a failed retain is safe to skip.
+      if (TryAddHeapRef(object)) result.nodes.push_back(object);
+    }
+
+    std_support::unordered_map<KRef, size_t> index;
+    index.reserve(result.nodes.size());
+    for (size_t i = 0; i < result.nodes.size(); ++i) index.emplace(result.nodes[i], i);
+
+    result.edges.resize(result.nodes.size());
+    for (size_t i = 0; i < result.nodes.size(); ++i) {
+      kotlin::traverseReferredObjects(result.nodes[i], [&result, &index, i](KRef child) {
+        auto it = index.find(child);
+        if (it != index.end()) result.edges[i].push_back(it->second);
+      });
+    }
+    return result;
+  }
+
+ private:
+  static ArcCycleRegistry& instance() {
+    // Deliberately leak the registry: its entries are removed before object memory is reclaimed,
+    // and process shutdown order must not race thread-local ARC teardown.
+    static ArcCycleRegistry* registry = new (std_support::kalloc) ArcCycleRegistry();
+    return *registry;
+  }
+
+  kotlin::RWSpinLock<kotlin::MutexThreadStateHandling::kIgnore> lock_;
+  std_support::unordered_set<KRef> objects_;
+};
+
+#endif
+
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+#if KONAN_ARC_DIAGNOSTICS
+#define ARC_DIAGNOSTIC_MUTATION_GUARD(name) ArcCycleRegistry::MutationGuard name;
+#define ARC_DIAGNOSTIC_UNLOCK(name) name.unlock();
+#define ARC_DIAGNOSTIC_REGISTER_OBJECT(object) ArcCycleRegistry::registerObject(object)
+#define ARC_DIAGNOSTIC_UNREGISTER_CONTAINER(container) ArcCycleRegistry::unregisterContainer(container)
+#else
+// Ordinary ARC preprocesses every diagnostics hook away, including in unoptimized builds.
+#define ARC_DIAGNOSTIC_MUTATION_GUARD(name)
+#define ARC_DIAGNOSTIC_UNLOCK(name)
+#define ARC_DIAGNOSTIC_REGISTER_OBJECT(object) do {} while (false)
+#define ARC_DIAGNOSTIC_UNREGISTER_CONTAINER(container) do {} while (false)
+#endif
+#endif
+
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER && KONAN_ARC_DIAGNOSTICS
+void reportArcCyclesAtShutdown();
+#endif
 
 // TODO: can we pass this variable as an explicit argument?
 THREAD_LOCAL_VARIABLE MemoryState* memoryState = nullptr;
@@ -1274,6 +1390,9 @@ void freeContainer(ContainerHeader* container) {
   }
 
 #if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+  // Removal is serialized with snapshot retention. The object has already entered its
+  // non-retainable deallocating state, but its memory remains valid until this returns.
+  ARC_DIAGNOSTIC_UNREGISTER_CONTAINER(container);
   // Weak promotion is disabled before user finalizers run, preventing resurrection from hooks.
   clearArcWeakTargets(container);
   // Kotlin @ArcDeinit bodies observe initialized fields. They run after weak zeroing has
@@ -2259,7 +2378,11 @@ void deinitMemory(MemoryState* memoryState, bool destroyRuntime) {
 #endif // USE_GC
 
 #if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+#if KONAN_ARC_DIAGNOSTICS
+  bool lastMemoryState = atomicAdd(&aliveMemoryStatesCount, -1) == 0;
+#else
   atomicAdd(&aliveMemoryStatesCount, -1);
+#endif
   auto* foreignRefManager = memoryState->foreignRefManager;
   while (!foreignRefManager->tryReleaseRefOwned()) {
     foreignRefManager->processEnqueuedReleaseRefsWith([](ObjHeader* object) {
@@ -2268,6 +2391,13 @@ void deinitMemory(MemoryState* memoryState, bool destroyRuntime) {
   }
   memoryState->foreignRefManager = nullptr;
   memoryState->tls.Deinit();
+#if KONAN_ARC_DIAGNOSTICS
+  // Only the final orderly runtime teardown owns process-wide leak reporting. Concurrent
+  // foreign-thread teardown is not an orderly shutdown and is deliberately not diagnosed.
+  if (destroyRuntime && lastMemoryState && atomicGet(&pendingDeinit) == 1) {
+    reportArcCyclesAtShutdown();
+  }
+#endif
 #endif
 
   atomicAdd(&pendingDeinit, -1);
@@ -2317,6 +2447,9 @@ template<bool Strict>
 void setHeapRef(ObjHeader** location, const ObjHeader* object) {
   MEMORY_LOG("SetHeapRef *%p: %p\n", location, object)
   UPDATE_REF_EVENT(memoryState, nullptr, object, location, 0);
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER && KONAN_ARC_DIAGNOSTICS
+  ARC_DIAGNOSTIC_MUTATION_GUARD(mutationGuard)
+#endif
   if (object != nullptr)
     addHeapRef(const_cast<ObjHeader*>(object));
   *const_cast<const ObjHeader**>(location) = object;
@@ -2324,10 +2457,21 @@ void setHeapRef(ObjHeader** location, const ObjHeader* object) {
 
 void zeroHeapRef(ObjHeader** location) {
   MEMORY_LOG("ZeroHeapRef %p\n", location)
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER && KONAN_ARC_DIAGNOSTICS
+  ObjHeader* value;
+  {
+    ARC_DIAGNOSTIC_MUTATION_GUARD(mutationGuard)
+    value = *location;
+    if (!isNullOrMarker(value)) *location = nullptr;
+  }
+#else
   auto* value = *location;
+#endif
   if (!isNullOrMarker(value)) {
     UPDATE_REF_EVENT(memoryState, value, nullptr, location, 0);
+#if !defined(KONAN_ARC_MEMORY_MANAGER) || !KONAN_ARC_MEMORY_MANAGER || !KONAN_ARC_DIAGNOSTICS
     *location = nullptr;
+#endif
     ReleaseHeapRef(value);
   }
 }
@@ -2347,7 +2491,23 @@ void zeroStackRef(ObjHeader** location) {
 template <bool Strict>
 void updateHeapRef(ObjHeader** location, const ObjHeader* object) {
   UPDATE_REF_EVENT(memoryState, *location, object, location, 0);
-  ObjHeader* old = *location;
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER && KONAN_ARC_DIAGNOSTICS
+  ObjHeader* old;
+  bool changed;
+  {
+    ARC_DIAGNOSTIC_MUTATION_GUARD(mutationGuard)
+    old = *location;
+    changed = old != object;
+    if (changed) {
+      if (object != nullptr) addHeapRef(object);
+      *const_cast<const ObjHeader**>(location) = object;
+    }
+  }
+  if (changed && !isNullOrMarker(old)) {
+    releaseHeapRef<Strict>(old);
+  }
+#else
+  auto* old = *location;
   if (old != object) {
     if (object != nullptr) {
       addHeapRef(object);
@@ -2357,6 +2517,7 @@ void updateHeapRef(ObjHeader** location, const ObjHeader* object) {
       releaseHeapRef<Strict>(old);
     }
   }
+#endif
 }
 
 template <bool Strict>
@@ -2364,14 +2525,23 @@ void updateHeapRefsInsideOneArray(const ArrayHeader* array, int fromIndex, int t
   // In case of coping inside same array number of decrements and increments of RC can be decreased.
   auto countIndex = [=](int i) { return (fromIndex < toIndex) ? count - 1 - i : i; };
   int rewrittenElementsNumber = std::abs(fromIndex - toIndex);
-  // Release rewritten elements.
+  // Release rewritten elements after publishing the complete mutation. Final release may
+  // unregister an object and therefore must not happen while holding the graph read lock.
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER && KONAN_ARC_DIAGNOSTICS
+  std_support::vector<ObjHeader*> toRelease;
+  ARC_DIAGNOSTIC_MUTATION_GUARD(mutationGuard)
+#endif
   for (int i = 0; i < rewrittenElementsNumber; i++) {
     int index = countIndex(i);
     ObjHeader* old = *ArrayAddressOfElementAt(array, toIndex + index);
     *const_cast<const ObjHeader**>(ArrayAddressOfElementAt(array, toIndex + index)) =
       *ArrayAddressOfElementAt(array, fromIndex + index);
     if (old != nullptr) {
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER && KONAN_ARC_DIAGNOSTICS
+      toRelease.push_back(old);
+#else
       releaseHeapRef<Strict>(old);
+#endif
     }
   }
   for (int i = rewrittenElementsNumber; i < count - rewrittenElementsNumber; i++) {
@@ -2388,6 +2558,10 @@ void updateHeapRefsInsideOneArray(const ArrayHeader* array, int fromIndex, int t
     }
     *const_cast<const ObjHeader**>(ArrayAddressOfElementAt(array, toIndex + index)) = object;
   }
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER && KONAN_ARC_DIAGNOSTICS
+  ARC_DIAGNOSTIC_UNLOCK(mutationGuard)
+  for (ObjHeader* object : toRelease) releaseHeapRef<Strict>(object);
+#endif
 }
 
 template <bool Strict>
@@ -2417,7 +2591,15 @@ void updateReturnRef(ObjHeader** returnSlot, const ObjHeader* value) {
 
 void updateHeapRefIfNull(ObjHeader** location, const ObjHeader* object) {
   if (object != nullptr) {
-#if KONAN_NO_THREADS
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER && KONAN_ARC_DIAGNOSTICS
+    ObjHeader* old;
+    {
+      ARC_DIAGNOSTIC_MUTATION_GUARD(mutationGuard)
+      addHeapRef(const_cast<ObjHeader*>(object));
+      old = __sync_val_compare_and_swap(location, nullptr, const_cast<ObjHeader*>(object));
+    }
+    if (old != nullptr) ReleaseHeapRef(const_cast<ObjHeader*>(object));
+#elif KONAN_NO_THREADS
     ObjHeader* old = *location;
     if (old == nullptr) {
       addHeapRef(const_cast<ObjHeader*>(object));
@@ -2505,7 +2687,9 @@ OBJ_GETTER(allocInstance, const TypeInfo* type_info) {
 #endif  // USE_CYCLIC_GC
 #if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
   if constexpr (!Strict) {
-    return moveArcAllocationToReturnSlot(container.header(), obj, OBJ_RESULT);
+    ObjHeader* result = moveArcAllocationToReturnSlot(container.header(), obj, OBJ_RESULT);
+    ARC_DIAGNOSTIC_REGISTER_OBJECT(result);
+    return result;
   }
 #endif
   RETURN_OBJ(obj);
@@ -2529,7 +2713,9 @@ OBJ_GETTER(allocArrayInstance, const TypeInfo* type_info, int32_t elements) {
 #endif  // USE_GC
 #if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
   if constexpr (!Strict) {
-    return moveArcAllocationToReturnSlot(container.header(), container.GetPlace()->obj(), OBJ_RESULT);
+    ObjHeader* result = moveArcAllocationToReturnSlot(container.header(), container.GetPlace()->obj(), OBJ_RESULT);
+    ARC_DIAGNOSTIC_REGISTER_OBJECT(result);
+    return result;
   }
 #endif
   RETURN_OBJ(container.GetPlace()->obj());
@@ -3291,6 +3477,104 @@ OBJ_GETTER(findCycle, KRef root) {
 
 #endif  // USE_CYCLE_DETECTOR
 
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER && KONAN_ARC_DIAGNOSTICS
+
+std_support::vector<std_support::vector<size_t>> findArcStronglyConnectedComponents(const ArcGraphSnapshot& graph) {
+  const size_t size = graph.nodes.size();
+  std_support::vector<bool> seen(size, false);
+  std_support::vector<size_t> order;
+  order.reserve(size);
+
+  for (size_t start = 0; start < size; ++start) {
+    if (seen[start]) continue;
+    seen[start] = true;
+    std_support::vector<std::pair<size_t, size_t>> stack;
+    stack.emplace_back(start, 0);
+    while (!stack.empty()) {
+      auto& [node, nextEdge] = stack.back();
+      if (nextEdge < graph.edges[node].size()) {
+        size_t child = graph.edges[node][nextEdge++];
+        if (!seen[child]) {
+          seen[child] = true;
+          stack.emplace_back(child, 0);
+        }
+      } else {
+        order.push_back(node);
+        stack.pop_back();
+      }
+    }
+  }
+
+  std_support::vector<std_support::vector<size_t>> reversed(size);
+  for (size_t node = 0; node < size; ++node) {
+    for (size_t child : graph.edges[node]) reversed[child].push_back(node);
+  }
+
+  std::fill(seen.begin(), seen.end(), false);
+  std_support::vector<std_support::vector<size_t>> cycles;
+  for (auto it = order.rbegin(); it != order.rend(); ++it) {
+    size_t start = *it;
+    if (seen[start]) continue;
+    std_support::vector<size_t> component;
+    std_support::vector<size_t> stack{start};
+    seen[start] = true;
+    while (!stack.empty()) {
+      size_t node = stack.back();
+      stack.pop_back();
+      component.push_back(node);
+      for (size_t parent : reversed[node]) {
+        if (!seen[parent]) {
+          seen[parent] = true;
+          stack.push_back(parent);
+        }
+      }
+    }
+
+    bool selfCycle = component.size() == 1 &&
+        std::find(graph.edges[start].begin(), graph.edges[start].end(), start) != graph.edges[start].end();
+    if (component.size() > 1 || selfCycle) cycles.emplace_back(std::move(component));
+  }
+  return cycles;
+}
+
+void reportArcCyclesAtShutdown() {
+  ArcGraphSnapshot graph = ArcCycleRegistry::snapshotGraph();
+  auto cycles = findArcStronglyConnectedComponents(graph);
+  if (cycles.empty()) return;
+
+  size_t objectCount = 0;
+  for (const auto& cycle : cycles) objectCount += cycle.size();
+  konan::consoleErrorf(
+      "Kotlin/Native ARC leak check: %zu strong cycle(s), %zu object(s). Cycles were not collected.\n",
+      cycles.size(), objectCount);
+  for (size_t index = 0; index < cycles.size(); ++index) {
+    konan::consoleErrorf("  cycle %zu: %zu object(s)\n", index + 1, cycles[index].size());
+  }
+  konan::consoleFlush();
+
+  if (kotlin::compiler::arcLeakCheck() == kotlin::compiler::ArcLeakCheck::kFail) {
+    konan::abort();
+  }
+}
+
+OBJ_GETTER0(detectArcCycles) {
+  ArcGraphSnapshot graph = ArcCycleRegistry::snapshotGraph();
+  auto cycles = findArcStronglyConnectedComponents(graph);
+
+  ArrayHeader* outer = AllocArrayInstance(theArrayTypeInfo, cycles.size(), OBJ_RESULT)->array();
+  for (size_t cycleIndex = 0; cycleIndex < cycles.size(); ++cycleIndex) {
+    ObjHolder innerHolder;
+    ArrayHeader* inner = AllocArrayInstance(theArrayTypeInfo, cycles[cycleIndex].size(), innerHolder.slot())->array();
+    for (size_t objectIndex = 0; objectIndex < cycles[cycleIndex].size(); ++objectIndex) {
+      UpdateHeapRef(ArrayAddressOfElementAt(inner, objectIndex), graph.nodes[cycles[cycleIndex][objectIndex]]);
+    }
+    UpdateHeapRef(ArrayAddressOfElementAt(outer, cycleIndex), inner->obj());
+  }
+  return outer->obj();
+}
+
+#endif
+
 }  // namespace
 
 MetaObjHeader* ObjHeader::createMetaObject(ObjHeader* object) {
@@ -3887,6 +4171,16 @@ OBJ_GETTER(Kotlin_native_internal_GC_detectCycles, KRef) {
   RETURN_OBJ(nullptr);
 #endif
 }
+
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER && KONAN_ARC_DIAGNOSTICS
+OBJ_GETTER(Kotlin_ArcDebug_detectCycles, KRef) {
+  RETURN_RESULT_OF0(detectArcCycles);
+}
+#elif !defined(KONAN_ARC_MEMORY_MANAGER) || !KONAN_ARC_MEMORY_MANAGER
+OBJ_GETTER(Kotlin_ArcDebug_detectCycles, KRef) {
+  RETURN_OBJ(nullptr);
+}
+#endif
 
 OBJ_GETTER(Kotlin_native_internal_GC_findCycle, KRef, KRef root) {
 #if USE_CYCLE_DETECTOR

@@ -39,6 +39,7 @@ extern "C" const char* const Kotlin_runtimeLogs;
 extern "C" const int32_t Kotlin_gcSchedulerType;
 extern "C" const int32_t Kotlin_freezingEnabled;
 extern "C" const int32_t Kotlin_freezingChecksEnabled;
+extern "C" const int32_t Kotlin_arcLeakCheck;
 
 class SourceInfo;
 
@@ -78,6 +79,13 @@ enum class AppStateTracking {
     kEnabled = 1,
 };
 
+// Must match ArcLeakCheck in ArcDiagnostics.kt.
+enum class ArcLeakCheck : int32_t {
+    kDisabled = 0,
+    kReport = 1,
+    kFail = 2,
+};
+
 ALWAYS_INLINE inline bool shouldContainDebugInfo() noexcept {
     return Kotlin_needDebugInfo != 0;
 }
@@ -104,6 +112,10 @@ ALWAYS_INLINE inline bool freezingChecksEnabled() noexcept {
 
 ALWAYS_INLINE inline GCSchedulerType getGCSchedulerType() noexcept {
     return static_cast<compiler::GCSchedulerType>(Kotlin_gcSchedulerType);
+}
+
+ALWAYS_INLINE inline ArcLeakCheck arcLeakCheck() noexcept {
+    return static_cast<ArcLeakCheck>(Kotlin_arcLeakCheck);
 }
 
 

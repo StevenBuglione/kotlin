@@ -115,6 +115,17 @@ class KonanConfig(val project: Project, val configuration: CompilerConfiguration
             }
         }
     }
+    val arcLeakCheck: ArcLeakCheck by lazy {
+        val configured = configuration.get(BinaryOptions.arcLeakCheck) ?: ArcLeakCheck.DISABLED
+        if (configured != ArcLeakCheck.DISABLED && memoryModel != MemoryModel.ARC) {
+            configuration.report(
+                    CompilerMessageSeverity.ERROR,
+                    "`arcLeakCheck` is available only with the ARC memory model. Disabling ARC leak diagnostics.")
+            ArcLeakCheck.DISABLED
+        } else {
+            configured
+        }
+    }
     val destroyRuntimeMode: DestroyRuntimeMode get() = configuration.get(KonanConfigKeys.DESTROY_RUNTIME_MODE)!!
     private val defaultGC get() = if (target.supportsThreads()) GC.CONCURRENT_MARK_AND_SWEEP else GC.SAME_THREAD_MARK_AND_SWEEP
     val gc: GC by lazy {
@@ -333,7 +344,11 @@ class KonanConfig(val project: Project, val configuration: CompilerConfiguration
             }
             MemoryModel.ARC -> {
                 add("arc.bc")
-                add("arc_memory_manager.bc")
+                add(if (arcLeakCheck == ArcLeakCheck.DISABLED) {
+                    "arc_memory_manager.bc"
+                } else {
+                    "arc_diagnostic_memory_manager.bc"
+                })
             }
         }
         if (shouldCoverLibraries || shouldCoverSources) add("profileRuntime.bc")
@@ -431,6 +446,8 @@ class KonanConfig(val project: Project, val configuration: CompilerConfiguration
             append("-mm$memoryModel")
         if (memoryModel == MemoryModel.ARC)
             append("-arc_refs_v1")
+        if (arcLeakCheck != ArcLeakCheck.DISABLED)
+            append("-arc_leak_${arcLeakCheck.name.lowercase()}_v1")
         if (freezing != defaultFreezing)
             append("-freezing${freezing.name}")
         if (propertyLazyInitialization != defaultPropertyLazyInitialization)
