@@ -36,6 +36,9 @@ import org.jetbrains.kotlin.types.Variance
 import org.jetbrains.kotlin.utils.fileUtils.descendantRelativeTo
 import java.io.File
 
+private const val ARC_STRONG_REFERENCE_CYCLE_SUPPRESSION = "ARC_STRONG_REFERENCE_CYCLE"
+private val suppressAnnotationFqName = FqName("kotlin.Suppress")
+
 /**
  * Kotlin/Native-specific language checks. Most importantly, it checks C/Objective-C interop restrictions.
  * TODO: Should be moved to compiler frontend after K2.
@@ -562,6 +565,7 @@ private class BackendChecker(
             owner: IrValueDeclaration,
             storedValue: IrExpression,
     ) {
+        if (isArcCycleWarningSuppressed(location)) return
         val value = storedValue.unwrapArcCycleExpression()
 
         if (value.arcCycleIdentity() == owner) {
@@ -576,6 +580,22 @@ private class BackendChecker(
                     "ARC strong reference cycle: a stored closure strongly captures the object that owns its storage; " +
                             "use @ArcWeak or @ArcUnowned to break the cycle"
             )
+        }
+    }
+
+    private fun isArcCycleWarningSuppressed(location: IrElement): Boolean =
+            (location as? IrAnnotationContainer)?.suppressesArcCycleWarning() == true ||
+                    outerDeclarations.any { it.suppressesArcCycleWarning() } ||
+                    irFile.suppressesArcCycleWarning()
+
+    private fun IrAnnotationContainer.suppressesArcCycleWarning(): Boolean {
+        val argument = annotations.findAnnotation(suppressAnnotationFqName)?.getValueArgument(0) ?: return false
+        return when (argument) {
+            is IrVararg -> argument.elements.any {
+                (it as? IrConst<*>)?.value == ARC_STRONG_REFERENCE_CYCLE_SUPPRESSION
+            }
+            is IrConst<*> -> argument.value == ARC_STRONG_REFERENCE_CYCLE_SUPPRESSION
+            else -> false
         }
     }
 

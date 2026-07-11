@@ -7,6 +7,7 @@ package org.jetbrains.kotlin.backend.konan.driver.phases
 
 import llvm.DIFinalize
 import org.jetbrains.kotlin.backend.konan.NativeGenerationState
+import org.jetbrains.kotlin.backend.konan.arc.ArcCodegenOwnershipPlan
 import org.jetbrains.kotlin.backend.konan.driver.utilities.KotlinBackendIrHolder
 import org.jetbrains.kotlin.backend.konan.driver.utilities.getDefaultIrActions
 import org.jetbrains.kotlin.backend.konan.driver.utilities.getDefaultLlvmModuleActions
@@ -52,7 +53,8 @@ internal val RTTIPhase = createSimpleNamedCompilerPhase<NativeGenerationState, R
 
 internal data class CodegenInput(
         val irModule: IrModuleFragment,
-        val lifetimes: Map<IrElement, Lifetime>
+        val lifetimes: Map<IrElement, Lifetime>,
+        val arcOwnership: ArcCodegenOwnershipPlan,
 ) : KotlinBackendIrHolder {
     override val kotlinIr: IrElement
         get() = irModule
@@ -72,7 +74,12 @@ internal val CodegenPhase = createSimpleNamedCompilerPhase<NativeGenerationState
                     context.objCExportCodeSpec
             )
 
-            input.irModule.acceptVoid(CodeGeneratorVisitor(generationState, input.irModule.irBuiltins, input.lifetimes))
+            input.irModule.acceptVoid(CodeGeneratorVisitor(
+                    generationState,
+                    input.irModule.irBuiltins,
+                    input.lifetimes,
+                    input.arcOwnership,
+            ))
 
             if (generationState.hasDebugInfo())
                 DIFinalize(generationState.debugInfo.builder)

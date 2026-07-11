@@ -421,23 +421,30 @@ class GccBasedLinker(targetProperties: GccConfigurables)
             // See explanation about `-u__llvm_profile_runtime` here:
             // https://github.com/llvm/llvm-project/blob/21e270a479a24738d641e641115bce6af6ed360a/llvm/lib/Transforms/Instrumentation/InstrProfiling.cpp#L930
             if (needsProfileLibrary) +listOf("-u__llvm_profile_runtime", profileLibrary!!)
+            when (sanitizer) {
+                null -> {}
+                SanitizerKind.ADDRESS -> {
+                    // Match Clang's Linux ASan driver contract. Interceptors are
+                    // not necessarily referenced by the instrumented object, so
+                    // ordinary archive extraction would silently omit them.
+                    +"--whole-archive"
+                    +provideCompilerRtLibrary("asan")!!
+                    +"--no-whole-archive"
+                    +"--whole-archive"
+                    +provideCompilerRtLibrary("asan_cxx")!!
+                    +"--no-whole-archive"
+                    +"-lrt"
+                }
+                SanitizerKind.THREAD -> {
+                    +provideCompilerRtLibrary("tsan")!!
+                    +provideCompilerRtLibrary("tsan_cxx")!!
+                    +"-lrt"
+                }
+            }
             +linkerKonanFlags
             +linkerGccFlags
             +if (dynamic) "$libGcc/crtendS.o" else "$libGcc/crtend.o"
             +"$crtPrefix/crtn.o"
-            when (sanitizer) {
-                null -> {}
-                SanitizerKind.ADDRESS -> {
-                    +"-lrt"
-                    +provideCompilerRtLibrary("asan")!!
-                    +provideCompilerRtLibrary("asan_cxx")!!
-                }
-                SanitizerKind.THREAD -> {
-                    +"-lrt"
-                    +provideCompilerRtLibrary("tsan")!!
-                    +provideCompilerRtLibrary("tsan_cxx")!!
-                }
-            }
         })
     }
 }
@@ -608,4 +615,3 @@ fun linker(configurables: Configurables): LinkerFlags =
             is ZephyrConfigurables -> ZephyrLinker(configurables)
             else -> error("Unexpected target: ${configurables.target}")
         }
-

@@ -9,6 +9,9 @@ package runtime.workers.lazy1
 import kotlin.test.*
 import kotlin.native.concurrent.*
 
+private val usesSharedHeap: Boolean
+    get() = Platform.memoryModel == MemoryModel.EXPERIMENTAL || Platform.memoryModel == MemoryModel.ARC
+
 private var y = 20
 
 class Lazy(mode: LazyThreadSafetyMode) {
@@ -34,16 +37,16 @@ class Lazy(mode: LazyThreadSafetyMode) {
 }
 
 private val checkedLazyModes =
-        if (Platform.memoryModel != MemoryModel.EXPERIMENTAL)
-            listOf(LazyThreadSafetyMode.PUBLICATION)
-        else
+        if (usesSharedHeap)
             listOf(LazyThreadSafetyMode.SYNCHRONIZED, LazyThreadSafetyMode.PUBLICATION)
+        else
+            listOf(LazyThreadSafetyMode.PUBLICATION)
 
 @Test fun runTest1() {
     for (mode in checkedLazyModes) {
         // We decided to synchonaize behaviour to be consistent with jvm version.
         // Anyway, it's doesn't looks like well-defined case
-        if (Platform.memoryModel == MemoryModel.EXPERIMENTAL) {
+        if (usesSharedHeap) {
             val expected = if (mode == LazyThreadSafetyMode.SYNCHRONIZED) 46 else 42
             y = 20
             assertEquals(Lazy(mode).finiteRecursion, expected)

@@ -14,6 +14,9 @@ import kotlin.concurrent.AtomicInt
 
 const val WORKERS_COUNT = 20
 
+private val usesSharedHeap: Boolean
+    get() = Platform.memoryModel == MemoryModel.EXPERIMENTAL || Platform.memoryModel == MemoryModel.ARC
+
 class IntHolder(val value:Int)
 
 class C(mode: LazyThreadSafetyMode, private val initializer: () -> IntHolder) {
@@ -22,7 +25,7 @@ class C(mode: LazyThreadSafetyMode, private val initializer: () -> IntHolder) {
 
 fun concurrentLazyAccess(freeze: Boolean, mode: LazyThreadSafetyMode) {
     // in old mm PUBLICATION is in fact SYNCHRONIZED, while SYNCHRONIZED is not supported
-    val argumentMode = if (Platform.memoryModel == MemoryModel.EXPERIMENTAL) mode else LazyThreadSafetyMode.PUBLICATION
+    val argumentMode = if (usesSharedHeap) mode else LazyThreadSafetyMode.PUBLICATION
     val initializerCallCount = AtomicInt(0)
 
     val c = C(argumentMode) {
@@ -63,7 +66,7 @@ fun concurrentLazyAccess(freeze: Boolean, mode: LazyThreadSafetyMode) {
 
 @Test
 fun concurrentLazyAccessUnfrozen() {
-    if (Platform.memoryModel != MemoryModel.EXPERIMENTAL) {
+    if (!usesSharedHeap) {
         return
     }
     concurrentLazyAccess(false, LazyThreadSafetyMode.SYNCHRONIZED)
@@ -75,4 +78,3 @@ fun concurrentLazyAccessFrozen() {
     concurrentLazyAccess(true, LazyThreadSafetyMode.SYNCHRONIZED)
     concurrentLazyAccess(true, LazyThreadSafetyMode.PUBLICATION)
 }
-

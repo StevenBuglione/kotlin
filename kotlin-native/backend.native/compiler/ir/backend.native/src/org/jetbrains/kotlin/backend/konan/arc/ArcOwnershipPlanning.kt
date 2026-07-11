@@ -46,6 +46,7 @@ internal data class ArcOwnershipPlanningReport(
     val plans: List<ArcFunctionPlan>,
     val classifications: ArcOwnershipClassificationCounts,
     val optimization: ArcOwnershipOptimizationMetrics,
+    val codegenPlan: ArcCodegenOwnershipPlan,
 ) {
     companion object {
         val Disabled = ArcOwnershipPlanningReport(
@@ -54,9 +55,29 @@ internal data class ArcOwnershipPlanningReport(
             plans = emptyList(),
             classifications = ArcOwnershipClassificationCounts(),
             optimization = ArcOwnershipOptimizationMetrics(),
+            codegenPlan = ArcCodegenOwnershipPlan.Empty,
         )
     }
 }
+
+/**
+ * The deliberately small part of a verified ownership plan that codegen is allowed to consume.
+ *
+ * IR declarations are used as identity keys. This plan never crosses the compilation boundary and
+ * therefore does not affect KLIB metadata or ABI.
+ */
+internal data class ArcCodegenOwnershipPlan(
+    val ownedResultForwarding: Map<IrSimpleFunction, ArcOwnedResultForwarding>,
+) {
+    companion object {
+        val Empty = ArcCodegenOwnershipPlan(emptyMap())
+    }
+}
+
+internal data class ArcOwnedResultForwarding(
+    val producer: IrVariable,
+    val returned: IrVariable,
+)
 
 internal data class ArcOwnershipClassificationCounts(
     val owned: Int = 0,
@@ -96,20 +117,24 @@ internal fun runArcOwnershipPlanning(
     val plans = mutableListOf<ArcFunctionPlan>()
     var classifications = ArcOwnershipClassificationCounts()
     var optimization = ArcOwnershipOptimizationMetrics()
+    val ownedResultForwarding = linkedMapOf<IrSimpleFunction, ArcOwnedResultForwarding>()
     var skipped = 0
     input.module.files.forEach { file ->
-        file.acceptVoid(object : IrElementVisitorVoid {
+        file.acceptChildrenVoid(object : IrElementVisitorVoid {
             override fun visitSimpleFunction(declaration: IrSimpleFunction) {
-                val plan = CuratedArcOwnershipPlanBuilder(declaration, input.lifetimes).build()
-                if (plan == null) {
+                val builtPlan = CuratedArcOwnershipPlanBuilder(declaration, input.lifetimes).build()
+                if (builtPlan == null) {
                     skipped++
                 } else {
-                    when (val result = ArcOwnershipVerifier.verify(plan)) {
+                    when (val result = ArcOwnershipVerifier.verify(builtPlan.plan)) {
                         ArcOwnershipVerificationResult.Success -> {
-                            val optimized = ArcOwnershipOptimizer.optimizeVerified(plan)
+                            val optimized = ArcOwnershipOptimizer.optimizeVerified(builtPlan.plan)
                             plans += optimized.plan
                             classifications += optimized.plan.classificationCounts()
                             optimization += optimized.metrics
+                            selectOwnedResultForwarding(declaration, builtPlan, optimized)?.let {
+                                ownedResultForwarding[declaration] = it
+                            }
                         }
                         is ArcOwnershipVerificationResult.Failure -> reportFailure(generationState, file, declaration, result)
                     }
@@ -118,7 +143,67 @@ internal fun runArcOwnershipPlanning(
             }
         })
     }
-    return ArcOwnershipPlanningReport(plans.size, skipped, plans, classifications, optimization)
+    return ArcOwnershipPlanningReport(
+        plans.size,
+        skipped,
+        plans,
+        classifications,
+        optimization,
+        ArcCodegenOwnershipPlan(ownedResultForwarding),
+    )
+}
+
+private data class CuratedArcFunctionPlan(
+    val plan: ArcFunctionPlan,
+    val variableValues: Map<org.jetbrains.kotlin.ir.symbols.IrVariableSymbol, ArcValue>,
+)
+
+/**
+ * Select the first production codegen slice only when a verified plan describes a non-immortal
+ * call result forwarded through one or more immutable aliases. The IR restriction is
+ * intentionally tighter than the planner restriction: no operation may occur between the call
+ * and return, so forwarding into the caller's return slot cannot delay destruction on an
+ * exceptional path.
+ */
+private fun selectOwnedResultForwarding(
+    function: IrSimpleFunction,
+    builtPlan: CuratedArcFunctionPlan,
+    optimized: ArcOwnershipOptimizationResult,
+): ArcOwnedResultForwarding? {
+    val body = function.body as? org.jetbrains.kotlin.ir.expressions.IrBlockBody ?: return null
+    val returnExpression = body.statements.lastOrNull() as? IrReturn ?: return null
+    if (returnExpression.returnTargetSymbol != function.symbol) return null
+    val returnedGet = returnExpression.value as? IrGetValue ?: return null
+    val returned = returnedGet.symbol.owner as? IrVariable ?: return null
+
+    val variables = body.statements.dropLast(1).map { it as? IrVariable ?: return null }
+    if (variables.size < 2 || variables.last() !== returned || variables.any { it.isVar || !it.type.binaryTypeIsReference() }) {
+        return null
+    }
+
+    for (index in variables.lastIndex downTo 1) {
+        val alias = variables[index].initializer as? IrGetValue ?: return null
+        if (alias.symbol.owner !== variables[index - 1]) return null
+    }
+    val producer = variables.first()
+    if (producer.initializer !is IrCall) return null
+
+    val producerValue = builtPlan.variableValues[producer.symbol] ?: return null
+    val returnedValue = builtPlan.variableValues[returned.symbol] ?: return null
+    val verifiedBlock = builtPlan.plan.blocks[builtPlan.plan.entry] ?: return null
+    if (verifiedBlock.terminator != ArcTerminator.Return(returnedValue)) return null
+    val producerDefinition = verifiedBlock.operations
+        .filterIsInstance<ArcOperation.Define>()
+        .singleOrNull { it.result == producerValue }
+        ?: return null
+    if (producerDefinition.ownership == ArcOwnership.Immortal) return null
+
+    // optimizeVerified() has already re-verified this result. Requiring its entry block here ties
+    // codegen authorization to the verified optimizer output even when escape analysis classified
+    // the original call result as Guaranteed in its temporary anonymous slot.
+    optimized.plan.blocks[optimized.plan.entry] ?: return null
+
+    return ArcOwnedResultForwarding(producer, returned)
 }
 
 private fun ArcFunctionPlan.classificationCounts(): ArcOwnershipClassificationCounts {
@@ -167,7 +252,7 @@ private class CuratedArcOwnershipPlanBuilder(
     private var nextValue = 0
     private var returnedValue: ArcValue? = null
 
-    fun build(): ArcFunctionPlan? {
+    fun build(): CuratedArcFunctionPlan? {
         if (function.isSuspend || function.body !is org.jetbrains.kotlin.ir.expressions.IrBlockBody) return null
 
         function.allParameters.forEach { parameter ->
@@ -200,12 +285,18 @@ private class CuratedArcOwnershipPlanBuilder(
         }
 
         val block = ArcBasicBlock(entry, operations, ArcTerminator.Return(returnedValue))
-        return ArcFunctionPlan(
+        val plan = ArcFunctionPlan(
             functionName = function.fqNameForIrSerialization.asString(),
             entry = entry,
             entryValues = entryValues,
             entryInitializedStorage = initializedStorage,
             blocks = mapOf(entry to block),
+        )
+        return CuratedArcFunctionPlan(
+            plan,
+            values.mapNotNull { (symbol, value) ->
+                (symbol as? org.jetbrains.kotlin.ir.symbols.IrVariableSymbol)?.let { it to value }
+            }.toMap(),
         )
     }
 

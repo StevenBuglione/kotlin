@@ -9,11 +9,14 @@ import kotlin.native.runtime.Debugging
 import kotlinx.cinterop.staticCFunction
 import threadStates.*
 
+private val usesSharedHeap: Boolean
+    get() = Platform.memoryModel == MemoryModel.EXPERIMENTAL || Platform.memoryModel == MemoryModel.ARC
+
 fun main() {
     val hook = { throwable: Throwable ->
         print("${throwable::class.simpleName}. Runnable state: ${Debugging.isThreadStateRunnable}")
     }
-    if (Platform.memoryModel != MemoryModel.EXPERIMENTAL) {
+    if (!usesSharedHeap) {
         hook.freeze()
     }
 

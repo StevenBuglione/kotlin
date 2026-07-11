@@ -10,6 +10,9 @@ import kotlin.native.concurrent.*
 import kotlin.native.internal.*
 import kotlin.native.runtime.Debugging
 
+private val usesSharedHeap: Boolean
+    get() = Platform.memoryModel == MemoryModel.EXPERIMENTAL || Platform.memoryModel == MemoryModel.ARC
+
 fun mainLegacyMM() {
     val wrong = "wrong"
     assertFailsWith<InvalidMutabilityException> {
@@ -41,7 +44,7 @@ fun mainExperimentalMM() {
 }
 
 fun main() {
-    if (Platform.memoryModel == MemoryModel.EXPERIMENTAL) {
+    if (usesSharedHeap) {
         mainExperimentalMM()
     } else {
         mainLegacyMM()

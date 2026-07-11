@@ -101,6 +101,12 @@ internal val ThreadSanitizerPhase = optimizationPipelinePass(
         pipeline = ::ThreadSanitizerPipeline,
 )
 
+internal val AddressSanitizerPhase = optimizationPipelinePass(
+        name = "AddressSanitizer",
+        description = "Prepare to run with address sanitizer",
+        pipeline = ::AddressSanitizerPipeline,
+)
+
 internal val CoveragePhase = createSimpleNamedCompilerPhase<NativeGenerationState, Unit>(
         name = "Coverage",
         description = "Produce coverage information",
@@ -167,7 +173,7 @@ internal fun <T : BitcodePostProcessingContext> PhaseEngine<T>.runBitcodePostPro
         it.runPhase(LTOBitcodeOptimizationPhase, module)
         when (context.config.sanitizer) {
             SanitizerKind.THREAD -> it.runPhase(ThreadSanitizerPhase, module)
-            SanitizerKind.ADDRESS -> context.reportCompilationError("Address sanitizer is not supported yet")
+            SanitizerKind.ADDRESS -> it.runPhase(AddressSanitizerPhase, module)
             null -> {}
         }
     }

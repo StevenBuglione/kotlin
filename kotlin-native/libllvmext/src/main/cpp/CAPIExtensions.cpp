@@ -9,6 +9,7 @@
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/LegacyPassManager.h>
 #include <llvm/Transforms/ObjCARC.h>
+#include <llvm/Transforms/Instrumentation/AddressSanitizer.h>
 #include <llvm/Transforms/Utils/Cloning.h>
 #include <llvm/Transforms/Instrumentation/ThreadSanitizer.h>
 #include <llvm/Support/Timer.h>
@@ -58,6 +59,15 @@ int LLVMInlineCall(LLVMValueRef call) {
 
 void LLVMAddThreadSanitizerPass(LLVMPassManagerRef PM) {
   unwrap(PM)->add(createThreadSanitizerLegacyPassPass());
+}
+
+void LLVMAddAddressSanitizerPass(LLVMPassManagerRef PM) {
+  auto *passManager = unwrap(PM);
+  // ASan has independent module and function passes. The module pass emits
+  // constructors and instruments globals; the function pass instruments
+  // ordinary loads, stores, and stack allocations.
+  passManager->add(createModuleAddressSanitizerLegacyPassPass());
+  passManager->add(createAddressSanitizerFunctionPass());
 }
 
 void LLVMSetTimePasses(int enabled) {

@@ -9,6 +9,7 @@ import org.jetbrains.kotlin.konan.target.*
 import org.jetbrains.kotlin.UtilsKt
 
 import java.nio.file.Paths
+import java.util.Locale
 import java.util.regex.Pattern
 
 import static org.jetbrains.kotlin.konan.target.Architecture.*
@@ -92,9 +93,23 @@ tasks.withType(KonanCompileNativeBinary.class).configureEach {
     enableTwoStageCompilation = twoStageEnabled
 }
 
-ext.isExperimentalMM = !(project.globalTestArgs.contains("-memory-model") &&
-                         project.globalTestArgs.contains("strict")) &&
-                         project.testTarget != 'wasm32'
+def memoryModelOption = project.globalTestArgs.findIndexOf { it == "-memory-model" }
+def configuredMemoryModel = memoryModelOption >= 0 && memoryModelOption + 1 < project.globalTestArgs.size()
+        ? project.globalTestArgs[memoryModelOption + 1].toLowerCase(Locale.ROOT)
+        : null
+def effectiveMemoryModel = configuredMemoryModel
+if (effectiveMemoryModel == null) {
+    if (project.target.name == 'linux_x64') {
+        effectiveMemoryModel = 'arc'
+    } else if (project.target.name == 'wasm32') {
+        effectiveMemoryModel = 'strict'
+    } else {
+        effectiveMemoryModel = 'experimental'
+    }
+}
+ext.isArcMM = effectiveMemoryModel == 'arc'
+ext.isExperimentalMM = effectiveMemoryModel == 'experimental'
+ext.isSharedHeapMM = isExperimentalMM || isArcMM
 ext.isNoopGC = project.globalTestArgs.contains("-Xgc=noop")
 ext.isAggressiveGC = project.globalTestArgs.contains("-Xbinary=gcSchedulerType=aggressive")
 ext.isCmsGC = project.globalTestArgs.contains("-Xgc=cms") || !project.globalTestArgs.any { it.startsWith("-Xgc=") }
@@ -108,7 +123,7 @@ if (project.globalTestArgs.contains("-g") && (cacheTesting == null)) {
     ext.runtimeAssertionsPanic = true
 }
 
-if (!isExperimentalMM) {
+if (!isSharedHeapMM) {
     tasks.withType(KonanCompileNativeBinary.class).configureEach {
         extraOpts "-opt-in=kotlin.native.FreezingIsDeprecated"
     }
@@ -959,14 +974,14 @@ task worker8(type: KonanLocalTest) {
 
 task worker9(type: KonanLocalTest) {
     enabled = (project.testTarget != 'wasm32') && // Workers need pthreads.
-        !isExperimentalMM
+        !isSharedHeapMM
     useGoldenData = true
     source = "runtime/workers/worker9.kt"
 }
 
 task worker9_experimentalMM(type: KonanLocalTest) {
     enabled = (project.testTarget != 'wasm32') && // Workers need pthreads.
-        isExperimentalMM
+        isSharedHeapMM
     useGoldenData = true
     source = "runtime/workers/worker9_experimentalMM.kt"
 }
@@ -1160,19 +1175,19 @@ standaloneTest("freeze6") {
 
 standaloneTest("freeze_disabled") {
     enabled = (project.testTarget != 'wasm32') && // No exceptions on WASM.
-            !isNoopGC && isExperimentalMM
+            !isNoopGC && isSharedHeapMM
     flags = ["-tr"]
     source = "runtime/workers/freeze_disabled.kt"
     testLogger = KonanTest.Logger.SILENT
 }
 
 task atomicSmokeTest(type: KonanLocalTest) {
-    enabled = isExperimentalMM // do not run the test on the legacy MM
+    enabled = isSharedHeapMM // do not run the test on the legacy MM
     source = "runtime/atomics/atomic_smoke.kt"
 }
 
 task atomicStressTest(type: KonanLocalTest) {
-    enabled = isExperimentalMM // do not run the test on the legacy MM
+    enabled = isSharedHeapMM // do not run the test on the legacy MM
     source = "runtime/atomics/atomic_stress.kt"
 }
 
@@ -1238,7 +1253,7 @@ standaloneTest("leakMemoryWithWorkerTermination") {
     disabled = (project.testTarget == 'wasm32') // Needs pthreads.
     source = "runtime/workers/leak_memory_with_worker_termination.kt"
 
-    if (!isExperimentalMM) { // Experimental MM will not report memory leaks.
+    if (!isSharedHeapMM) { // Shared-heap memory managers use their own leak diagnostics.
         expectedExitStatusChecker = { it != 0 }
         outputChecker = { s -> s.contains("Memory leaks detected, 1 objects leaked!") }
     }
@@ -1516,7 +1531,7 @@ standaloneTest("initializers_globalInitedAfterAccessingFile") {
 }
 
 standaloneTest("initializers_globalNotInitedAfterAccessingClassInternals") {
-    enabled = project.globalTestArgs.contains('-Xir-property-lazy-initialization=enable') || isExperimentalMM
+    enabled = project.globalTestArgs.contains('-Xir-property-lazy-initialization=enable') || isSharedHeapMM
     source = "codegen/initializers/globalNotInitedAfterAccessingClassInternals.kt"
 }
 
@@ -1525,27 +1540,27 @@ standaloneTest("initializers_globalInitedBeforeThreadLocal") {
 }
 
 standaloneTest("initializers_eagerInitializationGlobal1") {
-    enabled = project.globalTestArgs.contains('-Xir-property-lazy-initialization=enable') || isExperimentalMM
+    enabled = project.globalTestArgs.contains('-Xir-property-lazy-initialization=enable') || isSharedHeapMM
     source = "codegen/initializers/eagerInitializationGlobal1.kt"
 }
 
 standaloneTest("initializers_eagerInitializationGlobal2") {
-    enabled = project.globalTestArgs.contains('-Xir-property-lazy-initialization=enable') || isExperimentalMM
+    enabled = project.globalTestArgs.contains('-Xir-property-lazy-initialization=enable') || isSharedHeapMM
     source = "codegen/initializers/eagerInitializationGlobal2.kt"
 }
 
 standaloneTest("initializers_eagerInitializationThreadLocal1") {
-    enabled = project.globalTestArgs.contains('-Xir-property-lazy-initialization=enable') || isExperimentalMM
+    enabled = project.globalTestArgs.contains('-Xir-property-lazy-initialization=enable') || isSharedHeapMM
     source = "codegen/initializers/eagerInitializationThreadLocal1.kt"
 }
 
 standaloneTest("initializers_eagerInitializationThreadLocal2") {
-    enabled = project.globalTestArgs.contains('-Xir-property-lazy-initialization=enable') || isExperimentalMM
+    enabled = project.globalTestArgs.contains('-Xir-property-lazy-initialization=enable') || isSharedHeapMM
     source = "codegen/initializers/eagerInitializationThreadLocal2.kt"
 }
 
 standaloneTest("initializers_testInfrastructure") {
-    enabled = project.globalTestArgs.contains('-Xir-property-lazy-initialization=enable') || isExperimentalMM
+    enabled = project.globalTestArgs.contains('-Xir-property-lazy-initialization=enable') || isSharedHeapMM
     source = "codegen/initializers/testInfrastructure.kt"
     flags = ["-tr"]
 }
@@ -2395,7 +2410,7 @@ standaloneTest("link_default_libs") {
 standaloneTest("link_testLib_explicitly1") {
     // there is no testLibrary for cross targets yet.
     enabled = project.target.name == project.hostName &&
-            (project.globalTestArgs.contains('-Xir-property-lazy-initialization=enable') || isExperimentalMM)
+            (project.globalTestArgs.contains('-Xir-property-lazy-initialization=enable') || isSharedHeapMM)
     dependsOn installTestLib
     useGoldenData = true
     source = "link/testLib_explicitly1.kt"
@@ -2410,7 +2425,7 @@ standaloneTest("link_testLib_explicitly1") {
 standaloneTest("link_testLib_explicitly2") {
     // there is no testLibrary for cross targets yet.
     enabled = project.target.name == project.hostName &&
-            !(project.globalTestArgs.contains('-Xir-property-lazy-initialization=enable') || isExperimentalMM)
+            !(project.globalTestArgs.contains('-Xir-property-lazy-initialization=enable') || isSharedHeapMM)
     dependsOn installTestLib
     useGoldenData = true
     source = "link/testLib_explicitly2.kt"
@@ -3267,7 +3282,7 @@ standaloneTest("codegen_escapeAnalysis_stackAllocated") {
 standaloneTest("codegen_escapeAnalysis_string") {
     disabled = (cacheTesting != null) || // Cache is not compatible with -opt.
         project.globalTestArgs.contains('-g') || // -g and -opt are incompatible
-        !isExperimentalMM // strings are frozen in legacy GC
+        !isSharedHeapMM // strings are frozen in legacy GC
     flags = ['-opt', '-tr', '-opt-in=kotlin.native.internal.InternalForKotlinNative']
     source = "codegen/escapeAnalysis/string.kt"
 }
@@ -3345,7 +3360,7 @@ task memory_stable_ref_cross_thread_check(type: KonanLocalTest) {
 standaloneTest("cycle_detector") {
     disabled = project.globalTestArgs.contains('-opt') || // Needs debug build.
                (project.testTarget == 'wasm32') || // CycleDetector is disabled on WASM.
-               isExperimentalMM  // Experimental MM will not support CycleDetector.
+               isSharedHeapMM  // Shared-heap managers do not support the legacy CycleDetector.
     flags = ['-tr', '-g']
     source = "runtime/memory/cycle_detector.kt"
 }
@@ -3353,6 +3368,13 @@ standaloneTest("cycle_detector") {
 standaloneTest("arc_debug_detect_cycles") {
     flags = ['-tr']
     source = "runtime/memory/arc_debug_detect_cycles.kt"
+}
+
+standaloneTest("arc_owned_result_forwarding") {
+    enabled = project.target.name == "linux_x64" && isArcMM
+    flags = ["-opt"]
+    useGoldenData = true
+    source = "codegen/arc/ownedResultForwarding.kt"
 }
 
 linkTest("arc_debug_detect_cycles_klib") {
@@ -3402,7 +3424,7 @@ standaloneTest("cycle_collector_deadlock1") {
 
 standaloneTest("leakMemory") {
     source = "runtime/memory/leak_memory.kt"
-    if (!isExperimentalMM) { // Experimental MM will not report memory leaks.
+    if (!isSharedHeapMM) { // Shared-heap memory managers use their own leak diagnostics.
         expectedExitStatusChecker = { it != 0 }
         outputChecker = { s -> s.contains("Memory leaks detected, 1 objects leaked!") }
     }
@@ -3411,7 +3433,7 @@ standaloneTest("leakMemory") {
 standaloneTest("leakMemoryWithTestRunner") {
     source = "runtime/memory/leak_memory_test_runner.kt"
     flags = ['-tr']
-    if (!isExperimentalMM) { // Experimental MM will not report memory leaks.
+    if (!isSharedHeapMM) { // Shared-heap memory managers use their own leak diagnostics.
         expectedExitStatusChecker = { it != 0 }
         outputChecker = { s -> s.contains("Memory leaks detected, 1 objects leaked!") }
     }
@@ -4765,7 +4787,7 @@ interopTest("interop_callbacksAndVarargs") {
 
 interopTest("interop_threadStates") {
     disabled = (project.testTarget == 'wasm32') || // No interop for wasm yet.
-            !isExperimentalMM // No thread state switching in the legacy MM.
+            !isSharedHeapMM // No thread state switching in the legacy MM.
     source = "interop/threadStates/threadStates.kt"
     flags = ['-opt-in=kotlin.native.internal.InternalForKotlinNative']
     interop = "threadStates"
@@ -4773,7 +4795,7 @@ interopTest("interop_threadStates") {
 
 interopTest("interop_threadStates_callbacksWithExceptions") {
     disabled = (project.testTarget == 'wasm32') || // No interop for wasm yet.
-            !isExperimentalMM // No thread state switching in the legacy MM.
+            !isSharedHeapMM // No thread state switching in the legacy MM.
     source = "interop/threadStates/callbacksWithExceptions.kt"
     interop = "threadStates"
     flags = ['-opt-in=kotlin.native.internal.InternalForKotlinNative']
@@ -4781,7 +4803,7 @@ interopTest("interop_threadStates_callbacksWithExceptions") {
 
 interopTest("interop_threadStates_unhandledException") {
     disabled = (project.testTarget == 'wasm32') || // No interop for wasm yet.
-            !isExperimentalMM // No thread state switching in the legacy MM.
+            !isSharedHeapMM // No thread state switching in the legacy MM.
     source = "interop/threadStates/unhandledException.kt"
     interop = "threadStates"
     outputChecker = { it.contains("Error. Runnable state: true") }
@@ -4791,7 +4813,7 @@ interopTest("interop_threadStates_unhandledException") {
 
 interopTest("interop_threadStates_unhandledExceptionInForeignThread") {
     disabled = (project.testTarget == 'wasm32') || // No interop for wasm yet.
-            !isExperimentalMM // No thread state switching in the legacy MM.
+            !isSharedHeapMM // No thread state switching in the legacy MM.
     source = "interop/threadStates/unhandledExceptionInForeignThread.kt"
     interop = "threadStates"
     outputChecker = { it.contains("Error. Runnable state: true") }
@@ -5199,8 +5221,8 @@ if (PlatformInfo.isAppleTarget(project)) {
         source = "interop/objc/illegal_sharing_with_weak/main.kt"
         interop = 'objc_illegal_sharing_with_weak'
 
-        if (isExperimentalMM) {
-            // Experimental MM supports arbitrary object sharing.
+        if (isSharedHeapMM) {
+            // Shared-heap memory managers support arbitrary object sharing.
             outputChecker = { it == "Before\nAfter true\n" }
         } else {
             expectedExitStatusChecker = { it != 0 }
@@ -5436,7 +5458,7 @@ standaloneTest("interop_objc_illegal_sharing") {
     disabled = !isAppleTarget(project)
     source = "interop/objc/illegal_sharing.kt"
     UtilsKt.dependsOnPlatformLibs(it)
-    if (isExperimentalMM) {
+    if (isSharedHeapMM) {
         outputChecker = {
             it.startsWith("Before") && it.contains("After")
         }
@@ -5591,7 +5613,7 @@ dynamicTest("interop_cleaners_leak") {
 
 dynamicTest("interop_migrating_main_thread_legacy") {
     disabled = (project.testTarget == 'wasm32') || // wasm doesn't support -produce dynamic
-        isExperimentalMM  // Experimental MM will not support legacy destroy runtime mode.
+        isSharedHeapMM  // Shared-heap managers do not support legacy destroy runtime mode.
     source = "interop/migrating_main_thread/lib.kt"
     flags = ['-Xdestroy-runtime-mode=legacy']
     clangFlags = ['-DIS_LEGACY']
@@ -5603,7 +5625,7 @@ dynamicTest("interop_migrating_main_thread") {
     disabled = (project.testTarget == 'wasm32') // wasm doesn't support -produce dynamic
     source = "interop/migrating_main_thread/lib.kt"
     flags = ['-Xdestroy-runtime-mode=on-shutdown']
-    if (isExperimentalMM) {
+    if (isSharedHeapMM) {
         clangFlags = ['-DEXPERIMENTAL_MM']
     }
     cSource = "$projectDir/interop/migrating_main_thread/main.cpp"
@@ -5612,7 +5634,7 @@ dynamicTest("interop_migrating_main_thread") {
 
 dynamicTest("interop_memory_leaks") {
     disabled = (project.testTarget == 'wasm32') || // wasm doesn't support -produce dynamic
-        isExperimentalMM  // Experimental MM will not support legacy destroy runtime mode.
+        isSharedHeapMM  // Shared-heap managers do not support legacy destroy runtime mode.
     source = "interop/memory_leaks/lib.kt"
     cSource = "$projectDir/interop/memory_leaks/main.cpp"
     clangTool = "clang++"
@@ -6445,6 +6467,13 @@ Task fileCheckTest(String name, Closure<FileCheckTest> configureClosure) {
 
 fileCheckTest("filecheck_smoke0") {
     annotatedSource = project.file('filecheck/smoke0.kt')
+}
+
+fileCheckTest("filecheck_arc_owned_result_forwarding") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('filecheck/arc_owned_result_forwarding.kt')
+    extraOpts = ["-opt"]
+    phaseToCheck = "Codegen"
 }
 
 fileCheckTest("filecheck_when") {

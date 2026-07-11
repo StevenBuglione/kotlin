@@ -5,9 +5,12 @@ import kotlin.test.*
 
 import kotlin.native.concurrent.*
 
+private val usesSharedHeap: Boolean
+    get() = Platform.memoryModel == MemoryModel.EXPERIMENTAL || Platform.memoryModel == MemoryModel.ARC
+
 @Test
 fun checkArgumentTransferFailed(): Unit = withWorker {
-    if (Platform.memoryModel == MemoryModel.EXPERIMENTAL) return // Transfer is no-op in this case.
+    if (usesSharedHeap) return // Transfer is a no-op for shared-heap memory managers.
 
     val argument = Any()
     val exception = assertFailsWith<IllegalStateException> {
@@ -19,7 +22,7 @@ fun checkArgumentTransferFailed(): Unit = withWorker {
 
 @Test
 fun checkDetachedObjectGraphTransferFailed() {
-    if (Platform.memoryModel == MemoryModel.EXPERIMENTAL) return // Transfer is no-op in this case.
+    if (usesSharedHeap) return // Transfer is a no-op for shared-heap memory managers.
 
     val obj = Any()
     val exception = assertFailsWith<IllegalStateException> {

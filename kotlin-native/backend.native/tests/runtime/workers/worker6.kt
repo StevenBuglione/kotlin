@@ -10,6 +10,9 @@ import kotlin.test.*
 
 import kotlin.native.concurrent.*
 
+private val usesSharedHeap: Boolean
+    get() = Platform.memoryModel == MemoryModel.EXPERIMENTAL || Platform.memoryModel == MemoryModel.ARC
+
 @Test fun runTest1() {
     withWorker {
         val future = execute(TransferMode.SAFE, { 42 }) { input ->
@@ -29,7 +32,7 @@ val int2 = 77
     int1++
     withWorker {
         executeAfter(0, {
-            if (kotlin.native.Platform.memoryModel == kotlin.native.MemoryModel.EXPERIMENTAL) {
+            if (usesSharedHeap) {
                 int1++
                 assertEquals(3, int1)
             } else {

@@ -10,6 +10,9 @@ import kotlin.test.*
 
 import kotlin.native.concurrent.*
 
+private val usesSharedHeap: Boolean
+    get() = Platform.memoryModel == MemoryModel.EXPERIMENTAL || Platform.memoryModel == MemoryModel.ARC
+
 @Test fun runTest1() {
     withLock { println("zzz") }
     val worker = Worker.start()
@@ -44,7 +47,7 @@ fun withLock(op: () -> Unit) {
 
 @Test fun runTest3() {
     val worker = Worker.start()
-    if (Platform.memoryModel == MemoryModel.EXPERIMENTAL) {
+    if (usesSharedHeap) {
         worker.executeAfter {
             println("unfrozen OK")
         }

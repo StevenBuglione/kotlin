@@ -350,6 +350,21 @@ class ThreadSanitizerPipeline(config: LlvmPipelineConfig, logger: LoggingContext
     override val pipelineName = "Thread sanitizer instrumentation"
 }
 
+class AddressSanitizerPipeline(config: LlvmPipelineConfig, logger: LoggingContext? = null) :
+        LlvmOptimizationPipeline(config, logger) {
+    override fun configurePipeline(config: LlvmPipelineConfig, manager: LLVMPassManagerRef, builder: LLVMPassManagerBuilderRef) {
+        LLVMAddAddressSanitizerPass(manager)
+    }
+
+    override fun executeCustomPreprocessing(config: LlvmPipelineConfig, module: LLVMModuleRef) {
+        getFunctions(module)
+                .filter { LLVMIsDeclaration(it) == 0 }
+                .forEach { addLlvmFunctionEnumAttribute(it, LlvmFunctionAttribute.SanitizeAddress) }
+    }
+
+    override val pipelineName = "Address sanitizer instrumentation"
+}
+
 
 internal fun RelocationModeFlags.currentRelocationMode(context: PhaseContext): RelocationModeFlags.Mode =
         when (determineLinkerOutput(context)) {

@@ -427,6 +427,19 @@ class ArcExplicitMemoryModelTest : AbstractNativeSimpleTest() {
         assertTrue(!output.contains(DIRECT_CYCLE_WARNING) && !output.contains(CLOSURE_CYCLE_WARNING)) {
             "Unexpected definite-cycle warning:\n$output"
         }
+
+        val suppressedOutput = compileLibraryOutput(
+            "suppressedDefiniteCycle",
+            """
+            class Holder {
+                @Suppress("ARC_STRONG_REFERENCE_CYCLE")
+                var intentionalTemporaryCycle: Holder? = this
+            }
+            """
+        )
+        assertTrue(!suppressedOutput.contains(DIRECT_CYCLE_WARNING)) {
+            "Suppressed definite-cycle warning was emitted:\n$suppressedOutput"
+        }
     }
 
     @Test

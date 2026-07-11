@@ -139,6 +139,7 @@ private class DeepRecursiveScopeImpl<T, R>(
     private var value: Any? = value
 
     // Continuation of the current call
+    @Suppress("ARC_STRONG_REFERENCE_CYCLE") // Initial self-link is cleared by resumeWith before completion.
     private var cont: Continuation<Any?>? = this as Continuation<Any?>
 
     // Completion result (completion of the whole call stack)

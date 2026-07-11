@@ -14,6 +14,12 @@ import kotlin.native.ref.WeakReference
 import kotlin.native.runtime.GC
 import kotlin.text.Regex
 
+private val usesSharedHeap: Boolean
+    get() = Platform.memoryModel == MemoryModel.EXPERIMENTAL || Platform.memoryModel == MemoryModel.ARC
+
+private val usesArc: Boolean
+    get() = Platform.memoryModel == MemoryModel.ARC
+
 class A(var a: Int)
 
 @SharedImmutable
@@ -44,7 +50,7 @@ fun testGlobalAccessOnWorker() {
 
     val worker = Worker.start()
     val future = worker.execute(TransferMode.SAFE, {}) {
-        if (Platform.memoryModel == MemoryModel.EXPERIMENTAL) {
+        if (usesSharedHeap) {
             assertEquals(global2.value, global2.valueOrNull)
             global2.value.a
         } else {
@@ -58,7 +64,7 @@ fun testGlobalAccessOnWorker() {
     }
 
     val value = future.result
-    if (Platform.memoryModel == MemoryModel.EXPERIMENTAL) {
+    if (usesSharedHeap) {
         assertEquals(3, value)
     } else {
         assertEquals(null, value)
@@ -207,7 +213,7 @@ fun testLocalAccessOnWorkerFrozen() {
 
     val worker = Worker.start()
     val future = worker.execute(TransferMode.SAFE, { local }) { local ->
-        if (Platform.memoryModel == MemoryModel.EXPERIMENTAL) {
+        if (usesSharedHeap) {
             assertEquals(local.value, local.valueOrNull)
             local.value.a
         } else {
@@ -220,7 +226,7 @@ fun testLocalAccessOnWorkerFrozen() {
     }
 
     val value = future.result
-    if (Platform.memoryModel == MemoryModel.EXPERIMENTAL) {
+    if (usesSharedHeap) {
         assertEquals(3, value)
     } else {
         assertEquals(null, value)
@@ -306,7 +312,7 @@ fun testLocalAccessOnMainThreadFrozen() {
     }
 
     val value = future.result
-    if (Platform.memoryModel == MemoryModel.EXPERIMENTAL) {
+    if (usesSharedHeap) {
         assertEquals(3, value.value.a)
         assertEquals(value.value, value.valueOrNull)
     } else {
@@ -418,7 +424,7 @@ fun testLocalAccessWithWrapperFrozen() {
 
     val worker = Worker.start()
     val future = worker.execute(TransferMode.SAFE, { local }) { local ->
-        if (Platform.memoryModel == MemoryModel.EXPERIMENTAL) {
+        if (usesSharedHeap) {
             assertEquals(local.ref.value, local.ref.valueOrNull)
             local.ref.value.a
         } else {
@@ -431,7 +437,7 @@ fun testLocalAccessWithWrapperFrozen() {
     }
 
     val value = future.result
-    if (Platform.memoryModel == MemoryModel.EXPERIMENTAL) {
+    if (usesSharedHeap) {
         assertEquals(3, value)
     } else {
         assertEquals(null, value)
@@ -474,7 +480,7 @@ fun testCollectFrozen() {
     val (refOwner, refWeak, refValueWeak) = getOwnerAndWeaksFrozen(3)
 
     refOwner.value = null
-    if (Platform.memoryModel == MemoryModel.EXPERIMENTAL) {
+    if (usesSharedHeap) {
         // This runs the finalizer on the WorkerBoundReference<A>, which schedules removing A from the root set
         GC.collect()
         // This actually frees A
@@ -583,8 +589,14 @@ fun collectCyclicGarbage() {
     ref1Owner.value = null
     GC.collect()
 
-    assertNull(ref1Weak.value)
-    assertNull(ref2Weak.value)
+    if (usesArc) {
+        // Full-heap ARC deliberately leaves strong cycles alive.
+        assertNotNull(ref1Weak.value)
+        assertNotNull(ref2Weak.value)
+    } else {
+        assertNull(ref1Weak.value)
+        assertNull(ref2Weak.value)
+    }
 }
 
 fun createCyclicGarbageFrozen(): Triple<AtomicReference<WorkerBoundReference<B1>?>, WeakReference<B1>, WeakReference<B2>> {
@@ -694,7 +706,7 @@ fun collectCyclicGarbageWithAtomicsFrozen() {
     val (ref1Owner, ref1Weak, ref2Weak) = createCyclicGarbageWithAtomicsFrozen()
 
     dispose(ref1Owner)
-    if (Platform.memoryModel == MemoryModel.EXPERIMENTAL) {
+    if (usesSharedHeap) {
         // Finalizes WorkerBoundReference<C2> and schedules C2 removal from the root set
         GC.collect()
         // Frees C2, finalizes WorkerBoundReference<C1> and schedules C1 removal from the root set
@@ -780,7 +792,7 @@ fun concurrentAccessFrozen() {
             while (workerUnlocker.value < 1) {
             }
 
-            if (Platform.memoryModel == MemoryModel.EXPERIMENTAL) {
+            if (usesSharedHeap) {
                 ref.value.a
             } else {
                 assertFailsWith<IncorrectDereferenceException> {
@@ -794,7 +806,7 @@ fun concurrentAccessFrozen() {
 
     for (future in futures) {
         val value = future.result
-        if (Platform.memoryModel == MemoryModel.EXPERIMENTAL) {
+        if (usesSharedHeap) {
             assertEquals(3, value)
         } else {
             assertEquals(null, value)
@@ -809,7 +821,7 @@ fun concurrentAccessFrozen() {
 @Test
 fun testExceptionMessageFrozen() {
     // Only for legacy MM
-    if (Platform.memoryModel == MemoryModel.EXPERIMENTAL) {
+    if (usesSharedHeap) {
         return
     }
 

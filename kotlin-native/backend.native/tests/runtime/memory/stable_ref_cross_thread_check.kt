@@ -13,6 +13,9 @@ import kotlinx.cinterop.*
 
 class Holder(val value: Int)
 
+private val usesSharedHeap: Boolean
+    get() = Platform.memoryModel == MemoryModel.EXPERIMENTAL || Platform.memoryModel == MemoryModel.ARC
+
 @Test
 fun runTest1() {
     val worker = Worker.start()
@@ -21,7 +24,7 @@ fun runTest1() {
         StableRef.create(Holder(42))
     }
     val ref = future.result
-    if (kotlin.native.Platform.memoryModel == kotlin.native.MemoryModel.EXPERIMENTAL) {
+    if (usesSharedHeap) {
         val value = ref.get()
         assertEquals(value.value, 42)
     } else {
@@ -43,7 +46,7 @@ fun runTest2() {
     val pointerValue: Long = mainThreadRef.asCPointer().toLong()
     val future = worker.execute(TransferMode.SAFE, { pointerValue }) {
         val pointer: COpaquePointer = it.toCPointer()!!
-        if (kotlin.native.Platform.memoryModel == kotlin.native.MemoryModel.EXPERIMENTAL) {
+        if (usesSharedHeap) {
             val otherThreadRef: StableRef<Holder> = pointer.asStableRef()
             assertEquals(otherThreadRef.get().value, 42)
         } else {

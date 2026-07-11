@@ -16,6 +16,9 @@ import kotlin.native.ref.Cleaner
 import kotlin.native.ref.createCleaner
 import kotlin.native.runtime.GC
 
+private val usesSharedHeap: Boolean
+    get() = Platform.memoryModel == MemoryModel.EXPERIMENTAL || Platform.memoryModel == MemoryModel.ARC
+
 class AtomicBoolean(initialValue: Boolean) {
     private val impl = AtomicInt(if (initialValue) 1 else 0)
 
@@ -60,8 +63,8 @@ fun testCleanerLambda() {
 
 @Test
 fun testCleanerNonSharedLambda() {
-    // Only for experimental MM.
-    if (Platform.memoryModel != MemoryModel.EXPERIMENTAL) {
+    // Only for shared-heap memory managers.
+    if (!usesSharedHeap) {
         return
     }
     val called = AtomicBoolean(false);
@@ -112,8 +115,8 @@ fun testCleanerAnonymousFunction() {
 
 @Test
 fun testCleanerNonSharedAnonymousFunction() {
-    // Only for experimental MM.
-    if (Platform.memoryModel != MemoryModel.EXPERIMENTAL) {
+    // Only for shared-heap memory managers.
+    if (!usesSharedHeap) {
         return
     }
     val called = AtomicBoolean(false);
@@ -164,8 +167,8 @@ fun testCleanerFunctionReference() {
 
 @Test
 fun testCleanerNonSharedFunctionReference() {
-    // Only for experimental MM.
-    if (Platform.memoryModel != MemoryModel.EXPERIMENTAL) {
+    // Only for shared-heap memory managers.
+    if (!usesSharedHeap) {
         return
     }
     val called = AtomicBoolean(false);
@@ -193,7 +196,7 @@ fun testCleanerNonSharedFunctionReference() {
 @Test
 fun testCleanerFailWithNonShareableArgument() {
     // Only for legacy MM.
-    if (Platform.memoryModel == MemoryModel.EXPERIMENTAL) {
+    if (usesSharedHeap) {
         return
     }
     val funBox = FunBox {}
@@ -228,7 +231,7 @@ fun testCleanerCleansWithoutGC() {
     assertTrue(called.value)
 
     // Only for legacy MM.
-    if (Platform.memoryModel != MemoryModel.EXPERIMENTAL) {
+    if (!usesSharedHeap) {
         // If this fails, GC has somehow ran on the cleaners worker.
         assertNotNull(funBoxWeak!!.value)
     }

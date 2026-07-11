@@ -213,7 +213,8 @@ private interface CodeContext {
 internal class CodeGeneratorVisitor(
         val generationState: NativeGenerationState,
         val irBuiltins: IrBuiltIns,
-        val lifetimes: Map<IrElement, Lifetime>
+        val lifetimes: Map<IrElement, Lifetime>,
+        val arcOwnership: org.jetbrains.kotlin.backend.konan.arc.ArcCodegenOwnershipPlan,
 ) : IrElementVisitorVoid {
     private val context = generationState.context
     private val llvm = generationState.llvm
@@ -224,6 +225,7 @@ internal class CodeGeneratorVisitor(
 
     // TODO: consider eliminating mutable state
     private var currentCodeContext: CodeContext = TopLevelCodeContext
+    private var currentArcOwnedResultForwarding: org.jetbrains.kotlin.backend.konan.arc.ArcOwnedResultForwarding? = null
 
     private val intrinsicGeneratorEnvironment = object : IntrinsicGeneratorEnvironment {
         override val codegen: CodeGenerator
@@ -819,32 +821,42 @@ internal class CodeGeneratorVisitor(
         val scope = file?.let {
             FileScope(it)
         }
-        using(scope) {
-            generateFunction(codegen, declaration,
-                    declaration.location(start = true),
-                    declaration.location(start = false)) {
-                using(FunctionScope(declaration, this)) {
-                    val parameterScope = ParameterScope(declaration, functionGenerationContext)
-                    using(parameterScope) usingParameterScope@{
-                        using(VariableScope()) usingVariableScope@{
-                            recordCoverage(body)
-                            if (declaration.isReifiedInline) {
-                                callDirect(context.ir.symbols.throwIllegalStateExceptionWithMessage.owner,
-                                        listOf(codegen.staticData.kotlinStringLiteral(
-                                                "unsupported call of reified inlined function `${declaration.fqNameForIrSerialization}`").llvm),
-                                        Lifetime.IRRELEVANT, null)
-                                return@usingVariableScope
-                            }
-                            when (body) {
-                                is IrBlockBody -> body.statements.forEach { generateStatement(it) }
-                                is IrExpressionBody -> error("IrExpressionBody should've been lowered")
-                                is IrSyntheticBody -> throw AssertionError("Synthetic body ${body.kind} has not been lowered")
-                                else -> TODO(ir2string(body))
+        val previousArcOwnedResultForwarding = currentArcOwnedResultForwarding
+        currentArcOwnedResultForwarding = if (!context.shouldContainDebugInfo()) {
+            (declaration as? IrSimpleFunction)?.let { arcOwnership.ownedResultForwarding[it] }
+        } else {
+            null
+        }
+        try {
+            using(scope) {
+                generateFunction(codegen, declaration,
+                        declaration.location(start = true),
+                        declaration.location(start = false)) {
+                    using(FunctionScope(declaration, this)) {
+                        val parameterScope = ParameterScope(declaration, functionGenerationContext)
+                        using(parameterScope) usingParameterScope@{
+                            using(VariableScope()) usingVariableScope@{
+                                recordCoverage(body)
+                                if (declaration.isReifiedInline) {
+                                    callDirect(context.ir.symbols.throwIllegalStateExceptionWithMessage.owner,
+                                            listOf(codegen.staticData.kotlinStringLiteral(
+                                                    "unsupported call of reified inlined function `${declaration.fqNameForIrSerialization}`").llvm),
+                                            Lifetime.IRRELEVANT, null)
+                                    return@usingVariableScope
+                                }
+                                when (body) {
+                                    is IrBlockBody -> body.statements.forEach { generateStatement(it) }
+                                    is IrExpressionBody -> error("IrExpressionBody should've been lowered")
+                                    is IrSyntheticBody -> throw AssertionError("Synthetic body ${body.kind} has not been lowered")
+                                    else -> TODO(ir2string(body))
+                                }
                             }
                         }
                     }
                 }
             }
+        } finally {
+            currentArcOwnedResultForwarding = previousArcOwnedResultForwarding
         }
 
 
@@ -1425,13 +1437,18 @@ internal class CodeGeneratorVisitor(
     private fun generateVariable(variable: IrVariable) {
         context.log{"generateVariable               : ${ir2string(variable)}"}
         val value = variable.initializer?.let {
+            val resultSlot = if (currentArcOwnedResultForwarding?.producer === variable) {
+                functionGenerationContext.returnSlot
+            } else {
+                null
+            }
             val callSiteOrigin = (it as? IrBlock)?.origin as? InlinerExpressionLocationHint
             val inlineAtFunctionSymbol = callSiteOrigin?.inlineAtSymbol as? IrFunctionSymbol
             inlineAtFunctionSymbol?.run {
                 switchSymbolizationContextTo(inlineAtFunctionSymbol) {
-                    evaluateExpression(it)
+                    evaluateExpression(it, resultSlot)
                 }
-            } ?: evaluateExpression(it)
+            } ?: evaluateExpression(it, resultSlot)
         }
         this.currentCodeContext.genDeclareVariable(variable, value)
     }
@@ -1951,6 +1968,12 @@ internal class CodeGeneratorVisitor(
         val target = expression.returnTargetSymbol.owner
 
         val evaluated = evaluateExpression(value, currentCodeContext.getReturnSlot(target))
+        val forwardedReturn = currentArcOwnedResultForwarding
+        if (target == (currentCodeContext.functionScope() as? FunctionScope)?.declaration &&
+                forwardedReturn != null &&
+                (value as? IrGetValue)?.symbol?.owner === forwardedReturn.returned) {
+            functionGenerationContext.markReturnValueAlreadyInReturnSlot()
+        }
         currentCodeContext.genReturn(target, evaluated)
         return codegen.kNothingFakeValue
     }

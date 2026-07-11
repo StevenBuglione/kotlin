@@ -8,11 +8,14 @@ import kotlin.native.concurrent.*
 import kotlin.native.internal.*
 import kotlin.native.runtime.Debugging
 
+private val usesSharedHeap: Boolean
+    get() = Platform.memoryModel == MemoryModel.EXPERIMENTAL || Platform.memoryModel == MemoryModel.ARC
+
 fun setHookAndThrow() {
     val hook = { throwable: Throwable ->
         print("Kotlin hook: ${throwable::class.simpleName}. Runnable state: ${Debugging.isThreadStateRunnable}")
     }
-    if (Platform.memoryModel != MemoryModel.EXPERIMENTAL) {
+    if (!usesSharedHeap) {
         hook.freeze()
     }
 

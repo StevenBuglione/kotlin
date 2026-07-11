@@ -60,7 +60,6 @@ class KonanConfig(val project: Project, val configuration: CompilerConfiguration
     val optimizationsEnabled = configuration.getBoolean(KonanConfigKeys.OPTIMIZATION)
     val sanitizer = configuration.get(BinaryOptions.sanitizer)?.takeIf {
         when {
-            it != SanitizerKind.THREAD -> "${it.name} sanitizer is not supported yet"
             produce == CompilerOutputKind.STATIC -> "${it.name} sanitizer is unsupported for static library"
             produce == CompilerOutputKind.FRAMEWORK && produceStaticFramework -> "${it.name} sanitizer is unsupported for static framework"
             it !in target.supportedSanitizers() -> "${it.name} sanitizer is unsupported on ${target.name}"

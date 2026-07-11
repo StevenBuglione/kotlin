@@ -367,7 +367,9 @@ bitcode {
             testedModules.addAll("main", "legacy_memory_manager", "strict", "std_alloc", "objc")
         }
 
-        if (target == KonanTarget.LINUX_X64 && sanitizer == null) {
+        // Keep the ARC manager itself under the same instrumentation as generated
+        // Kotlin code. Linux x64 exposes both the ordinary and ASan target variants.
+        if (target == KonanTarget.LINUX_X64) {
             testsGroup("arc_runtime_tests") {
                 testedModules.addAll("main", "arc_memory_manager", "arc", "std_alloc", "objc")
             }

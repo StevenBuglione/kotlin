@@ -377,8 +377,8 @@ private fun PhaseEngine<NativeGenerationState>.runCodegen(module: IrModuleFragme
     runPhase(GHAPhase, module, disable = !optimize)
     runPhase(RTTIPhase, RTTIInput(module, dceResult))
     val lifetimes = runPhase(EscapeAnalysisPhase, EscapeAnalysisInput(module, moduleDFG, devirtualizationAnalysisResults), disable = !optimize)
-    runPhase(ArcOwnershipAnalysisPhase, ArcOwnershipPlanningInput(module, lifetimes))
-    runPhase(CodegenPhase, CodegenInput(module, lifetimes))
+    val arcOwnership = runPhase(ArcOwnershipAnalysisPhase, ArcOwnershipPlanningInput(module, lifetimes))
+    runPhase(CodegenPhase, CodegenInput(module, lifetimes, arcOwnership.codegenPlan))
 }
 
 private fun PhaseEngine<NativeGenerationState>.findDependenciesToCompile(): List<IrModuleFragment> {

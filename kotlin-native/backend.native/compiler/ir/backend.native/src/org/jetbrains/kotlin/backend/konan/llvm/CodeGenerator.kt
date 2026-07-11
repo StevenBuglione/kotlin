@@ -535,6 +535,11 @@ internal abstract class FunctionGenerationContext(
 
     abstract fun ret(value: LLVMValueRef?): LLVMValueRef
 
+    /** Marks the return originating in the current block as already owned by [returnSlot]. */
+    open fun markReturnValueAlreadyInReturnSlot() {
+        error("Return-slot forwarding is not supported by this function generation context")
+    }
+
     fun param(index: Int): LLVMValueRef = function.param(index)
 
     fun load(address: LLVMValueRef, name: String = "",
@@ -1409,6 +1414,12 @@ internal abstract class FunctionGenerationContext(
         return rawRet(value)
     }
 
+    protected fun retValueAlreadyInReturnSlot(value: LLVMValueRef): LLVMValueRef {
+        check(returnSlot != null)
+        onReturn()
+        return rawRet(value)
+    }
+
     protected fun rawRet(value: LLVMValueRef): LLVMValueRef = LLVMBuildRet(builder, value)!!.also {
         currentPositionHolder.setAfterTerminator()
     }
@@ -1587,6 +1598,7 @@ internal class DefaultFunctionGenerationContext(
     // Note: return handling can be extracted to a separate class.
 
     private val returns: MutableMap<LLVMBasicBlockRef, LLVMValueRef> = mutableMapOf()
+    private val returnsAlreadyInReturnSlot: MutableSet<LLVMBasicBlockRef> = mutableSetOf()
 
     private val epilogueBb = basicBlockInFunction("epilogue", endLocation).also {
         LLVMMoveBasicBlockBefore(it, cleanupLandingpad) // Just to make the produced code a bit more readable.
@@ -1606,6 +1618,11 @@ internal class DefaultFunctionGenerationContext(
         return res
     }
 
+    override fun markReturnValueAlreadyInReturnSlot() {
+        check(returnSlot != null)
+        returnsAlreadyInReturnSlot += currentBlock
+    }
+
     override fun processReturns() {
         appendingTo(epilogueBb) {
             when {
@@ -1615,12 +1632,17 @@ internal class DefaultFunctionGenerationContext(
                 returns.isNotEmpty() -> {
                     val returnPhi = phi(returnType!!)
                     addPhiIncoming(returnPhi, *returns.toList().toTypedArray())
-                    retValue(returnPhi)
+                    if (returns.keys.all { it in returnsAlreadyInReturnSlot }) {
+                        retValueAlreadyInReturnSlot(returnPhi)
+                    } else {
+                        retValue(returnPhi)
+                    }
                 }
                 // Do nothing, all paths throw.
                 else -> unreachable()
             }
         }
         returns.clear()
+        returnsAlreadyInReturnSlot.clear()
     }
 }

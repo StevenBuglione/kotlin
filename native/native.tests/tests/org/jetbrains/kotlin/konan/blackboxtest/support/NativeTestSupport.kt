@@ -220,7 +220,8 @@ private object NativeTestSupport {
         )
 
     private fun computeMemoryModel(enforcedProperties: EnforcedProperties): MemoryModel =
-        ClassLevelProperty.MEMORY_MODEL.readValue(enforcedProperties, MemoryModel.values(), default = MemoryModel.EXPERIMENTAL)
+        // Exercise the compiler's target-specific default unless a test explicitly requests an oracle model.
+        ClassLevelProperty.MEMORY_MODEL.readValue(enforcedProperties, MemoryModel.values(), default = MemoryModel.DEFAULT)
 
     private fun computeThreadStateChecker(enforcedProperties: EnforcedProperties): ThreadStateChecker {
         val useThreadStateChecker =
