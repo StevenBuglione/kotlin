@@ -72,8 +72,11 @@ internal class RustIrCodegen(
     fun generate(
         module: IrModuleFragment,
         entryPoints: Collection<IrSimpleFunction>,
+        moduleFunctionScope: Collection<IrSimpleFunction>? = null,
     ): RustCodegenResult {
-        val moduleFunctions = collectTopLevelFunctions(module).toSet()
+        val allModuleFunctions = collectTopLevelFunctions(module).toSet()
+        val moduleFunctions = moduleFunctionScope?.filterTo(linkedSetOf()) { it in allModuleFunctions }
+            ?: allModuleFunctions
         val diagnostics = mutableListOf<RustUnsupportedDiagnostic>()
         val validEntries = entryPoints.filterTo(linkedSetOf()) { entry ->
             if (entry in moduleFunctions) {

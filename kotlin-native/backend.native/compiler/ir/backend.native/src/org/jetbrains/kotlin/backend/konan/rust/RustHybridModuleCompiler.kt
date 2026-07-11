@@ -11,12 +11,17 @@ import llvm.LLVMDisposeModule
 import llvm.LLVMGetDataLayoutStr
 import llvm.LLVMGetNamedFunction
 import llvm.LLVMGetTarget
+import llvm.LLVMGetValueName
+import llvm.LLVMAliasGetAliasee
 import llvm.LLVMLinkage
 import llvm.LLVMModuleRef
+import llvm.LLVMTypeRef
 import llvm.LLVMSetLinkage
+import llvm.LLVMStoreSizeOfType
 import org.jetbrains.kotlin.backend.konan.NativeCodegenMode
 import org.jetbrains.kotlin.backend.konan.NativeGenerationState
 import org.jetbrains.kotlin.backend.konan.RuntimeNames
+import org.jetbrains.kotlin.backend.konan.llvm.getGlobalAliases
 import org.jetbrains.kotlin.backend.konan.llvm.getGlobalFunctionType
 import org.jetbrains.kotlin.backend.konan.llvm.llvmLinkModules2
 import org.jetbrains.kotlin.backend.konan.llvm.llvmtype2string
@@ -27,6 +32,9 @@ import org.jetbrains.kotlin.backend.konan.lower.isEagerStaticInitializer
 import org.jetbrains.kotlin.backend.konan.lower.isLazyStaticInitializer
 import org.jetbrains.kotlin.backend.konan.rust.codegen.RustIrCodegen
 import org.jetbrains.kotlin.backend.konan.rust.codegen.RustLinkerSymbolNamer
+import org.jetbrains.kotlin.backend.konan.rust.codegen.RustManagedReferenceCodegenResult
+import org.jetbrains.kotlin.backend.konan.rust.codegen.generateRustManagedReferenceFunction
+import org.jetbrains.kotlin.backend.konan.rust.codegen.rustManagedReferenceRuntimePrelude
 import org.jetbrains.kotlin.descriptors.ModuleDescriptor
 import org.jetbrains.kotlin.ir.declarations.IrDeclarationOrigin
 import org.jetbrains.kotlin.ir.declarations.IrModuleFragment
@@ -50,6 +58,7 @@ internal data class RustHybridModuleArtifact(
     val bitcodeFile: File,
     val generatedFunctions: List<IrSimpleFunction>,
     val fallbackFunctions: List<IrSimpleFunction>,
+    val needsRustEhPersonality: Boolean,
 )
 
 /**
@@ -75,28 +84,50 @@ internal fun tryCompileRustHybridModule(
 
     val entryPoint = generationState.context.symbols.entryPoint?.owner ?: return null
     val sourceModule = entryPoint.getPackageFragment().moduleDescriptor
-    val candidates = irModule.files.asSequence()
+    val sourceFunctions = irModule.files.asSequence()
         .flatMap { file -> file.declarations.asSequence() }
         .filterIsInstance<IrSimpleFunction>()
-        .filter { function -> function.isRustBodyEligible(generationState, sourceModule, entryPoint) }
+        .filter { function -> function.getPackageFragment().moduleDescriptor == sourceModule }
         .toList()
-    if (candidates.isEmpty()) return null
+    val sourceFunctionSet = sourceFunctions.toSet()
+    val bodyCandidates = sourceFunctions.asSequence()
+        .filter { function -> function.isRustBodyCandidate(generationState, sourceModule, entryPoint) }
+        .toList()
+    if (bodyCandidates.isEmpty()) return null
 
     val symbolNamer = RustLinkerSymbolNamer { function ->
         generationState.llvmDeclarations.forFunction(function).name
             ?: error("Kotlin/Native produced an unnamed LLVM function for ${function.name}")
     }
+    val frameOverlayWords = (
+            LLVMStoreSizeOfType(generationState.runtime.targetData, generationState.runtime.frameOverlayType) /
+                    generationState.runtime.pointerSize
+            ).toInt()
+    val managedResults = bodyCandidates.asSequence()
+        .map { function ->
+            generateRustManagedReferenceFunction(function, symbolNamer, frameOverlayWords, sourceFunctionSet::contains)
+        }
+        .filterIsInstance<RustManagedReferenceCodegenResult.Generated>()
+        .toList()
+    val managedDeclarations = managedResults.flatMap { it.generatedFunctions + it.fallbackFunctions }.toSet()
+    val primitiveCandidates = bodyCandidates.filter { function ->
+        function.hasPrimitiveRustAbi() && function !in managedDeclarations
+    }
     val result = RustIrCodegen(
         symbolNamer,
         allowRustStandardIo = false,
         functionPrologue = "unsafe { Kotlin_mm_safePointFunctionPrologue(); }",
-    ).generate(irModule, candidates)
-    val candidateSet = candidates.toSet()
+    ).generate(irModule, primitiveCandidates, moduleFunctionScope = primitiveCandidates)
+    val candidateSet = primitiveCandidates.toSet()
     val generated = result.generatedFunctions.filter { it.declaration in candidateSet }
-    if (generated.isEmpty()) return null
+    if (generated.isEmpty() && managedResults.isEmpty()) return null
     if (generated.size != result.generatedFunctions.size) return null
     if (result.fallbackFunctions.any { it.declaration !in candidateSet }) return null
     if (result.generatedFunctions.any { it.declaration === entryPoint }) return null
+    val generatedFunctions = (generated.map { it.declaration } + managedResults.flatMap { it.generatedFunctions }).distinct()
+    val fallbackFunctions = (
+            result.fallbackFunctions.map { it.declaration } + managedResults.flatMap { it.fallbackFunctions }
+            ).distinct()
 
     val outputFile = File(generationState.outputFiles.mainFileName).absoluteFile
     val workspace = outputFile.parentFile
@@ -112,21 +143,30 @@ internal fun tryCompileRustHybridModule(
                 appendLine("#![no_std]")
                 append(result.source)
                 appendLine()
-                appendLine("extern \"C\" {")
-                appendLine("    fn Kotlin_mm_safePointFunctionPrologue();")
-                appendLine("}")
+                if (managedResults.isEmpty()) {
+                    appendLine("extern \"C\" {")
+                    appendLine("    fn Kotlin_mm_safePointFunctionPrologue();")
+                    appendLine("}")
+                } else {
+                    appendLine(rustManagedReferenceRuntimePrelude())
+                    for (managedResult in managedResults) {
+                        appendLine()
+                        append(managedResult.source)
+                    }
+                }
             },
             outputDirectory = workspace.toPath(),
             release = config.optimizationsEnabled,
         )
-        val boundaryFunctions = (generated + result.fallbackFunctions)
-            .associate { it.declaration to it.linkerName }
-        if (!preflightRustBitcode(generationState, artifact.llvmBitcode, boundaryFunctions)) return null
+        val generatedSymbols = generatedFunctions.associateWith(symbolNamer::linkerName)
+        val fallbackSymbols = fallbackFunctions.associateWith(symbolNamer::linkerName)
+        if (!preflightRustBitcode(generationState, artifact.llvmBitcode, generatedSymbols, fallbackSymbols)) return null
         Files.write(successMarker.toPath(), (artifact.llvmBitcode.fileName.toString() + "\n").toByteArray())
         RustHybridModuleArtifact(
             artifact.llvmBitcode.toFile(),
-            generated.map { it.declaration },
-            result.fallbackFunctions.map { it.declaration },
+            generatedFunctions,
+            fallbackFunctions,
+            needsRustEhPersonality = managedResults.isNotEmpty(),
         )
     } catch (failure: Exception) {
         if (failure is InterruptedException) Thread.currentThread().interrupt()
@@ -134,7 +174,7 @@ internal fun tryCompileRustHybridModule(
     }
 }
 
-private fun IrSimpleFunction.isRustBodyEligible(
+private fun IrSimpleFunction.isRustBodyCandidate(
     generationState: NativeGenerationState,
     sourceModule: ModuleDescriptor,
     entryPoint: IrSimpleFunction,
@@ -148,12 +188,14 @@ private fun IrSimpleFunction.isRustBodyEligible(
             body != null &&
             !isLazyStaticInitializer &&
             !isEagerStaticInitializer &&
-            parameters.all { it.kind == IrParameterKind.Regular && it.type.isPrimitiveRustParameterType() } &&
-            returnType.isPrimitiveRustReturnType() &&
             !hasAnnotation(RuntimeNames.exportedBridge) &&
             !hasAnnotation(RuntimeNames.exportForCppRuntime) &&
             getPackageFragment().moduleDescriptor == sourceModule &&
             generationState.llvmModuleSpecification.containsDeclaration(this)
+
+private fun IrSimpleFunction.hasPrimitiveRustAbi(): Boolean =
+    parameters.all { it.kind == IrParameterKind.Regular && it.type.isPrimitiveRustParameterType() } &&
+            returnType.isPrimitiveRustReturnType()
 
 private fun IrType.isPrimitiveRustParameterType(): Boolean =
     !isNullable() && (isInt() || isLong())
@@ -164,7 +206,8 @@ private fun IrType.isPrimitiveRustReturnType(): Boolean =
 private fun preflightRustBitcode(
     generationState: NativeGenerationState,
     bitcodePath: Path,
-    boundaryFunctions: Map<IrSimpleFunction, String>,
+    generatedSymbols: Map<IrSimpleFunction, String>,
+    fallbackSymbols: Map<IrSimpleFunction, String>,
 ): Boolean {
     var rustModule: LLVMModuleRef? = null
     var rustModuleConsumed = false
@@ -180,16 +223,23 @@ private fun preflightRustBitcode(
         if (moduleDataLayout(rustModule) != moduleDataLayout(generationState.llvm.module)) return false
         verifyModule(rustModule, "generated Rust bitcode")
 
-        for (entry in boundaryFunctions.entries) {
-            val rustFunction = LLVMGetNamedFunction(rustModule, entry.value) ?: return false
+        val linkedBoundaryFunctions = LinkedHashMap<IrSimpleFunction, String>(generatedSymbols.size + fallbackSymbols.size)
+        for (entry in generatedSymbols.entries) {
             val kotlinType = generationState.llvmDeclarations.forFunction(entry.key).functionType
-            val rustType = getGlobalFunctionType(rustFunction)
+            val rustType = rustBoundaryFunctionType(rustModule, entry.value) ?: return false
             if (llvmtype2string(kotlinType) != llvmtype2string(rustType)) return false
+            linkedBoundaryFunctions[entry.key] = entry.value
+        }
+        for (entry in fallbackSymbols.entries) {
+            val rustType = rustBoundaryFunctionType(rustModule, entry.value) ?: continue
+            val kotlinType = generationState.llvmDeclarations.forFunction(entry.key).functionType
+            if (llvmtype2string(kotlinType) != llvmtype2string(rustType)) return false
+            linkedBoundaryFunctions[entry.key] = entry.value
         }
 
         clone = LLVMCloneModule(generationState.llvm.module)
             ?: error("Could not clone the Kotlin/Native LLVM module for Rust preflight")
-        boundaryFunctions.values.forEach { symbolName ->
+        linkedBoundaryFunctions.values.forEach { symbolName ->
             val clonedFunction = LLVMGetNamedFunction(clone, symbolName) ?: return false
             LLVMSetLinkage(clonedFunction, LLVMLinkage.LLVMExternalLinkage)
         }
@@ -208,3 +258,9 @@ private fun preflightRustBitcode(
 private fun moduleTarget(module: LLVMModuleRef): String = LLVMGetTarget(module)?.toKString().orEmpty()
 
 private fun moduleDataLayout(module: LLVMModuleRef): String = LLVMGetDataLayoutStr(module)?.toKString().orEmpty()
+
+private fun rustBoundaryFunctionType(module: LLVMModuleRef, symbolName: String): LLVMTypeRef? {
+    LLVMGetNamedFunction(module, symbolName)?.let { return getGlobalFunctionType(it) }
+    val alias = getGlobalAliases(module).firstOrNull { LLVMGetValueName(it)?.toKString() == symbolName } ?: return null
+    return LLVMAliasGetAliasee(alias)?.let(::getGlobalFunctionType)
+}

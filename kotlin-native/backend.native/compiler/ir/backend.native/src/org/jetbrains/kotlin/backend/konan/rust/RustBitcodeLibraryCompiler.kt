@@ -72,6 +72,7 @@ internal object RustBitcodeLibraryWorkspaceEmitter {
 
         [profile.dev]
         codegen-units = 1
+        opt-level = 1
         overflow-checks = false
         panic = "unwind"
 

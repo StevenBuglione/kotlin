@@ -5,9 +5,11 @@
 
 package org.jetbrains.kotlin.backend.konan.driver.phases
 
+import kotlinx.cinterop.toKString
 import llvm.LLVMLinkage
 import llvm.LLVMGetLinkage
 import llvm.LLVMGetNamedFunction
+import llvm.LLVMGetValueName
 import llvm.LLVMModuleRef
 import llvm.LLVMSetLinkage
 import org.jetbrains.kotlin.backend.common.phaser.PhaseEngine
@@ -17,6 +19,8 @@ import org.jetbrains.kotlin.backend.konan.driver.NativeBackendPhaseContext
 import org.jetbrains.kotlin.backend.konan.driver.utilities.CExportFiles
 import org.jetbrains.kotlin.backend.konan.driver.utilities.createTempFiles
 import org.jetbrains.kotlin.backend.konan.ir.konanLibrary
+import org.jetbrains.kotlin.backend.konan.llvm.getGlobalAliases
+import org.jetbrains.kotlin.backend.konan.rust.installRustEhPersonality
 import org.jetbrains.kotlin.backend.konan.rust.tryCompileRustHybridModule
 import org.jetbrains.kotlin.backend.konan.serialization.CacheDeserializationStrategy
 import org.jetbrains.kotlin.backend.konan.serialization.PartialCacheInfo
@@ -533,9 +537,10 @@ internal fun PhaseEngine<NativeGenerationState>.runBackendCodegen(module: IrModu
     }
     runAndMeasurePhase(LinkBitcodeDependenciesPhase, rustBitcodeFiles + cExportBitcodeFiles)
     context.rustBoundaryLinkages.entries.forEach { entry ->
-        val mergedFunction = LLVMGetNamedFunction(context.llvm.module, entry.key)
-            ?: error("Rust-linked function ${entry.key} disappeared while linking LLVM modules")
-        LLVMSetLinkage(mergedFunction, entry.value)
+        val mergedValue = LLVMGetNamedFunction(context.llvm.module, entry.key)
+            ?: getGlobalAliases(context.llvm.module).firstOrNull { LLVMGetValueName(it)?.toKString() == entry.key }
+            ?: error("Rust-linked function or alias ${entry.key} disappeared while linking LLVM modules")
+        LLVMSetLinkage(mergedValue, entry.value)
     }
     if (rustBitcodeFiles.isNotEmpty()) {
         runAndMeasurePhase(VerifyBitcodePhase, llvmModule)
@@ -589,6 +594,9 @@ private fun PhaseEngine<NativeGenerationState>.runCodegen(module: IrModuleFragme
     }
     runAndMeasurePhase(CreateLLVMDeclarationsPhase, module)
     val rustArtifact = tryCompileRustHybridModule(context, module)
+    if (rustArtifact?.needsRustEhPersonality == true) {
+        installRustEhPersonality(context)
+    }
     rustArtifact?.let { artifact ->
         (artifact.generatedFunctions + artifact.fallbackFunctions).distinct().forEach { function ->
             val llvmFunction = context.llvmDeclarations.forFunction(function)
