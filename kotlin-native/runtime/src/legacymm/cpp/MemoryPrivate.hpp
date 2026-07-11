@@ -92,6 +92,10 @@ struct ContainerHeader {
   }
 
   inline const TypeInfo* takeArcInitializedDeinitType() {
+    // Most objects have no @ArcDeinit state. Avoid a serialized atomic RMW on
+    // their destruction path while retaining exactly-once exchange semantics
+    // for the initialized case.
+    if (__atomic_load_n(&arcInitializedDeinitType_, __ATOMIC_ACQUIRE) == nullptr) return nullptr;
     return __atomic_exchange_n(&arcInitializedDeinitType_, nullptr, __ATOMIC_ACQ_REL);
   }
 #endif

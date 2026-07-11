@@ -68,6 +68,48 @@ TEST(ArcReferenceCountStateTest, ConcurrentRetainReleasePreservesTheAnchoredOwne
     EXPECT_TRUE(header.arcDeallocating());
 }
 
+TEST(ArcDeinitMarkerStateTest, UninitializedMarkerReadsNullWithoutChangingContainerState) {
+    ContainerHeader header{};
+    header.setRefCount(1);
+
+    EXPECT_EQ(header.takeArcInitializedDeinitType(), nullptr);
+    EXPECT_EQ(header.takeArcInitializedDeinitType(), nullptr);
+    EXPECT_EQ(header.refCount(), 1);
+    EXPECT_FALSE(header.arcDeallocating());
+}
+
+TEST(ArcDeinitMarkerStateTest, InitializedMarkerIsTakenExactlyOnceByConcurrentConsumers) {
+    constexpr int kThreads = 8;
+    ContainerHeader header{};
+    header.setRefCount(1);
+    header.setArcInitializedDeinitType(theAnyTypeInfo);
+    std::atomic<bool> start = false;
+    std::atomic<int> successfulTakes = 0;
+    std::atomic<int> unexpectedValues = 0;
+    std::vector<std::thread> workers;
+    for (int worker = 0; worker < kThreads; ++worker) {
+        workers.emplace_back([&] {
+            while (!start.load(std::memory_order_acquire)) {
+            }
+            const TypeInfo* marker = header.takeArcInitializedDeinitType();
+            if (marker == theAnyTypeInfo) {
+                successfulTakes.fetch_add(1, std::memory_order_relaxed);
+            } else if (marker != nullptr) {
+                unexpectedValues.fetch_add(1, std::memory_order_relaxed);
+            }
+        });
+    }
+
+    start.store(true, std::memory_order_release);
+    for (auto& worker : workers) worker.join();
+
+    EXPECT_EQ(successfulTakes.load(std::memory_order_relaxed), 1);
+    EXPECT_EQ(unexpectedValues.load(std::memory_order_relaxed), 0);
+    EXPECT_EQ(header.takeArcInitializedDeinitType(), nullptr);
+    EXPECT_EQ(header.refCount(), 1);
+    EXPECT_FALSE(header.arcDeallocating());
+}
+
 TEST(ArcReferenceCountStateDeathTest, GeneralRetainCannotCreateInitialOwnership) {
     ContainerHeader header{};
     EXPECT_DEATH(header.incRefCount<true>(), "Attempted to retain a zero-count or deallocating ARC object");
