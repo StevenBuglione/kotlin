@@ -47,6 +47,9 @@ import org.jetbrains.kotlin.ir.declarations.IrParameterKind
 import org.jetbrains.kotlin.ir.declarations.IrSimpleFunction
 import org.jetbrains.kotlin.ir.declarations.moduleDescriptor
 import org.jetbrains.kotlin.ir.types.IrType
+import org.jetbrains.kotlin.ir.types.isBoolean
+import org.jetbrains.kotlin.ir.types.isDouble
+import org.jetbrains.kotlin.ir.types.isFloat
 import org.jetbrains.kotlin.ir.types.isInt
 import org.jetbrains.kotlin.ir.types.isLong
 import org.jetbrains.kotlin.ir.types.isUnit
@@ -246,10 +249,10 @@ private fun IrSimpleFunction.hasPrimitiveRustAbi(): Boolean =
             returnType.isPrimitiveRustReturnType()
 
 private fun IrType.isPrimitiveRustParameterType(): Boolean =
-    !isNullable() && (isInt() || isLong())
+    !isNullable() && (isBoolean() || isInt() || isLong() || isFloat() || isDouble())
 
 private fun IrType.isPrimitiveRustReturnType(): Boolean =
-    !isNullable() && (isInt() || isLong() || isUnit())
+    !isNullable() && (isBoolean() || isInt() || isLong() || isFloat() || isDouble() || isUnit())
 
 private fun preflightRustBitcode(
     generationState: NativeGenerationState,

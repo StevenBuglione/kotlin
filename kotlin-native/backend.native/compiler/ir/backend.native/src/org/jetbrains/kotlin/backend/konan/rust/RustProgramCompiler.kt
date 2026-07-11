@@ -99,10 +99,35 @@ internal class RustToolExecutionException(
     }
 )
 
+internal fun interface RustCommandExecutor {
+    fun execute(command: List<String>, workingDirectory: Path): String
+}
+
+internal class RustProcessCommandExecutor(
+    private val environment: Map<String, String> = emptyMap(),
+) : RustCommandExecutor {
+    override fun execute(command: List<String>, workingDirectory: Path): String {
+        val process = ProcessBuilder(command)
+            .directory(workingDirectory.toFile())
+            .redirectErrorStream(true)
+            .apply {
+                environment().putAll(this@RustProcessCommandExecutor.environment)
+                environment()["CARGO_TERM_COLOR"] = "never"
+            }
+            .start()
+        val output = process.inputStream.bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
+        val exitCode = process.waitFor()
+        val normalizedOutput = normalizeRustToolOutput(output, workingDirectory)
+        if (exitCode != 0) throw RustToolExecutionException(command, exitCode, normalizedOutput)
+        return normalizedOutput
+    }
+}
+
 /** Invokes Cargo only after workspace emission, keeping process execution separately testable. */
 internal class RustCargoRunner(
     private val cargoExecutable: String = "cargo",
-    private val environment: Map<String, String> = emptyMap(),
+    environment: Map<String, String> = emptyMap(),
+    private val commandExecutor: RustCommandExecutor = RustProcessCommandExecutor(environment),
 ) {
     fun buildProgram(workspace: RustCargoWorkspace): RustProgramArtifact {
         val targetDirectory = workspace.directory.resolve("target")
@@ -115,9 +140,14 @@ internal class RustCargoRunner(
             addAll(listOf(cargoExecutable, "clippy"))
             addAll(commonArguments)
             if (workspace.release) add("--release")
+            addAll(listOf("--bin", workspace.packageName, "--message-format=short", "--no-deps"))
             addAll(listOf("--", "-D", "warnings"))
         }
-        val clippyOutput = runCommand(clippyCommand, workspace.directory)
+        val clippyOutput = commandExecutor.execute(clippyCommand, workspace.directory)
+
+        val profile = if (workspace.release) "release" else "debug"
+        val artifactDirectory = targetDirectory.resolve(workspace.targetTriple).resolve(profile)
+        deletePackageBitcodeArtifacts(artifactDirectory.resolve("deps"), workspace.packageName.replace('-', '_'))
 
         val rustcCommand = buildList {
             addAll(listOf(
@@ -126,12 +156,11 @@ internal class RustCargoRunner(
             ))
             addAll(commonArguments)
             if (workspace.release) add("--release")
+            add("--message-format=short")
             addAll(listOf("--", "--emit=llvm-bc,link"))
         }
-        val rustcOutput = runCommand(rustcCommand, workspace.directory)
+        val rustcOutput = commandExecutor.execute(rustcCommand, workspace.directory)
 
-        val profile = if (workspace.release) "release" else "debug"
-        val artifactDirectory = targetDirectory.resolve(workspace.targetTriple).resolve(profile)
         val executable = artifactDirectory.resolve(workspace.packageName + executableSuffix(workspace.targetTriple))
         check(Files.isRegularFile(executable)) {
             "Cargo succeeded but did not produce the expected Rust executable: $executable"
@@ -147,18 +176,6 @@ internal class RustCargoRunner(
         }
         val compilerOutput = listOf(clippyOutput, rustcOutput).filter(String::isNotBlank).joinToString("\n")
         return RustProgramArtifact(executable, bitcode, workspace, compilerOutput)
-    }
-
-    private fun runCommand(command: List<String>, workingDirectory: Path): String {
-        val process = ProcessBuilder(command)
-            .directory(workingDirectory.toFile())
-            .redirectErrorStream(true)
-            .apply { environment().putAll(this@RustCargoRunner.environment) }
-            .start()
-        val output = process.inputStream.bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
-        val exitCode = process.waitFor()
-        if (exitCode != 0) throw RustToolExecutionException(command, exitCode, output)
-        return output
     }
 }
 
@@ -195,3 +212,25 @@ private fun String.withSingleTrailingNewline(): String = trimEnd('\r', '\n') + "
 private fun executableSuffix(targetTriple: String): String = if ("windows" in targetTriple) ".exe" else ""
 
 private fun quoteCommandArgument(argument: String): String = if (argument.any(Char::isWhitespace)) "\"$argument\"" else argument
+
+internal fun normalizeRustToolOutput(output: String, workingDirectory: Path): String {
+    val normalizedNewlines = output.replace("\r\n", "\n").replace('\r', '\n')
+    val withoutColors = ANSI_ESCAPE.replace(normalizedNewlines, "")
+    val absoluteWorkspace = workingDirectory.toAbsolutePath().normalize().toString()
+    return withoutColors
+        .replace(absoluteWorkspace, RUST_WORKSPACE_PLACEHOLDER)
+        .replace(absoluteWorkspace.replace('\\', '/'), RUST_WORKSPACE_PLACEHOLDER)
+        .trimEnd()
+}
+
+internal fun deletePackageBitcodeArtifacts(directory: Path, cratePrefix: String) {
+    if (!Files.isDirectory(directory)) return
+    Files.list(directory).use { paths ->
+        paths.filter { path -> path.fileName.toString().startsWith(cratePrefix) }
+            .filter { path -> path.fileName.toString().endsWith(".bc") }
+            .forEach(Files::deleteIfExists)
+    }
+}
+
+private val ANSI_ESCAPE = Regex("\\u001B\\[[;\\d]*[ -/]*[@-~]")
+private const val RUST_WORKSPACE_PLACEHOLDER = "<rust-workspace>"

@@ -106,7 +106,8 @@ internal data class RustBitcodeLibraryArtifact(
 
 internal class RustBitcodeLibraryCompiler(
     private val cargoExecutable: String = "cargo",
-    private val environment: Map<String, String> = emptyMap(),
+    environment: Map<String, String> = emptyMap(),
+    private val commandExecutor: RustCommandExecutor = RustProcessCommandExecutor(environment),
 ) {
     fun compile(
         packageName: String,
@@ -139,46 +140,28 @@ internal class RustBitcodeLibraryCompiler(
             addAll(listOf(cargoExecutable, "clippy"))
             addAll(commonArguments)
             if (workspace.release) add("--release")
+            addAll(listOf("--message-format=short", "--no-deps"))
             addAll(listOf("--", "-D", "warnings"))
         }
-        val clippyOutput = runCommand(clippyCommand, workspace.directory)
-
-        val cleanCommand = listOf(
-            cargoExecutable,
-            "clean",
-            "--manifest-path", workspace.manifest.toString(),
-            "--target", workspace.targetTriple,
-            "--target-dir", targetDirectory.toString(),
-            "--package", workspace.packageName,
-        )
-        val cleanOutput = runCommand(cleanCommand, workspace.directory)
-        val rustcCommand = buildList {
-            addAll(listOf(cargoExecutable, "rustc"))
-            addAll(commonArguments)
-            if (workspace.release) add("--release")
-            addAll(listOf("--", "--emit=llvm-bc"))
-        }
-        val rustcOutput = runCommand(rustcCommand, workspace.directory)
+        val clippyOutput = commandExecutor.execute(clippyCommand, workspace.directory)
 
         val profile = if (workspace.release) "release" else "debug"
         val artifactDirectory = targetDirectory.resolve(workspace.targetTriple).resolve(profile).resolve("deps")
         val cratePrefix = workspace.packageName.replace('-', '_')
+        deletePackageBitcodeArtifacts(artifactDirectory, cratePrefix)
+        val rustcCommand = buildList {
+            addAll(listOf(cargoExecutable, "rustc"))
+            addAll(commonArguments)
+            if (workspace.release) add("--release")
+            add("--message-format=short")
+            addAll(listOf("--", "--emit=llvm-bc"))
+        }
+        val rustcOutput = commandExecutor.execute(rustcCommand, workspace.directory)
+
         val bitcode = bitcodeArtifacts(artifactDirectory, cratePrefix).singleOrNull()
             ?: error("Cargo must produce exactly one Rust LLVM bitcode file in $artifactDirectory")
-        val compilerOutput = listOf(clippyOutput, cleanOutput, rustcOutput).filter(String::isNotBlank).joinToString("\n")
+        val compilerOutput = listOf(clippyOutput, rustcOutput).filter(String::isNotBlank).joinToString("\n")
         return RustBitcodeLibraryArtifact(bitcode, workspace, compilerOutput)
-    }
-
-    private fun runCommand(command: List<String>, workingDirectory: Path): String {
-        val process = ProcessBuilder(command)
-            .directory(workingDirectory.toFile())
-            .redirectErrorStream(true)
-            .apply { environment().putAll(this@RustBitcodeLibraryCompiler.environment) }
-            .start()
-        val output = process.inputStream.bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
-        val exitCode = process.waitFor()
-        if (exitCode != 0) throw RustToolExecutionException(command, exitCode, output)
-        return output
     }
 
     private fun bitcodeArtifacts(directory: Path, cratePrefix: String): List<Path> =
