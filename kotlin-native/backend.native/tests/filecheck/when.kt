@@ -20,5 +20,6 @@ fun main() {
 // CHECK: when_case3
 // CHECK: when_next4
 // CHECK: when_exit
-// CHECK: call void @"kfun:kotlin.io#println(kotlin.Any?)
+// ARC uses invoke while the boxed when result is protected by an owning cleanup frame.
+// CHECK: {{call|invoke}} void @"kfun:kotlin.io#println(kotlin.Any?)
 // CHECK: ret void
