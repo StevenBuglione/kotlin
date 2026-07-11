@@ -5,6 +5,7 @@
 
 package org.jetbrains.kotlin.backend.konan.rust.codegen
 
+import org.jetbrains.kotlin.backend.konan.KonanFqNames
 import org.jetbrains.kotlin.backend.konan.binaryTypeIsReference
 import org.jetbrains.kotlin.ir.declarations.IrField
 import org.jetbrains.kotlin.ir.declarations.IrFile
@@ -15,10 +16,11 @@ import org.jetbrains.kotlin.ir.expressions.IrCall
 import org.jetbrains.kotlin.ir.expressions.IrGetValue
 import org.jetbrains.kotlin.ir.expressions.IrReturn
 import org.jetbrains.kotlin.ir.expressions.IrSetField
-import org.jetbrains.kotlin.ir.expressions.IrTypeOperatorCall
 import org.jetbrains.kotlin.ir.expressions.IrTypeOperator
+import org.jetbrains.kotlin.ir.expressions.IrTypeOperatorCall
 import org.jetbrains.kotlin.ir.types.isNothing
 import org.jetbrains.kotlin.ir.types.isUnit
+import org.jetbrains.kotlin.ir.util.hasAnnotation
 import org.jetbrains.kotlin.ir.util.isTopLevel
 
 internal sealed interface RustManagedFieldCodegenResult {
@@ -88,6 +90,7 @@ internal fun generateRustManagedFieldFunction(
     if (field.isStatic || !field.type.isManagedReference()) return unsupported("the field must be an instance managed reference")
     val offset = fieldOffsetBytes(field) ?: return unsupported("the Native field offset is unavailable")
     if (offset < 0) return unsupported("the Native field offset is negative")
+    val heapUpdateFunction = if (field.hasAnnotation(KonanFqNames.volatile)) "UpdateVolatileHeapRef" else "UpdateHeapRef"
     val payloadFactoryCall = valueExpression.unwrapImplicitCasts() as? IrCall ?: return unsupported("the field value must come from a direct factory call")
     val payloadFactory = payloadFactoryCall.symbol.owner
     if (invalidManagedFactory(payloadFactoryCall) || !isAvailableFallback(payloadFactory)) return unsupported("the payload factory is unavailable")
@@ -153,7 +156,7 @@ internal fun generateRustManagedFieldFunction(
         appendLine("        let payload = ${prefix}_payload(payload_root);")
         appendLine("        UpdateStackRef(payload_root, payload);")
         appendLine("        let field_location = holder.cast::<u8>().add(${offset}usize).cast::<KRef>();")
-        appendLine("        UpdateHeapRef(field_location, payload);")
+        appendLine("        $heapUpdateFunction(field_location, payload);")
         appendLine("        UpdateStackRef(payload_root, core::ptr::null_mut());")
         callsAfterWrite.forEach { appendLine("        ${unitNames.getValue(it.symbol.owner)}();") }
         appendLine("        let result = core::ptr::read(holder_root);")

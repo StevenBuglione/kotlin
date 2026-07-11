@@ -213,6 +213,7 @@ internal fun rustManagedReferenceRuntimePrelude(): String = """
         fn LeaveFrame(frame: *mut KRef, parameters: i32, count: i32);
         fn UpdateStackRef(location: *mut KRef, value: KRef);
         fn UpdateHeapRef(location: *mut KRef, value: KRef);
+        fn UpdateVolatileHeapRef(location: *mut KRef, value: KRef);
         fn UpdateReturnRef(location: *mut KRef, value: KRef);
         fn getCurrentFrame() -> *mut KRef;
         fn SetCurrentFrame(frame: *mut KRef);
