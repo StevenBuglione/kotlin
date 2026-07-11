@@ -409,6 +409,7 @@ internal class RustIrCodegen(
                 argument ?: unsupported(call, RustUnsupportedCode.MALFORMED_IR, "Call to ${displayName(callee)} has a missing argument")
             }
             renderPrintln(callee, arguments)?.let { return it }
+            renderPrimitiveConversion(callee, arguments, call)?.let { return it }
             renderPrimitiveOperator(callee, arguments, call)?.let { return it }
             if (isUnitSingleton(callee)) return "()"
             if (callee in moduleFunctions) {
@@ -444,6 +445,31 @@ internal class RustIrCodegen(
             return "println!(\"{}\", ${expression(argument)})"
         }
 
+        private fun renderPrimitiveConversion(
+            callee: IrSimpleFunction,
+            arguments: List<IrExpression>,
+            call: IrCall,
+        ): String? {
+            val conversion = callee.name.asString()
+            if (conversion != "toInt" && conversion != "toLong") return null
+            val fqName = callee.fqNameWhenAvailable?.asString()
+            if (fqName != null && !fqName.startsWith("kotlin.")) return null
+            val value = arguments.singleOrNull()
+                ?: unsupported(call, RustUnsupportedCode.UNSUPPORTED_CALL, "Malformed primitive conversion call ${displayName(callee)}")
+            val renderedValue = expression(value)
+            return when {
+                conversion == "toLong" && value.type.isInt() -> "($renderedValue as i64)"
+                conversion == "toLong" && value.type.isLong() -> renderedValue
+                conversion == "toInt" && value.type.isLong() -> "($renderedValue as i32)"
+                conversion == "toInt" && value.type.isInt() -> renderedValue
+                else -> unsupported(
+                    call,
+                    RustUnsupportedCode.UNSUPPORTED_CALL,
+                    "Primitive conversion ${displayName(callee)} requires unsupported numeric conversion semantics",
+                )
+            }
+        }
+
         private fun unwrapBoxForPrint(argument: IrExpression): IrExpression {
             val boxCall = argument as? IrCall ?: return argument
             val calleeName = boxCall.symbol.owner.name.asString()
@@ -477,14 +503,24 @@ internal class RustIrCodegen(
                 "minus" -> binary { a, b -> if (integer) "($a).wrapping_sub($b)" else "($a - $b)" }
                 "times" -> binary { a, b -> if (integer) "($a).wrapping_mul($b)" else "($a * $b)" }
                 // Integer division by zero must throw Kotlin's ArithmeticException, so it cannot be
-                // emitted until the exception ABI is available to generated Rust.
+                // emitted for a zero or non-constant divisor until the exception ABI is available.
                 "div" -> if (integer) {
-                    unsupported(call, RustUnsupportedCode.UNSUPPORTED_CALL, "Integer division requires Kotlin exception interop")
+                    if (arguments.size == 2 && rustType(lhs.type, call) == rustType(arguments[1].type, call)) {
+                        if (!arguments[1].isNonZeroIntegerConstant()) {
+                            unsupported(call, RustUnsupportedCode.UNSUPPORTED_CALL, "Integer division requires Kotlin exception interop")
+                        }
+                        binary { a, b -> "($a).wrapping_div($b)" }
+                    } else null
                 } else {
                     binary { a, b -> "($a / $b)" }
                 }
                 "rem", "mod" -> if (integer) {
-                    unsupported(call, RustUnsupportedCode.UNSUPPORTED_CALL, "Integer remainder requires Kotlin exception interop")
+                    if (arguments.size == 2 && rustType(lhs.type, call) == rustType(arguments[1].type, call)) {
+                        if (!arguments[1].isNonZeroIntegerConstant()) {
+                            unsupported(call, RustUnsupportedCode.UNSUPPORTED_CALL, "Integer remainder requires Kotlin exception interop")
+                        }
+                        binary { a, b -> "($a).wrapping_rem($b)" }
+                    } else null
                 } else {
                     binary { a, b -> "($a % $b)" }
                 }
@@ -516,6 +552,15 @@ internal class RustIrCodegen(
                 "OROR", "oror" -> binary { a, b -> "($a || $b)" }
                 else -> null
             } ?: unsupported(call, RustUnsupportedCode.UNSUPPORTED_CALL, "Malformed primitive operator call ${displayName(callee)}")
+        }
+
+        private fun IrExpression.isNonZeroIntegerConstant(): Boolean = when (this) {
+            is IrConst -> when (kind) {
+                IrConstKind.Int -> value as Int != 0
+                IrConstKind.Long -> value as Long != 0L
+                else -> false
+            }
+            else -> false
         }
 
         private fun renderConst(constant: IrConst): String = when (constant.kind) {
