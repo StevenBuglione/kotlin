@@ -16,13 +16,7 @@ internal val KotlinCreateNativeRustInteropBridgePlanTasksSideEffect =
         val project = compilation.project
 
         compilation.rustInterops.all { interop ->
-            val bridgePlanGenerationTaskName = lowerCamelCaseName(
-                "generate",
-                compilation.target.name,
-                compilation.name,
-                interop.name,
-                "rustInteropBridgePlan",
-            ).asValidTaskName()
+            val bridgePlanGenerationTaskName = compilation.rustInteropBridgePlanTaskName(interop.name)
 
             val bridgePlanTask = project.tasks.register(
                 bridgePlanGenerationTaskName,
@@ -50,3 +44,11 @@ internal val KotlinCreateNativeRustInteropBridgePlanTasksSideEffect =
             }
         }
     }
+
+internal fun KotlinNativeCompilation.rustInteropBridgePlanTaskName(interopName: String): String = lowerCamelCaseName(
+    "generate",
+    target.name,
+    name,
+    interopName,
+    "rustInteropBridgePlan",
+).asValidTaskName()
