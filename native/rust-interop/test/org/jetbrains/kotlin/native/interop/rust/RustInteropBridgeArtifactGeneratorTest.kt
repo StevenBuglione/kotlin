@@ -194,6 +194,6 @@ class RustInteropBridgeArtifactGeneratorTest {
         const val EXPECTED_C_HEADER_SHA256 = "c5d3fd5dda2ffcc1385f8c900f7325205240f4bb5553d5710268d690f9289033"
         const val EXPECTED_RUST_SOURCE_SHA256 = "a6e130ddc8e87a14f4651dfb5577659f874b7d6f5857c1538b6bf5d738536ff2"
         const val EXPECTED_KOTLIN_PATH = "rust/regex/knri_dc70ff53756f.kt"
-        const val EXPECTED_KOTLIN_FACADE_SHA256 = "caf14a5749a0ec1467108485c1b8e6d285ee342248ea26349d2fe48f7cd263a2"
+        const val EXPECTED_KOTLIN_FACADE_SHA256 = "9abdd6fa916d40e620207960be1614bfff41af0daa22b362f5b1b3357acf1f31"
     }
 }

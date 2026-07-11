@@ -74,6 +74,7 @@ internal abstract class GenerateRustInteropBridgeArtifacts : DefaultTask() {
         writeAtomically(root.resolve("Cargo.toml"), artifacts.cargoManifest)
         writeAtomically(root.resolve("src/lib.rs"), artifacts.rustSource)
         writeAtomically(root.resolve("include/kotlin_rust_interop.h"), artifacts.cHeader)
+        writeAtomically(root.resolve("metadata/cinterop-package.txt"), artifacts.cInteropPackage + "\n")
 
         val kotlinRoot = root.resolve("kotlin")
         resetDirectory(kotlinRoot)

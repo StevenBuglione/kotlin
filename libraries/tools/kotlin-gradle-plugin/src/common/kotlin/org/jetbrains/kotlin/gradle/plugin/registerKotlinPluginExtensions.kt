@@ -153,6 +153,7 @@ internal fun Project.registerKotlinPluginExtensions() {
         register(project, KotlinCreateNativeCInteropTasksSideEffect)
         register(project, KotlinCreateNativeRustInteropBridgePlanTasksSideEffect)
         register(project, KotlinCreateNativeRustInteropBridgeArtifactTaskSideEffect)
+        register(project, KotlinCreateNativeRustInteropPipelineSideEffect)
         register(project, KotlinCreateCompilationArchivesTask)
         register(project, KotlinJvmCompilationWireJavaSourcesSideEffect)
         register(project, WasmBinaryTransformRegisteringSetupAction)

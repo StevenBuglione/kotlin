@@ -268,7 +268,7 @@ object RustInteropBridgeArtifactGenerator {
         append("import ").append(aggregate.cInteropPackage).append(".*\n\n")
         append("private const val KNRI_OK_STATUS = 0\n\n")
         append("private fun knriMessage(value: knri_utf8): String {\n")
-        append("    val result = if (value.data == null || value.len == 0.convert()) \"\" else value.data!!.readBytes(value.len.toInt()).decodeToString()\n")
+        append("    val result = if (value.data == null || value.len.toLong() == 0L) \"\" else value.data!!.readBytes(value.len.toInt()).decodeToString()\n")
         append("    ").append(aggregate.prefix).append("_free_utf8(value.data, value.len)\n    return result\n}\n\n")
         plan.operations.flatMap { operation ->
             listOfNotNull(operation.errorPolicy.kotlinException, operation.panicPolicy.kotlinException)

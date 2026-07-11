@@ -10,8 +10,7 @@ import org.jetbrains.kotlin.gradle.plugin.KotlinNativeTargetConfigurator
 import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeCompilation
 import org.jetbrains.kotlin.gradle.targets.native.tasks.GenerateRustInteropBridgeArtifacts
 import org.jetbrains.kotlin.gradle.targets.native.tasks.GenerateRustInteropBridgePlan
-import org.jetbrains.kotlin.gradle.utils.asValidTaskName
-import org.jetbrains.kotlin.gradle.utils.lowerCamelCaseName
+import org.jetbrains.kotlin.konan.target.presetName
 
 internal val KotlinCreateNativeRustInteropBridgeArtifactTaskSideEffect =
     KotlinCompilationSideEffect<KotlinNativeCompilation> { compilation ->
@@ -20,18 +19,13 @@ internal val KotlinCreateNativeRustInteropBridgeArtifactTaskSideEffect =
         var artifactTask: TaskProvider<GenerateRustInteropBridgeArtifacts>? = null
         compilation.rustInterops.all { interop ->
             val aggregateTask = artifactTask ?: project.tasks.register(
-                lowerCamelCaseName(
-                    "generate",
-                    compilation.target.name,
-                    compilation.name,
-                    "rustInteropBridgeArtifacts",
-                ).asValidTaskName(),
+                compilation.rustInteropBridgeArtifactTaskName(),
                 GenerateRustInteropBridgeArtifacts::class.java,
             ) { task ->
                 task.group = KotlinNativeTargetConfigurator.INTEROP_GROUP
                 task.description = "Generates aggregate Rust interop bridge artifacts " +
                         "for compilation '${compilation.compilationName}' of target '${compilation.target.name}'."
-                task.targetName.set(compilation.target.name)
+                task.targetName.set(compilation.konanTarget.presetName)
                 task.outputDirectory.set(
                     project.layout.buildDirectory.dir(
                         "rustInterop/${compilation.target.name}/${compilation.name}/bridge"
