@@ -3,8 +3,8 @@ set -euo pipefail
 
 profile=${1:-}
 case "$profile" in
-    smoke|stress|race) ;;
-    *) echo "usage: $0 smoke|stress|race" >&2; exit 2 ;;
+    smoke|stress|race|unowned-death) ;;
+    *) echo "usage: $0 smoke|stress|race|unowned-death" >&2; exit 2 ;;
 esac
 
 root=$(git rev-parse --show-toplevel)
@@ -42,7 +42,19 @@ if [[ ! -x "$executable" && -x "$output" ]]; then
 fi
 [[ -x "$executable" ]] || { echo "ARC fixture executable was not produced: $executable" >&2; exit 1; }
 
-if [[ "$profile" == stress ]]; then
+if [[ "$profile" == unowned-death ]]; then
+    set +e
+    "$executable" >"$artifacts/runtime.log" 2>&1
+    exit_code=$?
+    set -e
+    cat "$artifacts/runtime.log"
+    (( exit_code != 0 )) || { echo "expired @ArcUnowned access unexpectedly returned successfully" >&2; exit 1; }
+    grep -Fq 'attempted to access an expired @ArcUnowned reference' "$artifacts/runtime.log" || {
+        echo "expired @ArcUnowned access did not emit its lifetime diagnostic" >&2
+        exit 1
+    }
+    echo "ARC_UNOWNED_DEATH_OK exitCode=$exit_code"
+elif [[ "$profile" == stress ]]; then
     command -v /usr/bin/time >/dev/null || { echo "/usr/bin/time is required for the ARC RSS bound" >&2; exit 1; }
     /usr/bin/time -f '%M' -o "$artifacts/max-rss-kib" "$executable"
     max_rss_kib=$(cat "$artifacts/max-rss-kib")

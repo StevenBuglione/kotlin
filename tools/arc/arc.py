@@ -31,6 +31,7 @@ EXCLUDED_PATHS = (
 )
 PROFILES = (
     "dist", "runtime", "sanity", "full", "arc-smoke", "arc-stress", "arc-race", "arc-race-tsan",
+    "arc-unowned-death",
     "arc-sanitize", "arc-bench",
 )
 
@@ -199,6 +200,8 @@ def profile_command(profile: str) -> list[str]:
             "tools/arc/run_fixture.sh",
             "race",
         ]
+    if profile == "arc-unowned-death":
+        return ["bash", "tools/arc/run_fixture.sh", "unowned-death"]
     if profile == "arc-sanitize":
         sanitizer = setting("ARC_SANITIZER", "address")
         return gradle + [f"-Psanitizer={sanitizer}"] + tasks_from_environment(

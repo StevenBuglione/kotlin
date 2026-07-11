@@ -36,6 +36,9 @@ remote-arc-race: remote-snapshot
 remote-arc-race-tsan: remote-snapshot
     {{python}} tools/arc/arc.py run arc-race-tsan
 
+remote-arc-unowned-death: remote-snapshot
+    {{python}} tools/arc/arc.py run arc-unowned-death
+
 remote-arc-sanitize: remote-snapshot
     {{python}} tools/arc/arc.py run arc-sanitize
 

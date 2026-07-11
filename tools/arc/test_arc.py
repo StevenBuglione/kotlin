@@ -40,6 +40,13 @@ class ArcProfileTest(unittest.TestCase):
         self.assertIn("sanitizer was not enabled", script)
         self.assertIn("sanitizer is unsupported", script)
 
+    def test_unowned_death_requires_the_lifetime_diagnostic(self):
+        with patch.dict(os.environ, {}, clear=True):
+            command = arc.profile_command("arc-unowned-death")
+        self.assertEqual(["bash", "tools/arc/run_fixture.sh", "unowned-death"], command)
+        script = (Path(__file__).parent / "run_fixture.sh").read_text()
+        self.assertIn("attempted to access an expired @ArcUnowned reference", script)
+
     def test_sanitizer_is_configurable(self):
         with patch.dict(os.environ, {"ARC_SANITIZER": "thread"}, clear=True):
             command = arc.profile_command("arc-sanitize")
