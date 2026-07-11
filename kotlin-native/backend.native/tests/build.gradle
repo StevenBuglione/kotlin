@@ -3485,37 +3485,6 @@ diagnosticArcSymbolAudit.doLast {
             "Diagnostic ARC release binary contains no recognizable ArcDebug detector symbol"
 }
 
-    disabled = true // Needs USE_CYCLIC_GC, which is disabled.
-    source = "runtime/memory/cycle_collector.kt"
-}
-
-standaloneTest("cycle_collector_deadlock1") {
-    disabled = true // Needs USE_CYCLIC_GC, which is disabled.
-    source = "runtime/memory/cycle_collector_deadlock1.kt"
-}
-
-standaloneTest("leakMemory") {
-    source = "runtime/memory/leak_memory.kt"
-    if (!isSharedHeapMM) { // Shared-heap memory managers use their own leak diagnostics.
-        expectedExitStatusChecker = { it != 0 }
-        outputChecker = { s -> s.contains("Memory leaks detected, 1 objects leaked!") }
-    }
-}
-
-standaloneTest("leakMemoryWithTestRunner") {
-    source = "runtime/memory/leak_memory_test_runner.kt"
-    flags = ['-tr']
-    if (!isSharedHeapMM) { // Shared-heap memory managers use their own leak diagnostics.
-        expectedExitStatusChecker = { it != 0 }
-        outputChecker = { s -> s.contains("Memory leaks detected, 1 objects leaked!") }
-    }
-}
-
-standaloneTest("gcStats") {
-    source = "runtime/memory/gcStats.kt"
-    flags = ['-tr', "-Xbinary=gcSchedulerType=disabled"]
-    enabled = isExperimentalMM && !isNoopGC && !isAggressiveGC
-}
 standaloneTest("arc_leak_check_report") {
     flags = ['-Xbinary=arcLeakCheck=report']
     source = "runtime/memory/arc_leak_check_shutdown.kt"
@@ -3578,6 +3547,37 @@ standaloneTest("array_out_of_memory") {
             expectedExitStatusChecker = { it != 0 }
             outputChecker = { s -> s.contains("Out of memory trying to allocate") }
             break;
+    disabled = true // Needs USE_CYCLIC_GC, which is disabled.
+    source = "runtime/memory/cycle_collector.kt"
+}
+
+standaloneTest("cycle_collector_deadlock1") {
+    disabled = true // Needs USE_CYCLIC_GC, which is disabled.
+    source = "runtime/memory/cycle_collector_deadlock1.kt"
+}
+
+standaloneTest("leakMemory") {
+    source = "runtime/memory/leak_memory.kt"
+    if (!isSharedHeapMM) { // Shared-heap memory managers use their own leak diagnostics.
+        expectedExitStatusChecker = { it != 0 }
+        outputChecker = { s -> s.contains("Memory leaks detected, 1 objects leaked!") }
+    }
+}
+
+standaloneTest("leakMemoryWithTestRunner") {
+    source = "runtime/memory/leak_memory_test_runner.kt"
+    flags = ['-tr']
+    if (!isSharedHeapMM) { // Shared-heap memory managers use their own leak diagnostics.
+        expectedExitStatusChecker = { it != 0 }
+        outputChecker = { s -> s.contains("Memory leaks detected, 1 objects leaked!") }
+    }
+}
+
+standaloneTest("gcStats") {
+    source = "runtime/memory/gcStats.kt"
+    flags = ['-tr', "-Xbinary=gcSchedulerType=disabled"]
+    enabled = isExperimentalMM && !isNoopGC && !isAggressiveGC
+}
     }
 }
 
