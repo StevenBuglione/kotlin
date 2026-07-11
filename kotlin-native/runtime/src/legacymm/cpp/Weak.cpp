@@ -39,7 +39,8 @@ inline WeakReferenceCounter* asWeakReferenceCounter(ObjHeader* obj) {
 #if !KONAN_NO_THREADS
 
 inline void lock(int32_t* address) {
-    RuntimeAssert(*address == 0 || *address == 1, "Incorrect lock state");
+    const int32_t state = __atomic_load_n(address, __ATOMIC_RELAXED);
+    RuntimeAssert(state == 0 || state == 1, "Incorrect lock state");
     while (__sync_val_compare_and_swap(address, 0, 1) == 1);
 }
 

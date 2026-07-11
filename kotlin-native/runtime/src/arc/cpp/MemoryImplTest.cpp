@@ -578,6 +578,50 @@ TEST(ArcDestructionTest, WeakTargetIsZeroBeforeFinalizerAndCannotResurrect) {
     });
 }
 
+TEST(ArcWeakLockTest, ConcurrentPromotionsKeepALiveTargetVisible) {
+    ScopedNodeFinalizerHook finalizers;
+    kotlin::RunInNewThread([] {
+        constexpr int kThreads = 8;
+        constexpr int kPromotionsPerThread = 2'000;
+        ObjHolder object;
+        ObjHolder counter;
+        ObjHeader* allocatedObject = AllocInstance(nodeTypeInfo.typeInfo(), object.slot());
+        ObjHeader* allocatedCounter = AllocInstance(weakCounterTypeInfo.typeInfo(), counter.slot());
+        installWeakCounter(allocatedObject, allocatedCounter);
+
+        std::atomic<bool> start = false;
+        std::atomic<int> successfulPromotions = 0;
+        std::atomic<int> failedPromotions = 0;
+        std::vector<std::thread> workers;
+        for (int worker = 0; worker < kThreads; ++worker) {
+            workers.emplace_back([&] {
+                kotlin::RunInNewThread([&] {
+                    while (!start.load(std::memory_order_acquire)) {
+                    }
+                    for (int promotion = 0; promotion < kPromotionsPerThread; ++promotion) {
+                        ObjHeader* promoted = nullptr;
+                        Konan_WeakReferenceCounterLegacyMM_get(allocatedCounter, &promoted);
+                        if (promoted == nullptr) {
+                            failedPromotions.fetch_add(1, std::memory_order_relaxed);
+                        } else {
+                            successfulPromotions.fetch_add(1, std::memory_order_relaxed);
+                            ReleaseHeapRef(promoted);
+                        }
+                    }
+                });
+            });
+        }
+
+        start.store(true, std::memory_order_release);
+        for (auto& worker : workers) worker.join();
+
+        EXPECT_EQ(failedPromotions.load(std::memory_order_relaxed), 0);
+        EXPECT_EQ(successfulPromotions.load(std::memory_order_relaxed), kThreads * kPromotionsPerThread);
+        object.clear();
+        EXPECT_EQ(finalizedNodes.load(std::memory_order_relaxed), 1);
+    });
+}
+
 TEST(ArcRecyclingTest, RecycledAddressDoesNotResurrectClearedWeakReference) {
     ScopedNodeFinalizerHook finalizers;
     kotlin::RunInNewThread([] {
