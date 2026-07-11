@@ -206,6 +206,7 @@ dependencies {
     }
     commonCompileOnly(project(":kotlin-tooling-metadata"))
     commonCompileOnly(project(":compiler:build-tools:kotlin-build-statistics"))
+    commonCompileOnly(project(":native:rust-interop")) { isTransitive = false }
     commonCompileOnly(project(":native:swift:swift-export-standalone"))
     commonCompileOnly(libs.intellij.asm) { isTransitive = false }
 
@@ -227,6 +228,7 @@ dependencies {
 
     embedded(project(":kotlin-gradle-build-metrics"))
     embedded(project(":kotlin-gradle-statistics"))
+    embedded(project(":native:rust-interop")) { isTransitive = false }
     embedded(libs.intellij.asm) { isTransitive = false }
     embedded(commonDependency("com.google.code.gson:gson")) { isTransitive = false }
     embedded(libs.develocity.gradlePluginAdapter)
