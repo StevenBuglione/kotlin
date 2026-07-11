@@ -31,7 +31,16 @@ fun configureCacheTesting(project: Project): CacheTesting? {
         "No cache support for test target $target at host target ${HostManager.host}"
     }
 
-    val cacheDir = "${distribution.klib}/cache/$target-gSTATIC"
+    val cacheMemoryModel = project.findProperty("kotlin.native.cacheMemoryModel")?.toString()?.lowercase()
+        ?: if (target == KonanTarget.LINUX_X64) "arc" else "default"
+    val cacheFlavor = when (cacheMemoryModel) {
+        "default" -> ""
+        "legacy", "strict" -> "-mmSTRICT"
+        "experimental" -> "-mmEXPERIMENTAL"
+        "arc" -> "-mmARC-arc_refs_v1"
+        else -> error("Unsupported kotlin.native.cacheMemoryModel value '$cacheMemoryModel'")
+    }
+    val cacheDir = "${distribution.klib}/cache/$target-gSTATIC$cacheFlavor"
     val cacheFile = "$cacheDir/stdlib${if (makePerFileCache) "-per-file" else ""}-cache"
     val stdlib = distribution.stdlib
 

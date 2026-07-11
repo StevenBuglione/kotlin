@@ -18,8 +18,7 @@ import org.jetbrains.kotlin.ir.builders.*
 import org.jetbrains.kotlin.ir.builders.declarations.addValueParameter
 import org.jetbrains.kotlin.ir.builders.declarations.buildFun
 import org.jetbrains.kotlin.ir.declarations.*
-import org.jetbrains.kotlin.ir.expressions.IrExpression
-import org.jetbrains.kotlin.ir.expressions.IrGetField
+import org.jetbrains.kotlin.ir.expressions.*
 import org.jetbrains.kotlin.ir.util.*
 import org.jetbrains.kotlin.ir.visitors.*
 import org.jetbrains.kotlin.name.Name
@@ -39,6 +38,8 @@ internal class CachesAbiSupport(mapping: NativeMapping, private val irFactory: I
     private val outerThisAccessors = mapping.outerThisCacheAccessors
     private val lateinitPropertyAccessors = mapping.lateinitPropertyCacheAccessors
     private val lateInitFieldToNullableField = mapping.lateInitFieldToNullableField
+    private val arcReferenceStorageGetters = mutableMapOf<IrField, IrSimpleFunction>()
+    private val arcReferenceStorageSetters = mutableMapOf<IrField, IrSimpleFunction>()
 
 
     fun getOuterThisAccessor(irClass: IrClass): IrSimpleFunction {
@@ -87,6 +88,69 @@ internal class CachesAbiSupport(mapping: NativeMapping, private val irFactory: I
     }
 
     /**
+     * Returns a deterministic internal-ABI accessor for a physical ARC control-block field.
+     *
+     * ARC storage fields are created during lowering and therefore have no declaration in public KLIB metadata.
+     * Cached inline bodies must use this accessor instead of naming such a field in another cache directly.
+     */
+    fun getArcReferenceStorageGetter(storageField: IrField): IrSimpleFunction {
+        require(storageField.origin == ARC_REFERENCE_STORAGE_FIELD_ORIGIN) {
+            "Expected an ARC reference storage field but was: ${storageField.render()}"
+        }
+        return arcReferenceStorageGetters.getOrPut(storageField) {
+            val owner = storageField.parent
+            irFactory.buildFun {
+                name = getMangledNameFor("${storageField.name}_arc_reference_storage_get_v1", owner)
+                origin = INTERNAL_ABI_ORIGIN
+                returnType = storageField.type
+            }.apply {
+                parent = storageField.getPackageFragment()
+                attributeOwnerId = storageField.correspondingPropertySymbol!!.owner
+
+                (owner as? IrClass)?.let {
+                    addValueParameter {
+                        name = Name.identifier("owner")
+                        origin = INTERNAL_ABI_ORIGIN
+                        type = it.defaultType
+                    }
+                }
+            }
+        }
+    }
+
+    /** Returns the matching internal-ABI setter, or null for source-level immutable storage. */
+    fun getArcReferenceStorageSetter(storageField: IrField): IrSimpleFunction? {
+        require(storageField.origin == ARC_REFERENCE_STORAGE_FIELD_ORIGIN) {
+            "Expected an ARC reference storage field but was: ${storageField.render()}"
+        }
+        val propertySetter = storageField.correspondingPropertySymbol?.owner?.setter ?: return null
+        return arcReferenceStorageSetters.getOrPut(storageField) {
+            val owner = storageField.parent
+            irFactory.buildFun {
+                name = getMangledNameFor("${storageField.name}_arc_reference_storage_set_v1", owner)
+                origin = INTERNAL_ABI_ORIGIN
+                returnType = propertySetter.returnType
+            }.apply {
+                parent = storageField.getPackageFragment()
+                attributeOwnerId = storageField.correspondingPropertySymbol!!.owner
+
+                (owner as? IrClass)?.let {
+                    addValueParameter {
+                        name = Name.identifier("owner")
+                        origin = INTERNAL_ABI_ORIGIN
+                        type = it.defaultType
+                    }
+                }
+                addValueParameter {
+                    name = Name.identifier("storage")
+                    origin = INTERNAL_ABI_ORIGIN
+                    type = storageField.type
+                }
+            }
+        }
+    }
+
+    /**
      * Generate name for declaration that will be a part of internal ABI.
      */
     private fun getMangledNameFor(declarationName: String, parent: IrDeclarationParent): Name {
@@ -125,6 +189,30 @@ internal class ExportCachesAbiVisitor(val context: Context) : FileLoweringPass, 
                 }
             }
             data.add(function)
+        }
+    }
+
+    override fun visitField(declaration: IrField, data: MutableList<IrFunction>) {
+        declaration.acceptChildren(this, data)
+        if (declaration.origin != ARC_REFERENCE_STORAGE_FIELD_ORIGIN) return
+
+        val ownerClass = declaration.parentClassOrNull
+        val getter = cachesAbiSupport.getArcReferenceStorageGetter(declaration)
+        context.createIrBuilder(getter.symbol).apply {
+            getter.body = irBlockBody {
+                +irReturn(irGetField(ownerClass?.let { irGet(getter.valueParameters[0]) }, declaration))
+            }
+        }
+        data.add(getter)
+
+        cachesAbiSupport.getArcReferenceStorageSetter(declaration)?.let { setter ->
+            context.createIrBuilder(setter.symbol).apply {
+                setter.body = irBlockBody {
+                    val receiver = ownerClass?.let { irGet(setter.valueParameters[0]) }
+                    +irReturn(irSetField(receiver, declaration, irGet(setter.valueParameters.last())))
+                }
+            }
+            data.add(setter)
         }
     }
 
@@ -184,7 +272,36 @@ internal class ImportCachesAbiTransformer(val generationState: NativeGenerationS
                 }
             }
 
+            field.origin == ARC_REFERENCE_STORAGE_FIELD_ORIGIN -> {
+                val accessor = cachesAbiSupport.getArcReferenceStorageGetter(field)
+                dependenciesTracker.add(property ?: field)
+                return irCall(expression.startOffset, expression.endOffset, accessor, emptyList()).apply {
+                    if (irClass != null)
+                        putValueArgument(0, expression.receiver)
+                }
+            }
+
             else -> expression
+        }
+    }
+
+    override fun visitSetField(expression: IrSetField): IrExpression {
+        expression.transformChildrenVoid(this)
+
+        val field = expression.symbol.owner
+        if (generationState.llvmModuleSpecification.containsDeclaration(field) ||
+                field.origin != ARC_REFERENCE_STORAGE_FIELD_ORIGIN) {
+            return expression
+        }
+
+        val accessor = cachesAbiSupport.getArcReferenceStorageSetter(field)
+                ?: error("Cannot write immutable ARC reference storage from a cached inline body: ${field.render()}")
+        dependenciesTracker.add(field.correspondingPropertySymbol?.owner ?: field)
+        return irCall(expression.startOffset, expression.endOffset, accessor, emptyList()).apply {
+            var parameterIndex = 0
+            if (field.parentClassOrNull != null)
+                putValueArgument(parameterIndex++, expression.receiver)
+            putValueArgument(parameterIndex, expression.value)
         }
     }
 }

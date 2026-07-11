@@ -429,6 +429,8 @@ class KonanConfig(val project: Project, val configuration: CompilerConfiguration
 
         if (memoryModel != defaultMemoryModel || memoryModel == MemoryModel.ARC)
             append("-mm$memoryModel")
+        if (memoryModel == MemoryModel.ARC)
+            append("-arc_refs_v1")
         if (freezing != defaultFreezing)
             append("-freezing${freezing.name}")
         if (propertyLazyInitialization != defaultPropertyLazyInitialization)

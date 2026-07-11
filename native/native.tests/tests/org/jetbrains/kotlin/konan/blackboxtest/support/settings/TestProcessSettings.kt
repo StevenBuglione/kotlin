@@ -13,6 +13,7 @@ import org.jetbrains.kotlin.konan.blackboxtest.support.runner.Runner
 import org.jetbrains.kotlin.konan.properties.resolvablePropertyList
 import org.jetbrains.kotlin.konan.target.Distribution
 import org.jetbrains.kotlin.konan.target.KonanTarget
+import org.jetbrains.kotlin.konan.target.supportsThreads
 import org.jetbrains.kotlin.test.services.JUnit5Assertions.assertTrue
 import java.io.File
 import java.io.IOException
@@ -209,6 +210,7 @@ internal sealed class CacheMode {
         distribution: Distribution,
         kotlinNativeTargets: KotlinNativeTargets,
         optimizationMode: OptimizationMode,
+        memoryModel: MemoryModel,
         override val useStaticCacheForUserLibraries: Boolean,
         override val makePerFileCaches: Boolean
     ) : CacheMode() {
@@ -218,7 +220,8 @@ internal sealed class CacheMode {
                 computeDistroCacheDirName(
                     testTarget = kotlinNativeTargets.testTarget,
                     cacheKind = CACHE_KIND,
-                    debuggable = optimizationMode == OptimizationMode.DEBUG
+                    debuggable = optimizationMode == OptimizationMode.DEBUG,
+                    memoryModel = memoryModel,
                 )
             ).apply {
                 assertTrue(exists()) { "The distribution libraries cache directory is not found: $this" }
@@ -247,15 +250,37 @@ internal sealed class CacheMode {
             testTarget: KonanTarget,
             cacheKind: String,
             debuggable: Boolean,
-            partialLinkageEnabled: Boolean
-        ) = "$testTarget${if (debuggable) "-g" else ""}$cacheKind${if (partialLinkageEnabled) "-pl" else ""}"
+            partialLinkageEnabled: Boolean,
+            memoryModel: MemoryModel,
+        ) = "$testTarget${if (debuggable) "-g" else ""}$cacheKind" +
+                memoryModel.cacheFlavorSuffix(testTarget) +
+                if (partialLinkageEnabled) "-pl" else ""
 
         // N.B. The distribution libs are always built with the partial linkage turned off.
         fun computeDistroCacheDirName(
             testTarget: KonanTarget,
             cacheKind: String,
             debuggable: Boolean,
-        ) = "$testTarget${if (debuggable) "-g" else ""}$cacheKind"
+            memoryModel: MemoryModel,
+        ) = "$testTarget${if (debuggable) "-g" else ""}$cacheKind${memoryModel.cacheFlavorSuffix(testTarget)}"
+    }
+}
+
+private fun MemoryModel.cacheFlavorSuffix(target: KonanTarget): String {
+    val defaultModel = when {
+        target == KonanTarget.LINUX_X64 -> "ARC"
+        target.supportsThreads() -> "EXPERIMENTAL"
+        else -> "STRICT"
+    }
+    val effectiveModel = when (this) {
+        MemoryModel.DEFAULT -> defaultModel
+        MemoryModel.LEGACY -> "STRICT"
+        MemoryModel.EXPERIMENTAL -> "EXPERIMENTAL"
+        MemoryModel.ARC -> "ARC"
+    }
+    return buildString {
+        if (effectiveModel != defaultModel || effectiveModel == "ARC") append("-mm$effectiveModel")
+        if (effectiveModel == "ARC") append("-arc_refs_v1")
     }
 }
 

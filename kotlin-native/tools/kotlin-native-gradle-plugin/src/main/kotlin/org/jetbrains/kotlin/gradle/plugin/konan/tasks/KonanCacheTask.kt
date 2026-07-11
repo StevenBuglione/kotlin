@@ -35,7 +35,16 @@ open class KonanCacheTask: DefaultTask() {
     @get:Internal
     // TODO: Reuse NativeCacheKind from Big Kotlin plugin when it is available.
     val cacheDirectory: File
-        get() = File("$cacheRoot/$target-g$cacheKind")
+        get() = File("$cacheRoot/$target-g$cacheKind${cacheMemoryModel.flavorSuffix}")
+
+    /**
+     * Memory model used to compile the cache. Linux x64 distributions default to ARC, while an explicit
+     * [CACHE_MEMORY_MODEL_PROPERTY] keeps strict and experimental caches available as differential oracles.
+     */
+    @get:Input
+    val cacheMemoryModel: NativeCacheMemoryModel
+        get() = NativeCacheMemoryModel.parse(project.findProperty(CACHE_MEMORY_MODEL_PROPERTY)?.toString())
+            ?: if (target == "linux_x64") NativeCacheMemoryModel.ARC else NativeCacheMemoryModel.DEFAULT
 
     @get:OutputDirectory
     val cacheFile: File
@@ -97,10 +106,38 @@ open class KonanCacheTask: DefaultTask() {
             "-Xadd-cache=${originalKlib?.absolutePath}",
             "-Xcache-directory=${cacheDirectory.absolutePath}"
         )
+        cacheMemoryModel.compilerArgument?.let {
+            args += listOf("-memory-model", it)
+        }
         if (makePerFileCache)
             args += "-Xmake-per-file-cache"
         args += additionalCacheFlags
         args += cachedLibraries.map { "-Xcached-library=${it.key},${it.value}" }
         KonanCliCompilerRunner(project, konanHome = konanHome).run(args)
+    }
+}
+
+internal const val CACHE_MEMORY_MODEL_PROPERTY = "kotlin.native.cacheMemoryModel"
+
+enum class NativeCacheMemoryModel(
+    val compilerArgument: String?,
+    val flavorSuffix: String,
+) {
+    DEFAULT(null, ""),
+    STRICT("strict", "-mmSTRICT"),
+    EXPERIMENTAL("experimental", "-mmEXPERIMENTAL"),
+    ARC("arc", "-mmARC-arc_refs_v1");
+
+    companion object {
+        fun parse(value: String?): NativeCacheMemoryModel? = when (value?.lowercase()) {
+            null, "", "default" -> null
+            "legacy", "strict" -> STRICT
+            "experimental" -> EXPERIMENTAL
+            "arc" -> ARC
+            else -> error(
+                "Unsupported $CACHE_MEMORY_MODEL_PROPERTY value '$value'. " +
+                        "Expected default, strict, experimental, or arc."
+            )
+        }
     }
 }

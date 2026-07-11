@@ -13,6 +13,7 @@ import org.jetbrains.kotlin.konan.blackboxtest.support.compilation.TestCompilati
 import org.jetbrains.kotlin.konan.blackboxtest.support.compilation.TestCompilationResult.Companion.assertSuccess
 import org.jetbrains.kotlin.konan.blackboxtest.support.settings.CacheMode
 import org.jetbrains.kotlin.konan.blackboxtest.support.settings.KotlinNativeTargets
+import org.jetbrains.kotlin.konan.blackboxtest.support.settings.MemoryModel
 import org.jetbrains.kotlin.konan.blackboxtest.support.settings.OptimizationMode
 import org.jetbrains.kotlin.konan.blackboxtest.support.settings.UsedPartialLinkageConfig
 import org.jetbrains.kotlin.test.TestMetadata
@@ -119,7 +120,8 @@ class CachesAutoBuildTest : AbstractNativeSimpleTest() {
             testRunSettings.get<KotlinNativeTargets>().testTarget,
             "STATIC",
             testRunSettings.get<OptimizationMode>() == OptimizationMode.DEBUG,
-            partialLinkageEnabled = testRunSettings.get<UsedPartialLinkageConfig>().config.isEnabled
+            partialLinkageEnabled = testRunSettings.get<UsedPartialLinkageConfig>().config.isEnabled,
+            memoryModel = testRunSettings.get<MemoryModel>(),
         )
 
     companion object {

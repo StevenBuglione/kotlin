@@ -180,7 +180,7 @@ private object NativeTestSupport {
         val hostManager = HostManager(distribution, experimental = false)
         val nativeTargets = computeNativeTargets(enforcedProperties, hostManager)
 
-        val cacheMode = computeCacheMode(enforcedProperties, distribution, nativeTargets, optimizationMode)
+        val cacheMode = computeCacheMode(enforcedProperties, distribution, nativeTargets, optimizationMode, memoryModel)
         if (cacheMode != CacheMode.WithoutCache) {
             assertEquals(ThreadStateChecker.DISABLED, threadStateChecker) {
                 "Thread state checker can not be used with cache"
@@ -259,7 +259,8 @@ private object NativeTestSupport {
         enforcedProperties: EnforcedProperties,
         distribution: Distribution,
         kotlinNativeTargets: KotlinNativeTargets,
-        optimizationMode: OptimizationMode
+        optimizationMode: OptimizationMode,
+        memoryModel: MemoryModel,
     ): CacheMode {
         val cacheMode = ClassLevelProperty.CACHE_MODE.readValue(
             enforcedProperties,
@@ -278,6 +279,7 @@ private object NativeTestSupport {
             distribution,
             kotlinNativeTargets,
             optimizationMode,
+            memoryModel,
             useStaticCacheForUserLibraries,
             makePerFileCaches
         )
