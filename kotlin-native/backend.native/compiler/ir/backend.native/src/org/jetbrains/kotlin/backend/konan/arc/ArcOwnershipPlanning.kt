@@ -6,12 +6,15 @@
 package org.jetbrains.kotlin.backend.konan.arc
 
 import org.jetbrains.kotlin.backend.konan.MemoryModel
+import org.jetbrains.kotlin.backend.konan.KonanFqNames
 import org.jetbrains.kotlin.backend.konan.binaryTypeIsReference
+import org.jetbrains.kotlin.backend.konan.ir.getSuperClassNotAny
 import org.jetbrains.kotlin.backend.konan.llvm.Lifetime
 import org.jetbrains.kotlin.backend.konan.NativeGenerationState
 import org.jetbrains.kotlin.backend.konan.reportCompilationError
 import org.jetbrains.kotlin.ir.IrElement
 import org.jetbrains.kotlin.ir.declarations.IrFile
+import org.jetbrains.kotlin.ir.declarations.IrClass
 import org.jetbrains.kotlin.ir.declarations.IrSimpleFunction
 import org.jetbrains.kotlin.ir.declarations.IrVariable
 import org.jetbrains.kotlin.ir.expressions.IrCall
@@ -25,7 +28,9 @@ import org.jetbrains.kotlin.ir.expressions.IrReturn
 import org.jetbrains.kotlin.ir.expressions.IrSetField
 import org.jetbrains.kotlin.ir.types.isUnit
 import org.jetbrains.kotlin.ir.util.allParameters
+import org.jetbrains.kotlin.ir.util.constructedClass
 import org.jetbrains.kotlin.ir.util.fqNameForIrSerialization
+import org.jetbrains.kotlin.ir.util.hasAnnotation
 import org.jetbrains.kotlin.ir.visitors.IrElementVisitorVoid
 import org.jetbrains.kotlin.ir.visitors.acceptChildrenVoid
 import org.jetbrains.kotlin.ir.visitors.acceptVoid
@@ -39,10 +44,40 @@ internal data class ArcOwnershipPlanningReport(
     val analyzedFunctions: Int,
     val skippedFunctions: Int,
     val plans: List<ArcFunctionPlan>,
+    val classifications: ArcOwnershipClassificationCounts,
+    val optimization: ArcOwnershipOptimizationMetrics,
 ) {
     companion object {
-        val Disabled = ArcOwnershipPlanningReport(0, 0, emptyList())
+        val Disabled = ArcOwnershipPlanningReport(
+            analyzedFunctions = 0,
+            skippedFunctions = 0,
+            plans = emptyList(),
+            classifications = ArcOwnershipClassificationCounts(),
+            optimization = ArcOwnershipOptimizationMetrics(),
+        )
     }
+}
+
+internal data class ArcOwnershipClassificationCounts(
+    val owned: Int = 0,
+    val guaranteed: Int = 0,
+    val immortal: Int = 0,
+) {
+    operator fun plus(other: ArcOwnershipClassificationCounts) = ArcOwnershipClassificationCounts(
+        owned = owned + other.owned,
+        guaranteed = guaranteed + other.guaranteed,
+        immortal = immortal + other.immortal,
+    )
+}
+
+internal fun classifyArcProducedReference(
+    isPermanent: Boolean,
+    lifetime: Lifetime?,
+    requiresHeapAllocation: Boolean = false,
+): ArcOwnership = when {
+    isPermanent -> ArcOwnership.Immortal
+    !requiresHeapAllocation && (lifetime === Lifetime.STACK || lifetime === Lifetime.LOCAL) -> ArcOwnership.Guaranteed
+    else -> ArcOwnership.Owned
 }
 
 /**
@@ -59,6 +94,8 @@ internal fun runArcOwnershipPlanning(
     if (generationState.context.memoryModel != MemoryModel.ARC) return ArcOwnershipPlanningReport.Disabled
 
     val plans = mutableListOf<ArcFunctionPlan>()
+    var classifications = ArcOwnershipClassificationCounts()
+    var optimization = ArcOwnershipOptimizationMetrics()
     var skipped = 0
     input.module.files.forEach { file ->
         file.acceptVoid(object : IrElementVisitorVoid {
@@ -68,7 +105,12 @@ internal fun runArcOwnershipPlanning(
                     skipped++
                 } else {
                     when (val result = ArcOwnershipVerifier.verify(plan)) {
-                        ArcOwnershipVerificationResult.Success -> plans += plan
+                        ArcOwnershipVerificationResult.Success -> {
+                            val optimized = ArcOwnershipOptimizer.optimizeVerified(plan)
+                            plans += optimized.plan
+                            classifications += optimized.plan.classificationCounts()
+                            optimization += optimized.metrics
+                        }
                         is ArcOwnershipVerificationResult.Failure -> reportFailure(generationState, file, declaration, result)
                     }
                 }
@@ -76,7 +118,25 @@ internal fun runArcOwnershipPlanning(
             }
         })
     }
-    return ArcOwnershipPlanningReport(plans.size, skipped, plans)
+    return ArcOwnershipPlanningReport(plans.size, skipped, plans, classifications, optimization)
+}
+
+private fun ArcFunctionPlan.classificationCounts(): ArcOwnershipClassificationCounts {
+    var result = ArcOwnershipClassificationCounts()
+    fun record(ownership: ArcOwnership) {
+        result = when (ownership) {
+            ArcOwnership.Owned -> result.copy(owned = result.owned + 1)
+            ArcOwnership.Guaranteed -> result.copy(guaranteed = result.guaranteed + 1)
+            ArcOwnership.Immortal -> result.copy(immortal = result.immortal + 1)
+        }
+    }
+    entryValues.values.forEach(::record)
+    blocks.values.forEach { block ->
+        block.operations.forEach { operation ->
+            if (operation is ArcOperation.Define) record(operation.ownership)
+        }
+    }
+    return result
 }
 
 private fun reportFailure(
@@ -95,7 +155,7 @@ private fun reportFailure(
 
 private class CuratedArcOwnershipPlanBuilder(
     private val function: IrSimpleFunction,
-    @Suppress("unused") private val lifetimes: Map<IrElement, Lifetime>,
+    private val lifetimes: Map<IrElement, Lifetime>,
 ) {
     private val entry = ArcBlockId("entry")
     private val operations = mutableListOf<ArcOperation>()
@@ -158,8 +218,9 @@ private class CuratedArcOwnershipPlanBuilder(
         val location = location(variable, "val ${variable.name}")
         val resultOwnership = when (initializer) {
             is IrConst<*>, is IrGetObjectValue -> {
-                operations += ArcOperation.Define(result, ArcOwnership.Immortal, location)
-                ArcOwnership.Immortal
+                classifyArcProducedReference(isPermanent = true, lifetime = lifetimes[initializer]).also {
+                    operations += ArcOperation.Define(result, it, location)
+                }
             }
             is IrGetValue -> {
                 val source = values[initializer.symbol] ?: return false
@@ -173,8 +234,15 @@ private class CuratedArcOwnershipPlanBuilder(
                 ArcOwnership.Owned
             }
             is IrConstructorCall, is IrCall -> {
-                operations += ArcOperation.Define(result, ArcOwnership.Owned, location)
-                ArcOwnership.Owned
+                val requiresHeapAllocation = initializer is IrConstructorCall &&
+                        initializer.symbol.owner.constructedClass.hasArcDeinitInHierarchy()
+                classifyArcProducedReference(
+                    isPermanent = false,
+                    lifetime = lifetimes[initializer],
+                    requiresHeapAllocation = requiresHeapAllocation,
+                ).also {
+                    operations += ArcOperation.Define(result, it, location)
+                }
             }
             else -> return false
         }
@@ -207,4 +275,11 @@ private class CuratedArcOwnershipPlanBuilder(
     private fun storage(setField: IrSetField): ArcStorage = ArcStorage(setField.symbol.owner.fqNameForIrSerialization.asString())
 
     private fun location(element: IrElement, description: String) = ArcPlanLocation(description, element.startOffset)
+
+    private fun IrClass.hasArcDeinitInHierarchy(): Boolean =
+        generateSequence(this) { it.getSuperClassNotAny() }.any { irClass ->
+            irClass.declarations.any {
+                it is IrSimpleFunction && it.annotations.hasAnnotation(KonanFqNames.arcDeinit)
+            }
+        }
 }
