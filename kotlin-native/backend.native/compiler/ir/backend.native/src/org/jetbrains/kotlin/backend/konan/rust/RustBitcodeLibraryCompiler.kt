@@ -17,7 +17,7 @@ internal data class RustBitcodeLibraryWorkspaceSpec(
     val libraryRs: String,
     val outputDirectory: Path,
     val release: Boolean = true,
-    val dependencies: List<RustCargoRegistryDependency> = emptyList(),
+    val dependencies: List<RustCargoDependency> = emptyList(),
 ) {
     init {
         require(RUST_LIBRARY_PACKAGE_NAME.matches(packageName)) { "Invalid Cargo package name: $packageName" }
@@ -25,27 +25,7 @@ internal data class RustBitcodeLibraryWorkspaceSpec(
             "A Rust target triple must be non-blank and contain no whitespace"
         }
         require(libraryRs.isNotBlank()) { "The generated Rust library must not be blank" }
-        val crateNames = dependencies.map { it.packageName.replace('-', '_') }
-        require(crateNames.size == crateNames.toSet().size) {
-            "Cargo dependency package names must remain unique after replacing '-' with '_'"
-        }
-    }
-}
-
-internal data class RustCargoRegistryDependency(
-    val packageName: String,
-    val version: String,
-    val features: List<String> = emptyList(),
-    val defaultFeatures: Boolean = true,
-) {
-    init {
-        require(RUST_DEPENDENCY_PACKAGE_NAME.matches(packageName)) { "Invalid Cargo dependency package name: $packageName" }
-        require(RUST_EXACT_DEPENDENCY_VERSION.matches(version)) {
-            "Invalid exact Cargo dependency version for '$packageName': $version"
-        }
-        require(features.all(RUST_DEPENDENCY_FEATURE::matches)) {
-            "Invalid Cargo feature for dependency '$packageName': ${features.firstOrNull { !RUST_DEPENDENCY_FEATURE.matches(it) }}"
-        }
+        validateRustCargoDependencies(dependencies)
     }
 }
 
@@ -82,7 +62,7 @@ internal object RustBitcodeLibraryWorkspaceEmitter {
         )
     }
 
-    private fun cargoManifest(packageName: String, dependencies: List<RustCargoRegistryDependency>): String = buildString {
+    private fun cargoManifest(packageName: String, dependencies: List<RustCargoDependency>): String = buildString {
         append("[package]\n")
         append("name = \"").append(packageName).append("\"\n")
         append("version = \"0.0.0\"\n")
@@ -94,23 +74,7 @@ internal object RustBitcodeLibraryWorkspaceEmitter {
         append("crate-type = [\"rlib\"")
         if (dependencies.isNotEmpty()) append(", \"staticlib\"")
         append("]\n")
-        if (dependencies.isNotEmpty()) {
-            append("\n[dependencies]\n")
-            dependencies.sortedBy { it.packageName }.forEach { dependency ->
-                append(dependency.packageName).append(" = { version = \"=").append(dependency.version).append('"')
-                if (!dependency.defaultFeatures) append(", default-features = false")
-                val features = dependency.features.distinct().sorted()
-                if (features.isNotEmpty()) {
-                    append(", features = [")
-                    features.forEachIndexed { index, feature ->
-                        if (index != 0) append(", ")
-                        append('"').append(feature).append('"')
-                    }
-                    append(']')
-                }
-                append(" }\n")
-            }
-        }
+        appendRustCargoDependencies(dependencies)
         append("\n[profile.dev]\n")
         append("codegen-units = 1\n")
         append("opt-level = 1\n")
@@ -158,7 +122,7 @@ internal class RustBitcodeLibraryCompiler(
         renderedLibraryRs: String,
         outputDirectory: Path,
         release: Boolean = true,
-        dependencies: List<RustCargoRegistryDependency> = emptyList(),
+        dependencies: List<RustCargoDependency> = emptyList(),
     ): RustBitcodeLibraryArtifact {
         val workspace = RustBitcodeLibraryWorkspaceEmitter.emit(
             RustBitcodeLibraryWorkspaceSpec(
@@ -246,11 +210,6 @@ internal class RustBitcodeLibraryCompiler(
 }
 
 private val RUST_LIBRARY_PACKAGE_NAME = Regex("[A-Za-z][A-Za-z0-9_-]*")
-private val RUST_DEPENDENCY_PACKAGE_NAME = Regex("[A-Za-z0-9][A-Za-z0-9_-]*")
-private val RUST_DEPENDENCY_FEATURE = Regex("[A-Za-z0-9_+./?-]+")
-private val RUST_EXACT_DEPENDENCY_VERSION =
-    Regex("(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?(\\+[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?")
-
 private fun staticLibraryName(crateName: String, targetTriple: String): String =
     if (targetTriple.endsWith("-msvc")) "$crateName.lib" else "lib$crateName.a"
 

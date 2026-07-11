@@ -590,6 +590,18 @@ This library must be one of the ones passed with '-library'.""",
         }
 
     @Argument(
+        value = "-Xrust-interop-crate-path",
+        valueDescription = "<crate>=<path>",
+        description = "Override a Rust interop crate with a local Cargo package directory.",
+        delimiter = Argument.Delimiters.none,
+    )
+    var rustInteropCratePaths: Array<String> = emptyArray()
+        set(value) {
+            checkFrozen()
+            field = value
+        }
+
+    @Argument(
         value = "-Xsave-llvm-ir-after",
         description = "Save the result of the Kotlin IR to LLVM IR translation to '-Xsave-llvm-ir-directory'.",
     )

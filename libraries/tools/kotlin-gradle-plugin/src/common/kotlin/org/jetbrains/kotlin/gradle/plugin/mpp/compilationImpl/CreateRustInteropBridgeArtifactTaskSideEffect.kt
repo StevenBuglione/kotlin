@@ -46,6 +46,18 @@ internal val KotlinCreateNativeRustInteropBridgeArtifactTaskSideEffect =
                 task.dependsOn(planTask)
                 task.bridgePlanFiles.from(planTask.flatMap { it.bridgePlanFile })
                 task.definitionFiles.from(interop.definitionFile)
+                task.localCrateDirectories.from(
+                    interop.localCrateDirectory.map { directory ->
+                        project.fileTree(directory).matching {
+                            it.exclude(".git/**", "target/**")
+                        }.files
+                    }.orElse(emptySet())
+                )
+                task.localCratePaths.putAll(
+                    interop.crateName.zip(interop.localCrateDirectory) { crateName, directory ->
+                        mapOf(crateName to directory.asFile.absolutePath)
+                    }.orElse(emptyMap())
+                )
             }
         }
     }

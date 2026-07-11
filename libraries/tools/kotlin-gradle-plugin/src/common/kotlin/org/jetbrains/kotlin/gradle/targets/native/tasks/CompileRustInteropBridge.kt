@@ -8,10 +8,14 @@ package org.jetbrains.kotlin.gradle.targets.native.tasks
 import org.gradle.api.DefaultTask
 import org.gradle.api.GradleException
 import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.file.ConfigurableFileCollection
 import org.gradle.api.file.RegularFileProperty
+import org.gradle.api.provider.MapProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputFile
+import org.gradle.api.tasks.InputFiles
+import org.gradle.api.tasks.Internal
 import org.gradle.api.tasks.LocalState
 import org.gradle.api.tasks.OutputFile
 import org.gradle.api.tasks.PathSensitive
@@ -57,6 +61,13 @@ internal abstract class CompileRustInteropBridge @Inject constructor(
     @get:PathSensitive(PathSensitivity.RELATIVE)
     abstract val cargoLockFile: RegularFileProperty
 
+    @get:Internal
+    abstract val localCratePaths: MapProperty<String, String>
+
+    @get:InputFiles
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val localCrateFiles: ConfigurableFileCollection
+
     @get:LocalState
     abstract val cargoWorkspaceDirectory: DirectoryProperty
 
@@ -95,6 +106,7 @@ internal abstract class CompileRustInteropBridge @Inject constructor(
         Files.copy(cargoManifest.get().asFile.toPath(), stagedManifest, StandardCopyOption.REPLACE_EXISTING)
         Files.copy(cargoLockFile.get().asFile.toPath(), stagedLock, StandardCopyOption.REPLACE_EXISTING)
         Files.copy(rustSource.get().asFile.toPath(), stagedSource, StandardCopyOption.REPLACE_EXISTING)
+        stageRustInteropLocalCrates(workspace, localCratePaths.getOrElse(emptyMap()))
 
         val targetDirectory = cargoTargetDirectory.get().asFile.toPath()
         Files.createDirectories(targetDirectory)

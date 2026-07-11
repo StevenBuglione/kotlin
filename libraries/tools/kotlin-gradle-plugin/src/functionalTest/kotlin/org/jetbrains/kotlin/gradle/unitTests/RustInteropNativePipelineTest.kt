@@ -93,6 +93,41 @@ class RustInteropNativePipelineTest : MultiplatformExtensionTest() {
     }
 
     @Test
+    fun `wires every local crate into aggregate lock and compile tasks`() {
+        val compilation = kotlin.linuxX64().compilations.getByName("main")
+        val expectedPaths = linkedMapOf<String, String>()
+        listOf("fixtureOne", "fixtureTwo").forEach { crateName ->
+            val definition = project.file("src/nativeInterop/rust/$crateName.rustinterop.toml").apply {
+                parentFile.mkdirs()
+                writeText("# Configuration-only fixture\n")
+            }
+            val localCrate = project.file("rust-crates/$crateName")
+            localCrate.resolve("Cargo.toml").apply {
+                parentFile.mkdirs()
+                writeText("[package]\nname = \"$crateName\"\nversion = \"1.0.0\"\n")
+            }
+            compilation.rustInterops.create(crateName) {
+                it.crate(crateName, "1.0.0")
+                it.packageName.set("rust.$crateName")
+                it.definitionFile.set(definition)
+                it.localCrateDirectory.set(localCrate)
+            }
+            expectedPaths[crateName] = localCrate.absolutePath
+        }
+
+        project.evaluate()
+
+        val lockTask = project.tasks.getByName(LOCK_TASK_NAME) as ResolveRustInteropCargoLock
+        val compileTask = project.tasks.getByName(COMPILE_BRIDGE_TASK_NAME) as CompileRustInteropBridge
+        assertEquals(expectedPaths, lockTask.localCratePaths.get())
+        assertEquals(expectedPaths, compileTask.localCratePaths.get())
+        expectedPaths.values.forEach { cratePath ->
+            assertTrue(File(cratePath).resolve("Cargo.toml") in lockTask.localCrateFiles.files)
+            assertTrue(File(cratePath).resolve("Cargo.toml") in compileTask.localCrateFiles.files)
+        }
+    }
+
+    @Test
     fun `does not register Rust native pipeline for LLVM-only compilation`() {
         val compilation = kotlin.linuxX64().compilations.getByName("main")
 
@@ -135,14 +170,37 @@ class RustInteropNativePipelineTest : MultiplatformExtensionTest() {
             parentFile.mkdirs()
             writeText("pub extern \"C\" fn placeholder() {}\n")
         }
+        val localCrate = project.file("rust-crates/fixture").apply {
+            resolve("Cargo.toml").apply {
+                parentFile.mkdirs()
+                writeText("[package]\nname = \"fixture\"\nversion = \"1.0.0\"\n")
+            }
+            resolve("src/lib.rs").apply {
+                parentFile.mkdirs()
+                writeText("pub fn answer() -> i32 { 42 }\n")
+            }
+            resolve("target/debug/stale").apply {
+                parentFile.mkdirs()
+                writeText("stale")
+            }
+        }
+        val localCrateFiles = project.fileTree(localCrate).matching {
+            it.exclude(".git/**", "target/**")
+        }
         val lockFile = cargoRoot.resolve("Cargo.lock")
         val resolveTask = project.tasks.register("resolveTestRustInteropCargoLock", ResolveRustInteropCargoLock::class.java) {
             it.cargoExecutable.set(cargo.absolutePath)
             it.cargoManifest.set(manifest)
             it.cargoWorkspaceDirectory.set(project.layout.buildDirectory.dir("rustInterop/test/lock-workspace"))
             it.cargoLockFile.set(lockFile)
+            it.localCratePaths.put("fixture", localCrate.absolutePath)
+            it.localCrateFiles.from(localCrateFiles)
         }.get()
         resolveTask.resolve()
+        val stagedLockCrate = resolveTask.cargoWorkspaceDirectory.dir("local-crates/fixture").get().asFile
+        assertTrue(stagedLockCrate.resolve("Cargo.toml").isFile)
+        assertTrue(stagedLockCrate.resolve("src/lib.rs").isFile)
+        assertFalse(stagedLockCrate.resolve("target").exists())
 
         val archiveOutput = cargoRoot.resolve("lib/libkotlin_rust_interop.a")
         val nativeLibrariesOutput = cargoRoot.resolve("native-static-libs.txt")
@@ -157,8 +215,14 @@ class RustInteropNativePipelineTest : MultiplatformExtensionTest() {
             it.cargoTargetDirectory.set(project.layout.buildDirectory.dir("rustInterop/test/cargo-target"))
             it.staticLibraryFile.set(archiveOutput)
             it.nativeStaticLibrariesFile.set(nativeLibrariesOutput)
+            it.localCratePaths.put("fixture", localCrate.absolutePath)
+            it.localCrateFiles.from(localCrateFiles)
         }.get()
         compileTask.compile()
+        val stagedCompileCrate = compileTask.cargoWorkspaceDirectory.dir("local-crates/fixture").get().asFile
+        assertTrue(stagedCompileCrate.resolve("Cargo.toml").isFile)
+        assertTrue(stagedCompileCrate.resolve("src/lib.rs").isFile)
+        assertFalse(stagedCompileCrate.resolve("target").exists())
 
         assertEquals("# fake Cargo.lock\n", lockFile.readText())
         assertContentEquals("fake staticlib\n".toByteArray(), archiveOutput.readBytes())

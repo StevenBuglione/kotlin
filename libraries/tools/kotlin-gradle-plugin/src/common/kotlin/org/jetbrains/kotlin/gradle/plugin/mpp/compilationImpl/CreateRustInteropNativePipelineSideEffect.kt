@@ -6,6 +6,7 @@
 package org.jetbrains.kotlin.gradle.plugin.mpp.compilationImpl
 
 import org.gradle.api.GradleException
+import org.gradle.api.tasks.TaskProvider
 import org.jetbrains.kotlin.gradle.plugin.KotlinNativeTargetConfigurator
 import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeCompilation
 import org.jetbrains.kotlin.gradle.targets.native.tasks.CompileRustInteropBridge
@@ -20,85 +21,105 @@ import org.jetbrains.kotlin.konan.target.presetName
 internal val KotlinCreateNativeRustInteropPipelineSideEffect =
     KotlinCompilationSideEffect<KotlinNativeCompilation> { compilation ->
         val project = compilation.project
-        var pipelineCreated = false
+        var pipeline: NativeRustInteropPipeline? = null
 
-        compilation.rustInterops.all {
-            if (pipelineCreated) return@all
-            pipelineCreated = true
-
+        compilation.rustInterops.all { interop ->
             val root = "rustInterop/${compilation.target.name}/${compilation.name}"
-            val artifactTask = project.tasks.named(
-                compilation.rustInteropBridgeArtifactTaskName(),
-                GenerateRustInteropBridgeArtifacts::class.java,
-            )
-            val resolveLockTask = project.tasks.register(
-                compilation.rustInteropCargoLockTaskName(),
-                ResolveRustInteropCargoLock::class.java,
-            ) { task ->
-                task.group = KotlinNativeTargetConfigurator.INTEROP_GROUP
-                task.description = "Resolves the aggregate Rust interop Cargo lock file " +
-                        "for compilation '${compilation.compilationName}' of target '${compilation.target.name}'."
-                task.cargoExecutable.convention("cargo")
-                task.cargoManifest.set(artifactTask.flatMap { it.outputDirectory.file("Cargo.toml") })
-                task.cargoWorkspaceDirectory.set(project.layout.buildDirectory.dir("$root/cargo/lock-workspace"))
-                task.cargoLockFile.set(project.layout.buildDirectory.file("$root/cargo/Cargo.lock"))
-            }
-            val compileBridgeTask = project.tasks.register(
-                compilation.rustInteropCompileBridgeTaskName(),
-                CompileRustInteropBridge::class.java,
-            ) { task ->
-                task.group = KotlinNativeTargetConfigurator.INTEROP_GROUP
-                task.description = "Compiles the aggregate Rust interop static library " +
-                        "for compilation '${compilation.compilationName}' of target '${compilation.target.name}'."
-                task.cargoExecutable.convention("cargo")
-                task.targetName.set(compilation.konanTarget.presetName)
-                task.cargoTarget.set(project.provider {
-                    RustInteropCargoTargets.forKotlinNativeTarget(compilation.konanTarget.presetName)
-                })
-                task.cargoManifest.set(artifactTask.flatMap { it.outputDirectory.file("Cargo.toml") })
-                task.rustSource.set(artifactTask.flatMap { it.outputDirectory.file("src/lib.rs") })
-                task.cargoLockFile.set(resolveLockTask.flatMap { it.cargoLockFile })
-                task.cargoWorkspaceDirectory.set(project.layout.buildDirectory.dir("$root/cargo/compile-workspace"))
-                task.cargoTargetDirectory.set(project.layout.buildDirectory.dir("$root/cargo/target"))
-                task.staticLibraryFile.set(
-                    project.layout.buildDirectory.file("$root/cargo/lib/libkotlin_rust_interop.a")
+            val configuredPipeline = pipeline ?: run {
+                val artifactTask = project.tasks.named(
+                    compilation.rustInteropBridgeArtifactTaskName(),
+                    GenerateRustInteropBridgeArtifacts::class.java,
                 )
-                task.nativeStaticLibrariesFile.set(
-                    project.layout.buildDirectory.file("$root/cargo/native-static-libs.txt")
-                )
-            }
-            val generateDefTask = project.tasks.register(
-                compilation.rustInteropCInteropDefTaskName(),
-                GenerateRustInteropCInteropDef::class.java,
-            ) { task ->
-                task.group = KotlinNativeTargetConfigurator.INTEROP_GROUP
-                task.description = "Generates the aggregate Rust interop cinterop definition " +
-                        "for compilation '${compilation.compilationName}' of target '${compilation.target.name}'."
-                task.headerFile.set(artifactTask.flatMap { it.outputDirectory.file("include/kotlin_rust_interop.h") })
-                task.cInteropPackageFile.set(
-                    artifactTask.flatMap { it.outputDirectory.file("metadata/cinterop-package.txt") }
-                )
-                task.staticLibraryFile.set(compileBridgeTask.flatMap { it.staticLibraryFile })
-                task.nativeStaticLibrariesFile.set(compileBridgeTask.flatMap { it.nativeStaticLibrariesFile })
-                task.definitionFile.set(project.layout.buildDirectory.file("$root/cinterop/rustInterop.def"))
-            }
-
-            val existingCInterop = compilation.cinterops.findByName(GENERATED_CINTEROP_NAME)
-            if (existingCInterop != null && !existingCInterop.isGeneratedCinterop) {
-                throw GradleException(
-                    "C interop name '$GENERATED_CINTEROP_NAME' is reserved by Rust interop " +
+                val resolveLockTask = project.tasks.register(
+                    compilation.rustInteropCargoLockTaskName(),
+                    ResolveRustInteropCargoLock::class.java,
+                ) { task ->
+                    task.group = KotlinNativeTargetConfigurator.INTEROP_GROUP
+                    task.description = "Resolves the aggregate Rust interop Cargo lock file " +
                             "for compilation '${compilation.compilationName}' of target '${compilation.target.name}'."
-                )
-            }
-            val generatedCInterop = existingCInterop ?: compilation.cinterops.create(GENERATED_CINTEROP_NAME)
-            generatedCInterop.isGeneratedCinterop = true
-            generatedCInterop.definitionFile.set(generateDefTask.flatMap { it.definitionFile })
+                    task.cargoExecutable.convention("cargo")
+                    task.cargoManifest.set(artifactTask.flatMap { it.outputDirectory.file("Cargo.toml") })
+                    task.cargoWorkspaceDirectory.set(project.layout.buildDirectory.dir("$root/cargo/lock-workspace"))
+                    task.cargoLockFile.set(project.layout.buildDirectory.file("$root/cargo/Cargo.lock"))
+                }
+                val compileBridgeTask = project.tasks.register(
+                    compilation.rustInteropCompileBridgeTaskName(),
+                    CompileRustInteropBridge::class.java,
+                ) { task ->
+                    task.group = KotlinNativeTargetConfigurator.INTEROP_GROUP
+                    task.description = "Compiles the aggregate Rust interop static library " +
+                            "for compilation '${compilation.compilationName}' of target '${compilation.target.name}'."
+                    task.cargoExecutable.convention("cargo")
+                    task.targetName.set(compilation.konanTarget.presetName)
+                    task.cargoTarget.set(project.provider {
+                        RustInteropCargoTargets.forKotlinNativeTarget(compilation.konanTarget.presetName)
+                    })
+                    task.cargoManifest.set(artifactTask.flatMap { it.outputDirectory.file("Cargo.toml") })
+                    task.rustSource.set(artifactTask.flatMap { it.outputDirectory.file("src/lib.rs") })
+                    task.cargoLockFile.set(resolveLockTask.flatMap { it.cargoLockFile })
+                    task.cargoWorkspaceDirectory.set(project.layout.buildDirectory.dir("$root/cargo/compile-workspace"))
+                    task.cargoTargetDirectory.set(project.layout.buildDirectory.dir("$root/cargo/target"))
+                    task.staticLibraryFile.set(
+                        project.layout.buildDirectory.file("$root/cargo/lib/libkotlin_rust_interop.a")
+                    )
+                    task.nativeStaticLibrariesFile.set(
+                        project.layout.buildDirectory.file("$root/cargo/native-static-libs.txt")
+                    )
+                }
+                val generateDefTask = project.tasks.register(
+                    compilation.rustInteropCInteropDefTaskName(),
+                    GenerateRustInteropCInteropDef::class.java,
+                ) { task ->
+                    task.group = KotlinNativeTargetConfigurator.INTEROP_GROUP
+                    task.description = "Generates the aggregate Rust interop cinterop definition " +
+                            "for compilation '${compilation.compilationName}' of target '${compilation.target.name}'."
+                    task.headerFile.set(artifactTask.flatMap { it.outputDirectory.file("include/kotlin_rust_interop.h") })
+                    task.cInteropPackageFile.set(
+                        artifactTask.flatMap { it.outputDirectory.file("metadata/cinterop-package.txt") }
+                    )
+                    task.staticLibraryFile.set(compileBridgeTask.flatMap { it.staticLibraryFile })
+                    task.nativeStaticLibrariesFile.set(compileBridgeTask.flatMap { it.nativeStaticLibrariesFile })
+                    task.definitionFile.set(project.layout.buildDirectory.file("$root/cinterop/rustInterop.def"))
+                }
 
-            compilation.defaultSourceSet.kotlin.srcDir(
-                artifactTask.flatMap { it.outputDirectory.dir("kotlin") }
-            )
+                val existingCInterop = compilation.cinterops.findByName(GENERATED_CINTEROP_NAME)
+                if (existingCInterop != null && !existingCInterop.isGeneratedCinterop) {
+                    throw GradleException(
+                        "C interop name '$GENERATED_CINTEROP_NAME' is reserved by Rust interop " +
+                                "for compilation '${compilation.compilationName}' of target '${compilation.target.name}'."
+                    )
+                }
+                val generatedCInterop = existingCInterop ?: compilation.cinterops.create(GENERATED_CINTEROP_NAME)
+                generatedCInterop.isGeneratedCinterop = true
+                generatedCInterop.definitionFile.set(generateDefTask.flatMap { it.definitionFile })
+
+                compilation.defaultSourceSet.kotlin.srcDir(
+                    artifactTask.flatMap { it.outputDirectory.dir("kotlin") }
+                )
+                NativeRustInteropPipeline(resolveLockTask, compileBridgeTask).also { pipeline = it }
+            }
+
+            val localCrateFiles = interop.localCrateDirectory.map { directory ->
+                project.fileTree(directory).matching { it.exclude(".git/**", "target/**") }.files
+            }.orElse(emptySet())
+            val localCratePaths = interop.crateName.zip(interop.localCrateDirectory) { crateName, directory ->
+                mapOf(crateName to directory.asFile.absolutePath)
+            }.orElse(emptyMap())
+            configuredPipeline.resolveLockTask.configure { task ->
+                task.localCrateFiles.from(localCrateFiles)
+                task.localCratePaths.putAll(localCratePaths)
+            }
+            configuredPipeline.compileBridgeTask.configure { task ->
+                task.localCrateFiles.from(localCrateFiles)
+                task.localCratePaths.putAll(localCratePaths)
+            }
         }
     }
+
+private data class NativeRustInteropPipeline(
+    val resolveLockTask: TaskProvider<ResolveRustInteropCargoLock>,
+    val compileBridgeTask: TaskProvider<CompileRustInteropBridge>,
+)
 
 internal fun KotlinNativeCompilation.rustInteropBridgeArtifactTaskName(): String = lowerCamelCaseName(
     "generate",

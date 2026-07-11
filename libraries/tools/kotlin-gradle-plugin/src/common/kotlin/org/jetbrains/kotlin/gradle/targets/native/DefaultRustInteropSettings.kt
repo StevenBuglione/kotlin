@@ -9,6 +9,7 @@
 package org.jetbrains.kotlin.gradle.plugin.mpp
 
 import org.gradle.api.NamedDomainObjectFactory
+import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.ProjectLayout
 import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.model.ObjectFactory
@@ -44,6 +45,8 @@ internal abstract class DefaultRustInteropSettings @Inject constructor(
     )
 
     override val features: SetProperty<String> = params.services.objectFactory.setProperty(String::class.java)
+
+    override val localCrateDirectory: DirectoryProperty = params.services.objectFactory.directoryProperty()
 }
 
 internal class DefaultRustInteropSettingsFactory(

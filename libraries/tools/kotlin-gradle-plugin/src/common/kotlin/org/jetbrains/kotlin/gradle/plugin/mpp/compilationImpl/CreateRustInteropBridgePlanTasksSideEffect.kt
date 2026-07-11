@@ -5,6 +5,7 @@
 
 package org.jetbrains.kotlin.gradle.plugin.mpp.compilationImpl
 
+import org.gradle.api.tasks.PathSensitivity
 import org.jetbrains.kotlin.gradle.plugin.KotlinNativeTargetConfigurator
 import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeCompilation
 import org.jetbrains.kotlin.gradle.targets.native.tasks.GenerateRustInteropBridgePlan
@@ -40,10 +41,27 @@ internal val KotlinCreateNativeRustInteropBridgePlanTasksSideEffect =
 
             compilation.compileTaskProvider.configure { task ->
                 task.dependsOn(bridgePlanTask)
+                task.inputs.files(
+                    interop.localCrateDirectory.map { directory ->
+                        project.fileTree(directory).matching {
+                            it.exclude(".git/**", "target/**")
+                        }.files
+                    }.orElse(emptySet())
+                )
+                    .withPropertyName("rustInteropLocalCrateSources.${interop.name}")
+                    .withPathSensitivity(PathSensitivity.RELATIVE)
+                task.outputs.cacheIf("Local Rust crate paths are machine-specific") {
+                    !interop.localCrateDirectory.isPresent
+                }
                 task.compilerOptions.freeCompilerArgs.add(
                     bridgePlanFile.map { bridgePlan ->
                         "-Xrust-interop-bridge-plan=${bridgePlan.asFile.absolutePath}"
                     }
+                )
+                task.compilerOptions.freeCompilerArgs.addAll(
+                    interop.crateName.zip(interop.localCrateDirectory) { crateName, directory ->
+                        listOf("-Xrust-interop-crate-path=$crateName=${directory.asFile.absolutePath}")
+                    }.orElse(emptyList())
                 )
             }
         }

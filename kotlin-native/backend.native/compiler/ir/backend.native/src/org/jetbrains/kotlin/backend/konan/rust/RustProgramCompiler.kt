@@ -18,6 +18,7 @@ internal data class RustCargoWorkspaceSpec(
     val mainRs: String,
     val outputDirectory: Path,
     val release: Boolean = true,
+    val dependencies: List<RustCargoDependency> = emptyList(),
 ) {
     init {
         require(CARGO_PACKAGE_NAME.matches(packageName)) { "Invalid Cargo package name: $packageName" }
@@ -25,6 +26,7 @@ internal data class RustCargoWorkspaceSpec(
             "A Rust target triple must be non-blank and contain no whitespace"
         }
         require(mainRs.isNotBlank()) { "The generated Rust program must not be blank" }
+        validateRustCargoDependencies(dependencies)
     }
 }
 
@@ -46,25 +48,24 @@ internal object RustCargoWorkspaceEmitter {
 
         val manifest = directory.resolve("Cargo.toml")
         val mainSource = sourceDirectory.resolve("main.rs")
-        writeIfChanged(manifest, cargoManifest(spec.packageName))
+        writeIfChanged(manifest, cargoManifest(spec.packageName, spec.dependencies))
         writeIfChanged(mainSource, spec.mainRs.withSingleTrailingNewline())
 
         return RustCargoWorkspace(directory, manifest, mainSource, spec.packageName, spec.targetTriple, spec.release)
     }
 
-    private fun cargoManifest(packageName: String): String = """
-        [package]
-        name = "$packageName"
-        version = "0.0.0"
-        edition = "2021"
-        publish = false
-
-        [[bin]]
-        name = "$packageName"
-        path = "src/main.rs"
-
-        [workspace]
-    """.trimIndent().withSingleTrailingNewline()
+    private fun cargoManifest(packageName: String, dependencies: List<RustCargoDependency>): String = buildString {
+        append("[package]\n")
+        append("name = \"").append(packageName).append("\"\n")
+        append("version = \"0.0.0\"\n")
+        append("edition = \"2021\"\n")
+        append("publish = false\n\n")
+        append("[[bin]]\n")
+        append("name = \"").append(packageName).append("\"\n")
+        append("path = \"src/main.rs\"\n")
+        appendRustCargoDependencies(dependencies)
+        append("\n[workspace]\n")
+    }
 
     private fun writeIfChanged(path: Path, contents: String) {
         val bytes = contents.toByteArray(StandardCharsets.UTF_8)
@@ -189,9 +190,10 @@ internal class RustProgramCompiler(
         renderedMainRs: String,
         outputDirectory: Path,
         release: Boolean = true,
+        dependencies: List<RustCargoDependency> = emptyList(),
     ): RustProgramArtifact {
         val workspace = RustCargoWorkspaceEmitter.emit(
-            RustCargoWorkspaceSpec(packageName, targetTriple, renderedMainRs, outputDirectory, release)
+            RustCargoWorkspaceSpec(packageName, targetTriple, renderedMainRs, outputDirectory, release, dependencies)
         )
         return runner.buildProgram(workspace)
     }
@@ -202,7 +204,8 @@ internal class RustProgramCompiler(
         renderedMainRs: String,
         outputDirectory: File,
         release: Boolean = true,
-    ): RustProgramArtifact = compile(packageName, targetTriple, renderedMainRs, outputDirectory.toPath(), release)
+        dependencies: List<RustCargoDependency> = emptyList(),
+    ): RustProgramArtifact = compile(packageName, targetTriple, renderedMainRs, outputDirectory.toPath(), release, dependencies)
 }
 
 private val CARGO_PACKAGE_NAME = Regex("[A-Za-z][A-Za-z0-9_-]*")

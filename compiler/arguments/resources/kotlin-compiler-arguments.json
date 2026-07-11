@@ -17782,6 +17782,51 @@
                                         "deprecatedMessage": null
                                     },
                                     {
+                                        "name": "Xrust-interop-crate-path",
+                                        "shortName": null,
+                                        "deprecatedName": null,
+                                        "description": {
+                                            "current": "Override a Rust interop crate with a local Cargo package directory.",
+                                            "valueInVersions": []
+                                        },
+                                        "delimiter": "None",
+                                        "affectsCompilationOutcome": true,
+                                        "restrictedToCompilerPhase": null,
+                                        "valueType": {
+                                            "type": "org.jetbrains.kotlin.arguments.dsl.types.StringArrayType",
+                                            "defaultValue": {
+                                                "current": null,
+                                                "valueInVersions": []
+                                            },
+                                            "isNullable": {
+                                                "current": true,
+                                                "valueInVersions": []
+                                            }
+                                        },
+                                        "valueDescription": {
+                                            "current": "<crate>=<path>",
+                                            "valueInVersions": []
+                                        },
+                                        "releaseVersionsMetadata": {
+                                            "introducedVersion": "2.4.0",
+                                            "stabilizedVersion": null,
+                                            "deprecatedVersion": null,
+                                            "removedVersion": null
+                                        },
+                                        "argumentType": {
+                                            "type": "org.jetbrains.kotlin.arguments.dsl.types.StringArrayType",
+                                            "defaultValue": {
+                                                "current": null,
+                                                "valueInVersions": []
+                                            },
+                                            "isNullable": {
+                                                "current": true,
+                                                "valueInVersions": []
+                                            }
+                                        },
+                                        "deprecatedMessage": null
+                                    },
+                                    {
                                         "name": "Xsave-llvm-ir-after",
                                         "shortName": null,
                                         "deprecatedName": null,

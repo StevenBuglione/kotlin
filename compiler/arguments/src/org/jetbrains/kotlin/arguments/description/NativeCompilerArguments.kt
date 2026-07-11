@@ -934,6 +934,19 @@ The default value is 1.""".asReleaseDependent()
     }
 
     compilerArgument {
+        name = "Xrust-interop-crate-path"
+        compilerName = "rustInteropCratePaths"
+        description = "Override a Rust interop crate with a local Cargo package directory.".asReleaseDependent()
+        valueType = StringArrayType.defaultNull
+        valueDescription = "<crate>=<path>".asReleaseDependent()
+        delimiter = KotlinCompilerArgument.Delimiter.None
+
+        lifecycle(
+            introducedVersion = KotlinReleaseVersion.v2_4_0,
+        )
+    }
+
+    compilerArgument {
         name = "Xbinary"
         compilerName = "binaryOptions"
         description = "Specify a binary option.".asReleaseDependent()

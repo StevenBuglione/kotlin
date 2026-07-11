@@ -30,6 +30,7 @@ import org.jetbrains.kotlin.backend.konan.llvm.parseBitcodeFile
 import org.jetbrains.kotlin.backend.konan.llvm.verifyModule
 import org.jetbrains.kotlin.backend.konan.nativeCodegenMode
 import org.jetbrains.kotlin.backend.konan.rustInteropBridgePlanPaths
+import org.jetbrains.kotlin.backend.konan.rustInteropCratePaths
 import org.jetbrains.kotlin.backend.konan.lower.isEagerStaticInitializer
 import org.jetbrains.kotlin.backend.konan.lower.isLazyStaticInitializer
 import org.jetbrains.kotlin.backend.konan.rust.codegen.RustIrCodegen
@@ -70,6 +71,7 @@ import java.io.File
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.Paths
 
 internal data class RustHybridModuleArtifact(
     val bitcodeFile: File,
@@ -174,7 +176,9 @@ internal fun tryCompileRustHybridModule(
         functionPrologue = "unsafe { Kotlin_mm_safePointFunctionPrologue(); }",
         directInteropCallResolver = directInteropPlan,
     ).generate(irModule, primitiveCandidates, moduleFunctionScope = primitiveCandidates)
-    val directInteropDependencies = directInteropPlan.usedCargoDependencies()
+    val directInteropDependencies = directInteropPlan.usedCargoDependencies(
+        config.configuration.rustInteropCratePaths.mapValues { entry -> Paths.get(entry.value) }
+    )
     val candidateSet = primitiveCandidates.toSet()
     val generated = result.generatedFunctions.filter { it.declaration in candidateSet }
     if (generated.isEmpty() && managedResults.isEmpty() && managedFieldResults.isEmpty() && primitiveFieldReadResults.isEmpty()) return null

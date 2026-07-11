@@ -23,8 +23,19 @@ object RustInteropBridgeArtifactGenerator {
     fun generate(plan: RustInteropBridgePlan): RustInteropBridgeArtifacts = generate(listOf(plan))
 
     fun generate(
+        plan: RustInteropBridgePlan,
+        localCrateNames: Set<String>,
+    ): RustInteropBridgeArtifacts = generate(listOf(plan), "kotlin_rust_interop", localCrateNames)
+
+    fun generate(
         plans: List<RustInteropBridgePlan>,
         crateName: String = "kotlin_rust_interop",
+    ): RustInteropBridgeArtifacts = generate(plans, crateName, emptySet())
+
+    fun generate(
+        plans: List<RustInteropBridgePlan>,
+        crateName: String,
+        localCrateNames: Set<String>,
     ): RustInteropBridgeArtifacts {
         if (plans.isEmpty()) fail("at least one bridge plan is required")
         if (!CARGO_NAME.matches(crateName)) fail("invalid generated Cargo package name '$crateName'")
@@ -32,7 +43,8 @@ object RustInteropBridgeArtifactGenerator {
         val orderedPlans = plans.distinctBy { RustInteropBridgePlanHash.planHash(it) }
             .sortedWith(compareBy({ it.crate.name }, { RustInteropBridgePlanHash.planHash(it) }))
         validate(orderedPlans)
-        val aggregate = Aggregate(orderedPlans, crateName)
+        val validatedLocalCrateNames = validateLocalCrateNames(orderedPlans, localCrateNames)
+        val aggregate = Aggregate(orderedPlans, crateName, validatedLocalCrateNames)
         return RustInteropBridgeArtifacts(
             cargoManifest = renderCargoManifest(aggregate),
             rustSource = renderRustSource(aggregate),
@@ -40,6 +52,18 @@ object RustInteropBridgeArtifactGenerator {
             cInteropPackage = aggregate.cInteropPackage,
             kotlinFacades = renderKotlinFacades(aggregate),
         )
+    }
+
+    private fun validateLocalCrateNames(
+        plans: List<RustInteropBridgePlan>,
+        localCrateNames: Set<String>,
+    ): Set<String> {
+        val plannedCrates = plans.mapTo(linkedSetOf()) { it.crate.name }
+        val unknownCrates = (localCrateNames - plannedCrates).sorted()
+        if (unknownCrates.isNotEmpty()) {
+            fail("local Cargo dependency overrides refer to crates absent from bridge plans: ${unknownCrates.joinToString()}")
+        }
+        return localCrateNames.toSortedSet()
     }
 
     private fun validate(plans: List<RustInteropBridgePlan>) {
@@ -138,7 +162,11 @@ object RustInteropBridgeArtifactGenerator {
         }
     }
 
-    private data class Aggregate(val plans: List<RustInteropBridgePlan>, val crateName: String) {
+    private data class Aggregate(
+        val plans: List<RustInteropBridgePlan>,
+        val crateName: String,
+        val localCrateNames: Set<String>,
+    ) {
         val operations = plans.flatMap { it.operations }
         val hash = sha256(plans.joinToString("\u0000") { RustInteropBridgePlanHash.planHash(it) })
         val prefix = "knri_v${RustInteropBridgePlanBuilder.SUPPORTED_SCHEMA_VERSION}_a${hash.take(24)}"
@@ -168,6 +196,7 @@ object RustInteropBridgeArtifactGenerator {
         append("[lib]\ncrate-type = [\"staticlib\"]\n\n[dependencies]\n")
         aggregate.plans.map { it.crate }.distinctBy { it.name }.sortedBy { it.name }.forEach { crate ->
             append(crate.name).append(" = { version = \"=").append(crate.version).append('"')
+            if (crate.name in aggregate.localCrateNames) append(", path = \"local-crates/${crate.name}\"")
             if (!crate.defaultFeatures) append(", default-features = false")
             if (crate.features.isNotEmpty()) {
                 append(", features = [")
@@ -460,4 +489,10 @@ object RustInteropBridgeArtifactRenderer {
         plans: List<RustInteropBridgePlan>,
         packageName: String = "kotlin_rust_interop",
     ): RustInteropBridgeArtifacts = RustInteropBridgeArtifactGenerator.generate(plans, packageName)
+
+    fun render(
+        plans: List<RustInteropBridgePlan>,
+        packageName: String,
+        localCrateNames: Set<String>,
+    ): RustInteropBridgeArtifacts = RustInteropBridgeArtifactGenerator.generate(plans, packageName, localCrateNames)
 }

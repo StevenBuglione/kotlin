@@ -11,8 +11,11 @@ import org.jetbrains.kotlin.backend.konan.NativeGenerationState
 import org.jetbrains.kotlin.backend.konan.NativeSecondStageCompilationConfig
 import org.jetbrains.kotlin.backend.konan.nativeCodegenMode
 import org.jetbrains.kotlin.backend.konan.reportCompilationError
+import org.jetbrains.kotlin.backend.konan.rustInteropBridgePlanPaths
+import org.jetbrains.kotlin.backend.konan.rustInteropCratePaths
 import org.jetbrains.kotlin.backend.konan.lower.isEagerStaticInitializer
 import org.jetbrains.kotlin.backend.konan.lower.isLazyStaticInitializer
+import org.jetbrains.kotlin.backend.konan.rust.RustDirectInteropPlan
 import org.jetbrains.kotlin.backend.konan.rust.RustProgramCompiler
 import org.jetbrains.kotlin.backend.konan.rust.RustToolExecutionException
 import org.jetbrains.kotlin.backend.konan.rust.codegen.RustCodegenResult
@@ -99,7 +102,8 @@ internal fun tryCompileRustProgramPrototype(
 
     val kotlinMain = backendContext.symbols.entryPoint?.owner
         ?: return unsupportedConfiguration("the module has no Kotlin entry point")
-    val codegenResult = RustIrCodegen().generate(irModule, listOf(kotlinMain))
+    val directInteropPlan = RustDirectInteropPlan.load(config.configuration.rustInteropBridgePlanPaths, config.target)
+    val codegenResult = RustIrCodegen(directInteropCallResolver = directInteropPlan).generate(irModule, listOf(kotlinMain))
     if (!codegenResult.isFullySupported) {
         if (mode == NativeCodegenMode.RUST_HYBRID) return false
         reportUnsupportedRustIr(backendContext, codegenResult)
@@ -118,6 +122,9 @@ internal fun tryCompileRustProgramPrototype(
             renderedMainRs = rustSource,
             outputDirectory = workspace,
             release = config.optimizationsEnabled,
+            dependencies = directInteropPlan.usedCargoDependencies(
+                config.configuration.rustInteropCratePaths.mapValues { entry -> Paths.get(entry.value) }
+            ),
         )
         outputFile.parentFile.mkdirs()
         Files.copy(

@@ -5,6 +5,7 @@
 
 package org.jetbrains.kotlin.backend.konan.rust
 
+import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.test.Test
@@ -28,6 +29,7 @@ class RustCargoCompilerClippyTest {
             targetTriple = TARGET,
             renderedMainRs = "fn main() {}",
             outputDirectory = directory,
+            dependencies = listOf(RustCargoDependency("direct_dep", "1.2.3", localPathOverride = directory.resolve("direct-dep"))),
         )
 
         assertEquals(listOf("clippy", "rustc"), commands.map { it[1] })
@@ -36,6 +38,10 @@ class RustCargoCompilerClippyTest {
             "--bin", "generated_program", "--message-format=short", "--no-deps", "--", "-D", "warnings",
         )
         assertContainsInOrder(commands.last(), "--message-format=short", "--", "--emit=llvm-bc,link")
+        assertContains(
+            Files.readAllBytes(artifact.workspace.manifest).toString(StandardCharsets.UTF_8),
+            "direct_dep = { version = \"=1.2.3\", path = ",
+        )
         assertEquals("clippy output\nrustc output", artifact.compilerOutput)
     }
 
@@ -103,7 +109,7 @@ class RustCargoCompilerClippyTest {
             targetTriple = TARGET,
             renderedLibraryRs = "#![no_std]\npub fn answer() -> i32 { direct_dep::answer() }",
             outputDirectory = directory,
-            dependencies = listOf(RustCargoRegistryDependency("direct_dep", "1.2.3")),
+            dependencies = listOf(RustCargoDependency("direct_dep", "1.2.3")),
         )
 
         assertEquals(listOf("clippy", "rustc"), commands.map { it[1] })

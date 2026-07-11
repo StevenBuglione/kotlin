@@ -1340,6 +1340,7 @@ public abstract interface class org/jetbrains/kotlin/gradle/plugin/RustInteropSe
 	public abstract fun getCrateVersion ()Lorg/gradle/api/provider/Property;
 	public abstract fun getDefinitionFile ()Lorg/gradle/api/file/RegularFileProperty;
 	public abstract fun getFeatures ()Lorg/gradle/api/provider/SetProperty;
+	public abstract fun getLocalCrateDirectory ()Lorg/gradle/api/file/DirectoryProperty;
 	public abstract fun getPackageName ()Lorg/gradle/api/provider/Property;
 }
 
@@ -1596,4 +1597,3 @@ public abstract interface class org/jetbrains/kotlin/project/model/LanguageSetti
 	public abstract fun getOptInAnnotationsInUse ()Ljava/util/Set;
 	public abstract fun getProgressiveMode ()Z
 }
-

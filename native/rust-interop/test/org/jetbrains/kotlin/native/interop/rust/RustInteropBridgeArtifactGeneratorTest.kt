@@ -44,6 +44,52 @@ class RustInteropBridgeArtifactGeneratorTest {
     }
 
     @Test
+    fun localCrateOverrideChangesOnlyCargoResolution() {
+        val plan = primitiveFunctionPlan()
+        val registryArtifacts = RustInteropBridgeArtifactGenerator.generate(plan)
+        val localArtifacts = RustInteropBridgeArtifactGenerator.generate(plan, setOf(plan.crate.name))
+
+        assertContains(
+            localArtifacts.cargoManifest,
+            "kn-direct-fixture = { version = \"=0.1.0\", path = \"local-crates/kn-direct-fixture\" }",
+        )
+        assertNotEquals(registryArtifacts.cargoManifest, localArtifacts.cargoManifest)
+        assertEquals(registryArtifacts.rustSource, localArtifacts.rustSource)
+        assertEquals(registryArtifacts.cHeader, localArtifacts.cHeader)
+        assertEquals(registryArtifacts.cInteropPackage, localArtifacts.cInteropPackage)
+        assertEquals(registryArtifacts.kotlinFacades, localArtifacts.kotlinFacades)
+        assertFalse("local-crates" in localArtifacts.rustSource)
+        assertFalse("local-crates" in localArtifacts.cHeader)
+        assertFalse(localArtifacts.kotlinFacades.values.any { "local-crates" in it })
+    }
+
+    @Test
+    fun localCrateOverridesArePerCrateDeterministicAndValidated() {
+        val regexPlan = RustInteropTomlParser.parsePlan(REGEX_DEFINITION)
+        val primitivePlan = primitiveFunctionPlan()
+        val plans = listOf(regexPlan, primitivePlan)
+        val local = RustInteropBridgeArtifactGenerator.generate(
+            plans,
+            "kotlin_rust_interop",
+            linkedSetOf(regexPlan.crate.name, primitivePlan.crate.name),
+        )
+        val repeated = RustInteropBridgeArtifactGenerator.generate(
+            plans.reversed(),
+            "kotlin_rust_interop",
+            linkedSetOf(primitivePlan.crate.name, regexPlan.crate.name),
+        )
+
+        assertEquals(local, repeated)
+        assertContains(local.cargoManifest, "path = \"local-crates/kn-direct-fixture\"")
+        assertContains(local.cargoManifest, "path = \"local-crates/regex\"")
+
+        val unknown = assertFailsWith<RustInteropBridgeGenerationException> {
+            RustInteropBridgeArtifactGenerator.generate(plans, "kotlin_rust_interop", setOf("missing-crate"))
+        }
+        assertContains(unknown.message.orEmpty(), "crates absent from bridge plans: missing-crate")
+    }
+
+    @Test
     fun bridgeAbiKeepsRustAndKotlinImplementationDetailsPrivate() {
         val plan = RustInteropTomlParser.parsePlan(REGEX_DEFINITION)
         val artifacts = RustInteropBridgeArtifactGenerator.generate(plan)

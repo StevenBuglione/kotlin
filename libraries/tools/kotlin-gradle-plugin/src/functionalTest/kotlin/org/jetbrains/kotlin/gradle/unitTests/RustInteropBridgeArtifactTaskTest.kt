@@ -14,6 +14,7 @@ import org.jetbrains.kotlin.gradle.util.MultiplatformExtensionTest
 import org.jetbrains.kotlin.native.interop.rust.RustInteropBridgeArtifactGenerator
 import org.jetbrains.kotlin.native.interop.rust.RustInteropTomlParser
 import kotlin.test.Test
+import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
@@ -90,6 +91,51 @@ class RustInteropBridgeArtifactTaskTest : MultiplatformExtensionTest() {
                 .filter { it.isFile }
                 .associate { it.relativeTo(root.resolve("kotlin")).invariantSeparatorsPath to it.readText() },
         )
+    }
+
+    @Test
+    fun `local crate produces a stable relative Cargo dependency and tracked filtered sources`() {
+        val compilation = kotlin.linuxX64().compilations.getByName("main")
+        val definition = project.file("src/nativeInterop/rust/regex.rustinterop.toml").apply {
+            parentFile.mkdirs()
+            writeText(REGEX_DEFINITION)
+        }
+        val localCrate = project.file("rust-crates/regex")
+        val manifest = localCrate.resolve("Cargo.toml").apply {
+            parentFile.mkdirs()
+            writeText("[package]\nname = \"regex\"\nversion = \"1.11.1\"\n")
+        }
+        val source = localCrate.resolve("src/lib.rs").apply {
+            parentFile.mkdirs()
+            writeText("pub struct Regex;\n")
+        }
+        val ignored = localCrate.resolve("target/debug/stale").apply {
+            parentFile.mkdirs()
+            writeText("stale")
+        }
+        compilation.rustInterops.create("regex") {
+            it.crate("regex", "1.11.1")
+            it.packageName.set("rust.regex")
+            it.definitionFile.set(definition)
+            it.features.add("unicode")
+            it.localCrateDirectory.set(localCrate)
+        }
+        project.evaluate()
+
+        (project.tasks.getByName("generateLinuxX64MainRegexRustInteropBridgePlan") as GenerateRustInteropBridgePlan).generate()
+        val task = project.tasks.getByName(ARTIFACT_TASK_NAME) as GenerateRustInteropBridgeArtifacts
+        task.generate()
+
+        val cargoManifest = task.outputDirectory.file("Cargo.toml").get().asFile.readText()
+        assertContains(
+            cargoManifest,
+            "regex = { version = \"=1.11.1\", path = \"local-crates/regex\", features = [\"unicode\"] }",
+        )
+        assertFalse(localCrate.absolutePath in cargoManifest)
+        assertEquals(mapOf("regex" to localCrate.absolutePath), task.localCratePaths.get())
+        assertTrue(manifest in task.localCrateDirectories.files)
+        assertTrue(source in task.localCrateDirectories.files)
+        assertTrue(ignored !in task.localCrateDirectories.files)
     }
 
     @Test

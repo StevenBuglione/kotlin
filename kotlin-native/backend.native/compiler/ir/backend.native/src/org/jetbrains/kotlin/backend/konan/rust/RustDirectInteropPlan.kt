@@ -60,12 +60,18 @@ internal class RustDirectInteropPlan private constructor(
         return RustDirectInteropCall(binding.rustPath, RustDirectInteropPanicPolicy.ABORT)
     }
 
-    fun usedCargoDependencies(): List<RustCargoRegistryDependency> = usedBindings
+    fun usedCargoDependencies(cratePathOverrides: Map<String, java.nio.file.Path> = emptyMap()): List<RustCargoDependency> = usedBindings
         .map { it.crate }
         .distinct()
         .sortedBy { it.name }
         .map { crate ->
-            RustCargoRegistryDependency(crate.name, crate.version, crate.features, crate.defaultFeatures)
+            RustCargoDependency(
+                crate.name,
+                crate.version,
+                crate.features,
+                crate.defaultFeatures,
+                cratePathOverrides[crate.name],
+            )
         }
 
     internal data class Binding(

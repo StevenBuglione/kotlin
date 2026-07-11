@@ -9,6 +9,7 @@ import org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi
 import org.jetbrains.kotlin.gradle.util.MultiplatformExtensionTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 
 @OptIn(ExperimentalKotlinGradlePluginApi::class)
 class RustInteropSettingsTest : MultiplatformExtensionTest() {
@@ -26,9 +27,14 @@ class RustInteropSettingsTest : MultiplatformExtensionTest() {
         assertEquals("1.11.1", rustInterop.crateVersion.get())
         assertEquals("rust.regex", rustInterop.packageName.get())
         assertEquals(setOf("unicode"), rustInterop.features.get())
+        assertFalse(rustInterop.localCrateDirectory.isPresent)
         assertEquals(
             project.file("src/nativeInterop/rust/regex.rustinterop.toml"),
             rustInterop.definitionFile.get().asFile,
         )
+
+        val localCrate = project.layout.projectDirectory.dir("rust-crates/regex")
+        rustInterop.localCrateDirectory.set(localCrate)
+        assertEquals(localCrate.asFile, rustInterop.localCrateDirectory.get().asFile)
     }
 }

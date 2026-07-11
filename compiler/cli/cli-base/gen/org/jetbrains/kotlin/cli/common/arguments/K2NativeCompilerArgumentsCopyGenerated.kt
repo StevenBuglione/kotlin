@@ -82,6 +82,7 @@ fun copyK2NativeCompilerArguments(from: K2NativeCompilerArguments, to: K2NativeC
     to.runtimeFile = from.runtimeFile
     to.runtimeLogs = from.runtimeLogs
     to.rustInteropBridgePlans = from.rustInteropBridgePlans.copyOf()
+    to.rustInteropCratePaths = from.rustInteropCratePaths.copyOf()
     to.saveDependenciesPath = from.saveDependenciesPath
     to.saveLlvmIrAfter = from.saveLlvmIrAfter.copyOf()
     to.saveLlvmIrDirectory = from.saveLlvmIrDirectory

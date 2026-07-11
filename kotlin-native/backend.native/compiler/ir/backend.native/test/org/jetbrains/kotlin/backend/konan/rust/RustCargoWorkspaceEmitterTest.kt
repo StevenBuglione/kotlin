@@ -128,13 +128,13 @@ class RustCargoWorkspaceEmitterTest {
                 libraryRs = "#![no_std]\npub fn answer() -> i32 { direct_dep::answer() }",
                 outputDirectory = directory,
                 dependencies = listOf(
-                    RustCargoRegistryDependency(
+                    RustCargoDependency(
                         packageName = "z-dependency",
                         version = "2.0.1",
                         features = listOf("unicode", "perf", "unicode"),
                         defaultFeatures = false,
                     ),
-                    RustCargoRegistryDependency(
+                    RustCargoDependency(
                         packageName = "direct_dep",
                         version = "1.2.3-beta.1",
                     ),
@@ -188,14 +188,59 @@ class RustCargoWorkspaceEmitterTest {
                 libraryRs = "#![no_std]\npub fn answer() -> i32 { 42 }",
                 outputDirectory = directory,
                 dependencies = listOf(
-                    RustCargoRegistryDependency("same-name", "1.0.0"),
-                    RustCargoRegistryDependency("same_name", "1.0.0"),
+                    RustCargoDependency("same-name", "1.0.0"),
+                    RustCargoDependency("same_name", "1.0.0"),
                 ),
             )
         }
         assertFailsWith<IllegalArgumentException> {
-            RustCargoRegistryDependency("unsafe", "1.0.0\"\npath = \"elsewhere")
+            RustCargoDependency("unsafe", "1.0.0\"\npath = \"elsewhere")
         }
+    }
+
+    @Test
+    fun emitsDeterministicProgramDependencyWithLocalPathOverride() = withTemporaryDirectory { directory ->
+        val localCrate = directory.resolve("fixture crate").resolve("crate source")
+        val workspace = RustCargoWorkspaceEmitter.emit(
+            RustCargoWorkspaceSpec(
+                packageName = "kotlin_rust_program",
+                targetTriple = "x86_64-unknown-linux-gnu",
+                mainRs = "fn main() { println!(\"{}\", direct_dep::answer()); }",
+                outputDirectory = directory.resolve("workspace"),
+                dependencies = listOf(
+                    RustCargoDependency(
+                        packageName = "direct_dep",
+                        version = "1.2.3",
+                        features = listOf("z", "a", "a"),
+                        defaultFeatures = false,
+                        localPathOverride = localCrate,
+                    )
+                ),
+            )
+        )
+
+        val escapedPath = localCrate.toAbsolutePath().normalize().toString()
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"")
+        assertEquals(
+            """
+                [package]
+                name = "kotlin_rust_program"
+                version = "0.0.0"
+                edition = "2021"
+                publish = false
+
+                [[bin]]
+                name = "kotlin_rust_program"
+                path = "src/main.rs"
+
+                [dependencies]
+                direct_dep = { version = "=1.2.3", path = "$escapedPath", default-features = false, features = ["a", "z"] }
+
+                [workspace]
+            """.trimIndent() + "\n",
+            Files.readAllBytes(workspace.manifest).toString(StandardCharsets.UTF_8),
+        )
     }
 
     private inline fun withTemporaryDirectory(block: (Path) -> Unit) {

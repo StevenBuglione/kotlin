@@ -50,6 +50,7 @@ fun CompilerConfiguration.setupFromArguments(arguments: K2NativeCompilerArgument
         }
     } ?: NativeCodegenMode.LLVM
     configureRustInteropBridgePlanPaths(arguments.rustInteropBridgePlans)
+    configureRustInteropCratePaths(arguments.rustInteropCratePaths)
 
     konanNoDefaultLibs = arguments.nodefaultlibs || !arguments.libraryToAddToCache.isNullOrEmpty()
     konanNoStdlib = arguments.nostdlib || !arguments.libraryToAddToCache.isNullOrEmpty()

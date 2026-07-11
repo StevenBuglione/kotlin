@@ -8,10 +8,14 @@ package org.jetbrains.kotlin.gradle.targets.native.tasks
 import org.gradle.api.DefaultTask
 import org.gradle.api.GradleException
 import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.file.ConfigurableFileCollection
 import org.gradle.api.file.RegularFileProperty
+import org.gradle.api.provider.MapProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputFile
+import org.gradle.api.tasks.InputFiles
+import org.gradle.api.tasks.Internal
 import org.gradle.api.tasks.LocalState
 import org.gradle.api.tasks.OutputFile
 import org.gradle.api.tasks.PathSensitive
@@ -38,6 +42,13 @@ internal abstract class ResolveRustInteropCargoLock @Inject constructor(
     @get:PathSensitive(PathSensitivity.RELATIVE)
     abstract val cargoManifest: RegularFileProperty
 
+    @get:Internal
+    abstract val localCratePaths: MapProperty<String, String>
+
+    @get:InputFiles
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val localCrateFiles: ConfigurableFileCollection
+
     @get:LocalState
     abstract val cargoWorkspaceDirectory: DirectoryProperty
 
@@ -54,6 +65,7 @@ internal abstract class ResolveRustInteropCargoLock @Inject constructor(
         resetDirectory(workspace)
         val stagedManifest = workspace.resolve("Cargo.toml")
         Files.copy(cargoManifest.get().asFile.toPath(), stagedManifest, StandardCopyOption.REPLACE_EXISTING)
+        stageRustInteropLocalCrates(workspace, localCratePaths.getOrElse(emptyMap()))
 
         // Cargo validates that the generated static-library target exists while resolving dependencies.
         val sourceDirectory = workspace.resolve("src")

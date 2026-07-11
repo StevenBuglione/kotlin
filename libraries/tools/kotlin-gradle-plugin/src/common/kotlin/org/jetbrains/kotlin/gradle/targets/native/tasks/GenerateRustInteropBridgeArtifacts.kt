@@ -9,10 +9,12 @@ import org.gradle.api.DefaultTask
 import org.gradle.api.GradleException
 import org.gradle.api.file.ConfigurableFileCollection
 import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.provider.MapProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.tasks.CacheableTask
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputFiles
+import org.gradle.api.tasks.Internal
 import org.gradle.api.tasks.OutputDirectory
 import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
@@ -42,6 +44,13 @@ internal abstract class GenerateRustInteropBridgeArtifacts : DefaultTask() {
     @get:PathSensitive(PathSensitivity.RELATIVE)
     abstract val definitionFiles: ConfigurableFileCollection
 
+    @get:Internal
+    abstract val localCratePaths: MapProperty<String, String>
+
+    @get:InputFiles
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val localCrateDirectories: ConfigurableFileCollection
+
     @get:OutputDirectory
     abstract val outputDirectory: DirectoryProperty
 
@@ -69,7 +78,11 @@ internal abstract class GenerateRustInteropBridgeArtifacts : DefaultTask() {
         }
 
         val plans = canonicalPlans.mapNotNull { it.resolveForTarget(targetName.get()) }
-        val artifacts = RustInteropBridgeArtifactGenerator.generate(plans)
+        val artifacts = RustInteropBridgeArtifactGenerator.generate(
+            plans,
+            "kotlin_rust_interop",
+            localCratePaths.getOrElse(emptyMap()).keys,
+        )
         val root = outputDirectory.get().asFile.toPath()
         writeAtomically(root.resolve("Cargo.toml"), artifacts.cargoManifest)
         writeAtomically(root.resolve("src/lib.rs"), artifacts.rustSource)

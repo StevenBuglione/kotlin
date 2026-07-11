@@ -6,6 +6,7 @@
 package org.jetbrains.kotlin.gradle.plugin
 
 import org.gradle.api.Named
+import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.provider.SetProperty
@@ -36,4 +37,7 @@ interface RustInteropSettings : Named {
 
     /** Cargo features enabled for this crate. */
     val features: SetProperty<String>
+
+    /** Optional local Cargo package directory used instead of the registry source. */
+    val localCrateDirectory: DirectoryProperty
 }

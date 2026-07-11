@@ -114,6 +114,51 @@ class RustInteropBridgePlanTaskTest : MultiplatformExtensionTest() {
     }
 
     @Test
+    fun `local crate path is tracked and passed separately without changing the canonical bridge plan`() {
+        val compilation = kotlin.linuxX64().compilations.getByName("main")
+        val definition = project.file("src/nativeInterop/rust/regex.rustinterop.toml").apply {
+            parentFile.mkdirs()
+            writeText(REGEX_DEFINITION)
+        }
+        val localCrate = project.file("rust-crates/regex")
+        localCrate.resolve("Cargo.toml").apply {
+            parentFile.mkdirs()
+            writeText("[package]\nname = \"regex\"\nversion = \"1.11.1\"\n")
+        }
+        localCrate.resolve("src/lib.rs").apply {
+            parentFile.mkdirs()
+            writeText("pub struct Regex;\n")
+        }
+        localCrate.resolve("target/debug/stale").apply {
+            parentFile.mkdirs()
+            writeText("stale")
+        }
+        localCrate.resolve(".git/index").apply {
+            parentFile.mkdirs()
+            writeText("stale")
+        }
+        compilation.rustInterops.create("regex") {
+            it.crate("regex", "1.11.1")
+            it.packageName.set("rust.regex")
+            it.definitionFile.set(definition)
+            it.features.add("unicode")
+            it.localCrateDirectory.set(localCrate)
+        }
+
+        project.evaluate()
+
+        val planTask = project.tasks.getByName(TASK_NAME) as GenerateRustInteropBridgePlan
+        planTask.generate()
+        assertEquals(EXPECTED_REGEX_JSON, planTask.bridgePlanFile.get().asFile.readText())
+
+        val compileTask = compilation.compileTaskProvider.get()
+        assertContains(
+            compileTask.createCompilerArguments(lenient).freeArgs,
+            "${RUST_INTEROP_CRATE_PATH_ARGUMENT_PREFIX}regex=${localCrate.absolutePath}",
+        )
+    }
+
+    @Test
     fun `task rejects crate configuration that differs from canonical definition`() {
         val compilation = kotlin.linuxX64().compilations.getByName("main")
         val definition = project.file("src/nativeInterop/rust/regex.rustinterop.toml")
@@ -141,6 +186,7 @@ class RustInteropBridgePlanTaskTest : MultiplatformExtensionTest() {
     private companion object {
         const val TASK_NAME = "generateLinuxX64MainRegexRustInteropBridgePlan"
         const val RUST_INTEROP_BRIDGE_PLAN_ARGUMENT_PREFIX = "-Xrust-interop-bridge-plan="
+        const val RUST_INTEROP_CRATE_PATH_ARGUMENT_PREFIX = "-Xrust-interop-crate-path="
 
         val REGEX_DEFINITION = """
             schema = 1
