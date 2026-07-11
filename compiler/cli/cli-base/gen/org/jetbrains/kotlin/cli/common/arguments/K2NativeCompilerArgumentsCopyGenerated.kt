@@ -60,6 +60,7 @@ fun copyK2NativeCompilerArguments(from: K2NativeCompilerArguments, to: K2NativeC
     to.manifestNativeTargets = from.manifestNativeTargets.copyOf()
     to.memoryModel = from.memoryModel
     to.moduleName = from.moduleName
+    to.nativeCodegen = from.nativeCodegen
     to.nativeLibraries = from.nativeLibraries.copyOf()
     to.noObjcGenerics = from.noObjcGenerics
     to.nodefaultlibs = from.nodefaultlibs

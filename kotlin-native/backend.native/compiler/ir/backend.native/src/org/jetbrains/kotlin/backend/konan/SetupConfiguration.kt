@@ -42,6 +42,14 @@ fun CompilerConfiguration.setupFromArguments(arguments: K2NativeCompilerArgument
 
     arguments.kotlinHome?.let { put(KONAN_HOME, it) }
 
+    nativeCodegenMode = arguments.nativeCodegen?.let { value ->
+        NativeCodegenMode.parse(value) ?: run {
+            val validValues = NativeCodegenMode.entries.joinToString("|") { it.cliArgument }
+            report(KONAN_ARGUMENT_ERROR, "Unsupported -Xnative-codegen value: '$value'. Possible values are: $validValues")
+            NativeCodegenMode.LLVM
+        }
+    } ?: NativeCodegenMode.LLVM
+
     konanNoDefaultLibs = arguments.nodefaultlibs || !arguments.libraryToAddToCache.isNullOrEmpty()
     konanNoStdlib = arguments.nostdlib || !arguments.libraryToAddToCache.isNullOrEmpty()
     konanDontCompressKlib = arguments.nopack

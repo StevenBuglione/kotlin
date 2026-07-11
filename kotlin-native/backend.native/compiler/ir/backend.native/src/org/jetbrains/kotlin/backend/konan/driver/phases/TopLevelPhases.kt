@@ -187,6 +187,9 @@ internal fun <C : NativeBackendPhaseContext> PhaseEngine<C>.runBackend(backendCo
             val tempFiles = createTempFiles(config, fragment.cacheDeserializationStrategy)
             val outputFiles = generationState.outputFiles
             if (context.config.produce.isHeaderCache) {
+                if (config.configuration.nativeCodegenMode == NativeCodegenMode.RUST_STRICT) {
+                    backendContext.reportCompilationError("Rust strict backend: header caches are not supported")
+                }
                 newEngine(generationState) { generationStateEngine ->
                     generationStateEngine.runAndMeasurePhase(SaveAdditionalCacheInfoPhase)
                     File(outputFiles.nativeBinaryFile).createNew()
@@ -197,6 +200,15 @@ internal fun <C : NativeBackendPhaseContext> PhaseEngine<C>.runBackend(backendCo
             try {
                 fragment.performanceManager?.notifyPhaseStarted(PhaseType.Backend)
                 backendEngine.useContext(generationState, copyState = true) { generationStateEngine ->
+                    if (tryCompileRustProgramPrototype(
+                            config,
+                            backendContext,
+                            generationState,
+                            fragment.irModule,
+                            fragment.cacheDeserializationStrategy,
+                    )) {
+                        return@useContext
+                    }
                     val bitcodeFile = tempFiles.createBitcodeFile(generationState.llvmModuleName)
                     val cExportFiles = if (config.produceCInterface) {
                         CExportFiles(

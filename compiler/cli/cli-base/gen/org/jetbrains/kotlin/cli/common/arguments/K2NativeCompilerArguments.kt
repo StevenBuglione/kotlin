@@ -425,6 +425,17 @@ This library must be one of the ones passed with '-library'.""",
         }
 
     @Argument(
+        value = "-Xnative-codegen",
+        valueDescription = "{llvm|rust-hybrid|rust-strict}",
+        description = "Select the internal Kotlin/Native code generator.",
+    )
+    var nativeCodegen: String? = null
+        set(value) {
+            checkFrozen()
+            field = if (value.isNullOrEmpty()) null else value
+        }
+
+    @Argument(
         value = "-Xno-objc-generics",
         description = "Disable generics support for framework header.",
     )

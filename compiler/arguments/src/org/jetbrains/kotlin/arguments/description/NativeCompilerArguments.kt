@@ -910,6 +910,17 @@ The default value is 1.""".asReleaseDependent()
     }
 
     compilerArgument {
+        name = "Xnative-codegen"
+        description = "Select the internal Kotlin/Native code generator.".asReleaseDependent()
+        valueType = StringType.defaultNull
+        valueDescription = "{llvm|rust-hybrid|rust-strict}".asReleaseDependent()
+
+        lifecycle(
+            introducedVersion = KotlinReleaseVersion.v2_4_0,
+        )
+    }
+
+    compilerArgument {
         name = "Xbinary"
         compilerName = "binaryOptions"
         description = "Specify a binary option.".asReleaseDependent()
