@@ -242,7 +242,6 @@ internal class RustBitcodeLibraryCompiler(
         }
         .filter(String::isNotEmpty)
         .flatMap { it.splitToSequence(Regex("\\s+")) }
-        .distinct()
         .toList()
 }
 

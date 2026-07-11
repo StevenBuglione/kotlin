@@ -17,6 +17,9 @@ internal val KotlinCreateNativeRustInteropBridgePlanTasksSideEffect =
 
         compilation.rustInterops.all { interop ->
             val bridgePlanGenerationTaskName = compilation.rustInteropBridgePlanTaskName(interop.name)
+            val bridgePlanFile = project.layout.buildDirectory.file(
+                "rustInterop/${compilation.target.name}/${compilation.name}/${interop.name}/bridge-plan.json"
+            )
 
             val bridgePlanTask = project.tasks.register(
                 bridgePlanGenerationTaskName,
@@ -32,15 +35,16 @@ internal val KotlinCreateNativeRustInteropBridgePlanTasksSideEffect =
                 task.packageName.set(interop.packageName)
                 task.features.set(interop.features)
                 task.definitionFile.set(interop.definitionFile)
-                task.bridgePlanFile.set(
-                    project.layout.buildDirectory.file(
-                        "rustInterop/${compilation.target.name}/${compilation.name}/${interop.name}/bridge-plan.json"
-                    )
-                )
+                task.bridgePlanFile.set(bridgePlanFile)
             }
 
             compilation.compileTaskProvider.configure { task ->
                 task.dependsOn(bridgePlanTask)
+                task.compilerOptions.freeCompilerArgs.add(
+                    bridgePlanFile.map { bridgePlan ->
+                        "-Xrust-interop-bridge-plan=${bridgePlan.asFile.absolutePath}"
+                    }
+                )
             }
         }
     }

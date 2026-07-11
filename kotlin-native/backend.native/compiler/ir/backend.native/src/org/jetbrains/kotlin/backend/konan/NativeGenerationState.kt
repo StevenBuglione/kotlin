@@ -103,6 +103,8 @@ internal class NativeGenerationState(
     val rustBoundaryLinkages = mutableMapOf<String, LLVMLinkage>()
     /** ABI captured from Kotlin declarations and normalized into the accepted Rust module. */
     var rustBoundaryAbiExpectations: List<RustBoundaryAbiExpectation> = emptyList()
+    /** Compiler-owned Rust archive and platform arguments appended at the final Native link. */
+    val rustLinkerFlags = mutableListOf<String>()
 
     val bindClassToObjCNameClassAdapters = mutableMapOf<String, ConstPointer>()
     val bindClassToObjCNameInterfaceAdapters = mutableMapOf<String, ConstPointer>()

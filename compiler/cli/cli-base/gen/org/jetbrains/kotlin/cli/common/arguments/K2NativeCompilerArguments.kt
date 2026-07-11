@@ -578,6 +578,18 @@ This library must be one of the ones passed with '-library'.""",
         }
 
     @Argument(
+        value = "-Xrust-interop-bridge-plan",
+        valueDescription = "<path>",
+        description = "Provide a canonical Rust interop bridge plan to the Kotlin/Native compiler.",
+        delimiter = Argument.Delimiters.none,
+    )
+    var rustInteropBridgePlans: Array<String> = emptyArray()
+        set(value) {
+            checkFrozen()
+            field = value
+        }
+
+    @Argument(
         value = "-Xsave-llvm-ir-after",
         description = "Save the result of the Kotlin IR to LLVM IR translation to '-Xsave-llvm-ir-directory'.",
     )

@@ -921,6 +921,19 @@ The default value is 1.""".asReleaseDependent()
     }
 
     compilerArgument {
+        name = "Xrust-interop-bridge-plan"
+        compilerName = "rustInteropBridgePlans"
+        description = "Provide a canonical Rust interop bridge plan to the Kotlin/Native compiler.".asReleaseDependent()
+        valueType = StringArrayType.defaultNull
+        valueDescription = "<path>".asReleaseDependent()
+        delimiter = KotlinCompilerArgument.Delimiter.None
+
+        lifecycle(
+            introducedVersion = KotlinReleaseVersion.v2_4_0,
+        )
+    }
+
+    compilerArgument {
         name = "Xbinary"
         compilerName = "binaryOptions"
         description = "Specify a binary option.".asReleaseDependent()

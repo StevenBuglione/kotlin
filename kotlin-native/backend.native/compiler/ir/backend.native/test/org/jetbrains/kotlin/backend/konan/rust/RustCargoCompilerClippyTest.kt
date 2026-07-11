@@ -92,7 +92,7 @@ class RustCargoCompilerClippyTest {
                 Files.write(staticLibrary, byteArrayOf(3))
             }
             if (command[1] == "rustc") {
-                "note: native-static-libs: -lgcc_s -lutil -lrt -lpthread -lm -ldl -lc\n"
+                "note: native-static-libs: -lgcc_s -lutil -lrt -lpthread -lm -ldl -lpthread -lc\n"
             } else {
                 ""
             }
@@ -114,7 +114,10 @@ class RustCargoCompilerClippyTest {
         )
         assertFalse(staleStaticLibraryPresentAtRustc, "The dependency archive must be produced by the current rustc invocation")
         assertEquals(staticLibrary, artifact.staticLibrary)
-        assertEquals(listOf("-lgcc_s", "-lutil", "-lrt", "-lpthread", "-lm", "-ldl", "-lc"), artifact.nativeStaticLibraries)
+        assertEquals(
+            listOf("-lgcc_s", "-lutil", "-lrt", "-lpthread", "-lm", "-ldl", "-lpthread", "-lc"),
+            artifact.nativeStaticLibraries,
+        )
         assertTrue(Files.isRegularFile(artifact.llvmBitcode))
     }
 

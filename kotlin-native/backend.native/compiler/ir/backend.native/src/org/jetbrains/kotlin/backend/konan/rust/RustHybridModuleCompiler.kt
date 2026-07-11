@@ -29,6 +29,7 @@ import org.jetbrains.kotlin.backend.konan.llvm.llvmtype2string
 import org.jetbrains.kotlin.backend.konan.llvm.parseBitcodeFile
 import org.jetbrains.kotlin.backend.konan.llvm.verifyModule
 import org.jetbrains.kotlin.backend.konan.nativeCodegenMode
+import org.jetbrains.kotlin.backend.konan.rustInteropBridgePlanPaths
 import org.jetbrains.kotlin.backend.konan.lower.isEagerStaticInitializer
 import org.jetbrains.kotlin.backend.konan.lower.isLazyStaticInitializer
 import org.jetbrains.kotlin.backend.konan.rust.codegen.RustIrCodegen
@@ -76,6 +77,7 @@ internal data class RustHybridModuleArtifact(
     val fallbackFunctions: List<IrSimpleFunction>,
     val abiExpectations: List<RustBoundaryAbiExpectation>,
     val needsRustEhPersonality: Boolean,
+    val linkerFlags: List<String>,
 )
 
 private data class PreparedRustBitcode(
@@ -165,11 +167,14 @@ internal fun tryCompileRustHybridModule(
     val primitiveCandidates = bodyCandidates.filter { function ->
         function.hasPrimitiveRustAbi() && function !in managedDeclarations
     }
+    val directInteropPlan = RustDirectInteropPlan.load(config.configuration.rustInteropBridgePlanPaths, config.target)
     val result = RustIrCodegen(
         symbolNamer,
         allowRustStandardIo = false,
         functionPrologue = "unsafe { Kotlin_mm_safePointFunctionPrologue(); }",
+        directInteropCallResolver = directInteropPlan,
     ).generate(irModule, primitiveCandidates, moduleFunctionScope = primitiveCandidates)
+    val directInteropDependencies = directInteropPlan.usedCargoDependencies()
     val candidateSet = primitiveCandidates.toSet()
     val generated = result.generatedFunctions.filter { it.declaration in candidateSet }
     if (generated.isEmpty() && managedResults.isEmpty() && managedFieldResults.isEmpty() && primitiveFieldReadResults.isEmpty()) return null
@@ -198,7 +203,7 @@ internal fun tryCompileRustHybridModule(
             packageName = "kotlin_native_rust_module",
             targetTriple = targetTriple,
             renderedLibraryRs = buildString {
-                appendLine("#![no_std]")
+                if (directInteropDependencies.isEmpty()) appendLine("#![no_std]")
                 append(result.source)
                 appendLine()
                 if (managedResults.isEmpty() && managedFieldResults.isEmpty() && primitiveFieldReadResults.isEmpty()) {
@@ -223,6 +228,7 @@ internal fun tryCompileRustHybridModule(
             },
             outputDirectory = workspace.toPath(),
             release = config.optimizationsEnabled,
+            dependencies = directInteropDependencies,
         )
         val generatedSymbols = generatedFunctions.associateWith(symbolNamer::linkerName)
         val fallbackSymbols = fallbackFunctions.associateWith(symbolNamer::linkerName)
@@ -241,6 +247,7 @@ internal fun tryCompileRustHybridModule(
             preparedBitcode.abiExpectations,
             needsRustEhPersonality = managedResults.isNotEmpty() || managedFieldResults.isNotEmpty() ||
                     primitiveFieldReadResults.isNotEmpty(),
+            linkerFlags = listOfNotNull(artifact.staticLibrary?.toAbsolutePath()?.toString()) + artifact.nativeStaticLibraries,
         )
     } catch (failure: Exception) {
         if (failure is InterruptedException) Thread.currentThread().interrupt()

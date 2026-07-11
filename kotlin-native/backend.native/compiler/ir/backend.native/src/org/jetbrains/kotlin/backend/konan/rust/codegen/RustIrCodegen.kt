@@ -77,6 +77,7 @@ internal class RustIrCodegen(
     private val linkerSymbolNamer: RustLinkerSymbolNamer = RustLinkerSymbolNamer(::defaultLinkerName),
     private val allowRustStandardIo: Boolean = true,
     private val functionPrologue: String? = null,
+    private val directInteropCallResolver: RustDirectInteropCallResolver = RustDirectInteropCallResolver.NONE,
 ) {
     fun generate(module: IrModuleFragment): RustCodegenResult =
         generate(module, collectTopLevelFunctions(module))
@@ -103,7 +104,7 @@ internal class RustIrCodegen(
                 false
             }
         }
-        val reachableFunctions = collectReachableFunctions(validEntries, moduleFunctions)
+        val reachableFunctions = collectReachableFunctions(validEntries, moduleFunctions, directInteropCallResolver)
             .sortedBy(::functionKey)
         val names = reachableFunctions.associateWith { function ->
             val rustName = defaultRustName(function)
@@ -123,6 +124,7 @@ internal class RustIrCodegen(
                     emptySet(),
                     allowRustStandardIo,
                     functionPrologue,
+                    directInteropCallResolver,
                 ).render()
             } catch (unsupported: UnsupportedIr) {
                 diagnostics += diagnostic(function, unsupported.element, unsupported.code, unsupported.message.orEmpty())
@@ -136,7 +138,7 @@ internal class RustIrCodegen(
         do {
             changed = false
             for (function in generatedBodies.keys.toList()) {
-                val invalidCallee = directModuleCalls(function, moduleFunctions).firstOrNull {
+                val invalidCallee = directModuleCalls(function, moduleFunctions, directInteropCallResolver).firstOrNull {
                     it !in generatedBodies && it !in fallbackFunctions
                 } ?: continue
                 generatedBodies.remove(function)
@@ -159,6 +161,7 @@ internal class RustIrCodegen(
                 fallbackFunctions,
                 allowRustStandardIo,
                 functionPrologue,
+                directInteropCallResolver,
             ).render()
         }
         val generated = finalizedBodies.keys.map { names.getValue(it) }
@@ -237,6 +240,7 @@ internal class RustIrCodegen(
         private val fallbackFunctions: Set<IrSimpleFunction>,
         private val allowRustStandardIo: Boolean,
         private val functionPrologue: String?,
+        private val directInteropCallResolver: RustDirectInteropCallResolver,
     ) {
         private val valueNames = IdentityHashMap<IrValueDeclaration, String>()
         private val loopNames = IdentityHashMap<IrLoop, String>()
@@ -486,6 +490,18 @@ internal class RustIrCodegen(
             renderPrimitiveOperator(callee, arguments, call)?.let { return it }
             primitiveCarrierArgument(call)?.let { return expression(it) }
             if (isUnitSingleton(callee)) return "()"
+            directInteropCallResolver.resolve(callee)?.let { directCall ->
+                val renderedArguments = arguments.joinToString { expression(it) }
+                return when (directCall.panicPolicy) {
+                    RustDirectInteropPanicPolicy.ABORT -> buildString {
+                        append("match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ")
+                        append(directCall.rustPath).append('(').append(renderedArguments).appendLine("))) {")
+                        appendLine("    Ok(value) => value,")
+                        appendLine("    Err(_) => std::process::abort(),")
+                        append('}')
+                    }
+                }
+            }
             if (callee in moduleFunctions) {
                 validateSignature(callee)
                 val target = functionNames[callee]
@@ -785,13 +801,14 @@ internal class RustIrCodegen(
         fun collectReachableFunctions(
             entryPoints: Set<IrSimpleFunction>,
             moduleFunctions: Set<IrSimpleFunction>,
+            directInteropCallResolver: RustDirectInteropCallResolver,
         ): Set<IrSimpleFunction> {
             val reachable = linkedSetOf<IrSimpleFunction>()
             val worklist = ArrayDeque(entryPoints.sortedBy(::functionKey))
             while (worklist.isNotEmpty()) {
                 val function = worklist.removeFirst()
                 if (!reachable.add(function)) continue
-                directModuleCalls(function, moduleFunctions)
+                directModuleCalls(function, moduleFunctions, directInteropCallResolver)
                     .filterNot { it in reachable }
                     .sortedBy(::functionKey)
                     .forEach(worklist::addLast)
@@ -802,6 +819,7 @@ internal class RustIrCodegen(
         fun directModuleCalls(
             function: IrSimpleFunction,
             moduleFunctions: Set<IrSimpleFunction>,
+            directInteropCallResolver: RustDirectInteropCallResolver,
         ): Set<IrSimpleFunction> {
             val result = linkedSetOf<IrSimpleFunction>()
             function.body?.acceptVoid(object : IrVisitorVoid() {
@@ -811,6 +829,10 @@ internal class RustIrCodegen(
 
                 override fun visitCall(expression: IrCall) {
                     val callee = expression.symbol.owner
+                    if (directInteropCallResolver.resolve(callee) != null) {
+                        expression.arguments.filterNotNull().forEach { it.acceptVoid(this) }
+                        return
+                    }
                     primitiveCarrierArgument(expression)?.let { argument ->
                         argument.acceptVoid(this)
                         return

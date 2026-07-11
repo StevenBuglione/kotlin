@@ -7,10 +7,13 @@ package org.jetbrains.kotlin.gradle.unitTests
 
 import org.gradle.api.GradleException
 import org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi
+import org.jetbrains.kotlin.gradle.plugin.KotlinCompilerArgumentsProducer.CreateCompilerArgumentsContext.Companion.lenient
 import org.jetbrains.kotlin.gradle.plugin.KotlinNativeTargetConfigurator
 import org.jetbrains.kotlin.gradle.targets.native.tasks.GenerateRustInteropBridgePlan
 import org.jetbrains.kotlin.gradle.util.MultiplatformExtensionTest
+import java.io.File
 import kotlin.test.Test
+import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
@@ -63,6 +66,54 @@ class RustInteropBridgePlanTaskTest : MultiplatformExtensionTest() {
     }
 
     @Test
+    fun `wires every canonical bridge plan into the LLVM native compiler invocation as an absolute repeatable argument`() {
+        val compilation = kotlin.linuxX64().compilations.getByName("main")
+        val interopNames = listOf("regex", "regexAlias")
+        interopNames.forEach { interopName ->
+            val definition = project.file("src/nativeInterop/rust/$interopName.rustinterop.toml")
+            definition.parentFile.mkdirs()
+            definition.writeText(REGEX_DEFINITION)
+            compilation.rustInterops.create(interopName) {
+                it.crate("regex", "1.11.1")
+                it.packageName.set("rust.regex")
+                it.definitionFile.set(definition)
+                it.features.add("unicode")
+            }
+        }
+        compilation.compileTaskProvider.configure { task ->
+            task.compilerOptions.freeCompilerArgs.add("-Xnative-codegen=llvm")
+        }
+
+        project.evaluate()
+
+        val compileTask = compilation.compileTaskProvider.get()
+        val planTasks = listOf(
+            "generateLinuxX64MainRegexRustInteropBridgePlan",
+            "generateLinuxX64MainRegexAliasRustInteropBridgePlan",
+        ).map { taskName ->
+            project.tasks.getByName(taskName) as GenerateRustInteropBridgePlan
+        }
+        val planArguments = compileTask.createCompilerArguments(lenient).freeArgs
+            .filter { it.startsWith(RUST_INTEROP_BRIDGE_PLAN_ARGUMENT_PREFIX) }
+        val expectedArguments = planTasks.map { task ->
+            RUST_INTEROP_BRIDGE_PLAN_ARGUMENT_PREFIX + task.bridgePlanFile.get().asFile.absolutePath
+        }
+
+        assertContains(compileTask.compilerOptions.freeCompilerArgs.get(), "-Xnative-codegen=llvm")
+        assertEquals(expectedArguments, planArguments)
+        assertEquals(interopNames.size, planArguments.size, "Each bridge plan must use its own repeatable argument")
+        assertTrue(
+            planArguments.all { File(it.removePrefix(RUST_INTEROP_BRIDGE_PLAN_ARGUMENT_PREFIX)).isAbsolute },
+            "Bridge plan arguments must use absolute paths: $planArguments",
+        )
+        val compileDependencies = compileTask.taskDependencies.getDependencies(compileTask)
+        assertTrue(
+            planTasks.all { it in compileDependencies },
+            "The Native compile task must depend on every bridge-plan generation task",
+        )
+    }
+
+    @Test
     fun `task rejects crate configuration that differs from canonical definition`() {
         val compilation = kotlin.linuxX64().compilations.getByName("main")
         val definition = project.file("src/nativeInterop/rust/regex.rustinterop.toml")
@@ -89,6 +140,7 @@ class RustInteropBridgePlanTaskTest : MultiplatformExtensionTest() {
 
     private companion object {
         const val TASK_NAME = "generateLinuxX64MainRegexRustInteropBridgePlan"
+        const val RUST_INTEROP_BRIDGE_PLAN_ARGUMENT_PREFIX = "-Xrust-interop-bridge-plan="
 
         val REGEX_DEFINITION = """
             schema = 1

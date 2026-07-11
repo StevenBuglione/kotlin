@@ -60,6 +60,7 @@ dependencies {
     implementation(project(":native:objcexport-header-generator"))
     implementation(project(":native:objcexport-header-generator-k1"))
     implementation(project(":native:binary-options"))
+    implementation(project(":native:rust-interop"))
     implementation(project(":compiler:cli:cli-native-klib"))
     implementation(project(":native:native.config"))
     implementation(project(":native:cinterop.deserialization"))

@@ -232,7 +232,11 @@ internal fun <C : NativeBackendPhaseContext> PhaseEngine<C>.runBackend(backendCo
                     generationStateEngine.compileModule(fragment.irModule, backendContext.irBuiltIns, bitcodeFile, cExportFiles)
                     // Split here
                     val dependenciesTrackingResult = generationStateEngine.collectAndMaybeSerializeDependencies()
-                    val moduleCompilationOutput = ModuleCompilationOutput(bitcodeFile, dependenciesTrackingResult)
+                    val moduleCompilationOutput = ModuleCompilationOutput(
+                            bitcodeFile,
+                            dependenciesTrackingResult,
+                            generationState.rustLinkerFlags.toList(),
+                    )
                     generationStateEngine.compileAndLink(
                             moduleCompilationOutput,
                             outputFiles.mainFileName,
@@ -407,6 +411,7 @@ private fun <C : NativeBackendPhaseContext> PhaseEngine<C>.runInsertEntryPointAl
 internal data class ModuleCompilationOutput(
         val bitcodeFile: java.io.File,
         val dependenciesTrackingResult: DependenciesTrackingResult,
+        val extraLinkerFlags: List<String> = emptyList(),
 )
 
 /**
@@ -476,6 +481,7 @@ internal fun <C : NativeBackendPhaseContext> PhaseEngine<C>.compileAndLink(
             outputFiles,
             temporaryFiles,
             cacheBinaries,
+            moduleCompilationOutput.extraLinkerFlags,
     )
     runAndMeasurePhase(LinkerPhase, linkerPhaseInput)
     if (context.config.produce.isCache) {
@@ -624,6 +630,10 @@ private fun PhaseEngine<NativeGenerationState>.runCodegen(module: IrModuleFragme
     }
     rustArtifact?.generatedFunctions?.forEach { function ->
         context.rustGeneratedFunctions += function
+    }
+    rustArtifact?.linkerFlags?.let { flags ->
+        check(context.rustLinkerFlags.isEmpty()) { "Rust linker flags were already installed for this Native module" }
+        context.rustLinkerFlags += flags
     }
     runAndMeasurePhase(GHAPhase, module, disable = !runGlobalOptimizations || context.config.produce.isCache)
     runAndMeasurePhase(RTTIPhase, RTTIInput(module, dceResult))
