@@ -66,6 +66,7 @@ internal enum class IntrinsicType {
     IMMUTABLE_BLOB,
     INIT_INSTANCE,
     IS_EXPERIMENTAL_MM,
+    IS_SHARED_HEAP,
     THE_UNIT_INSTANCE,
     // Enums
     ENUM_VALUES,
@@ -253,6 +254,7 @@ internal class IntrinsicGenerator(private val environment: IntrinsicGeneratorEnv
                 IntrinsicType.IDENTITY -> emitIdentity(args)
                 IntrinsicType.INTEROP_MEMORY_COPY -> emitMemoryCopy(callSite, args)
                 IntrinsicType.IS_EXPERIMENTAL_MM -> emitIsExperimentalMM()
+                IntrinsicType.IS_SHARED_HEAP -> emitIsSharedHeap()
                 IntrinsicType.THE_UNIT_INSTANCE -> theUnitInstanceRef.llvm
                 IntrinsicType.COMPARE_AND_SET -> emitCompareAndSet(callSite, args)
                 IntrinsicType.COMPARE_AND_EXCHANGE -> emitCompareAndSwap(callSite, args, resultSlot)
@@ -311,6 +313,9 @@ internal class IntrinsicGenerator(private val environment: IntrinsicGeneratorEnv
 
     private fun FunctionGenerationContext.emitIsExperimentalMM(): LLVMValueRef =
             llvm.int1(context.memoryModel == MemoryModel.EXPERIMENTAL)
+
+    private fun FunctionGenerationContext.emitIsSharedHeap(): LLVMValueRef =
+            llvm.int1(context.memoryModel.usesSharedHeap)
 
     // cmpxcgh llvm instruction return pair. idnex is index of required element of this pair
     enum class CmpExchangeMode(val index:Int) {

@@ -62,22 +62,9 @@ private fun AbstractNativeSimpleTest.assertFails(name: String, source: String, e
     }
 }
 
-private fun AbstractNativeSimpleTest.compileAndRunMemoryModelCheck() {
+private fun AbstractNativeSimpleTest.compileAndRun(name: String, source: String) {
     assumeLinuxHost()
-    val sourceFile = writeSource(
-        "memoryModelApi",
-        """
-        import kotlin.experimental.ExperimentalNativeApi
-        import kotlin.native.MemoryModel
-        import kotlin.native.Platform
-
-        @OptIn(ExperimentalNativeApi::class)
-        fun main() {
-            check(MemoryModel.ARC.ordinal == 3)
-            check(Platform.memoryModel == MemoryModel.ARC)
-        }
-        """
-    )
+    val sourceFile = writeSource(name, source)
     val testCase = generateTestCaseWithSingleFile(
         sourceFile,
         TestCompilerArgs.EMPTY,
@@ -87,6 +74,21 @@ private fun AbstractNativeSimpleTest.compileAndRunMemoryModelCheck() {
     val success = compileToExecutable(testCase, tryPassSystemCacheDirectory = false).assertSuccess()
     runExecutableAndVerify(testCase, TestExecutable.fromCompilationResult(testCase, success))
 }
+
+private fun AbstractNativeSimpleTest.compileAndRunMemoryModelCheck() = compileAndRun(
+    "memoryModelApi",
+    """
+    import kotlin.experimental.ExperimentalNativeApi
+    import kotlin.native.MemoryModel
+    import kotlin.native.Platform
+
+    @OptIn(ExperimentalNativeApi::class)
+    fun main() {
+        check(MemoryModel.ARC.ordinal == 3)
+        check(Platform.memoryModel == MemoryModel.ARC)
+    }
+    """
+)
 
 @Tag("arc")
 @EnforcedHostTarget
@@ -102,6 +104,44 @@ class ArcDefaultMemoryModelTest : AbstractNativeSimpleTest() {
 class ArcExplicitMemoryModelTest : AbstractNativeSimpleTest() {
     @Test
     fun explicitArcExposesRuntimeApiAndStableOrdinal() = compileAndRunMemoryModelCheck()
+
+    @Test
+    fun sharedHeapLazyAndDisabledFreezingSemantics() {
+        compileAndRun(
+            "sharedHeapSemantics",
+            """
+            import kotlin.native.concurrent.ensureNeverFrozen
+            import kotlin.native.concurrent.freeze
+            import kotlin.native.concurrent.isFrozen
+
+            private class Mutable(var value: Int)
+
+            fun main() {
+                var defaultInitializations = 0
+                val defaultLazy = lazy { ++defaultInitializations }
+                check(defaultLazy.value == 1)
+                check(defaultLazy.value == 1)
+                check(defaultInitializations == 1)
+
+                for (mode in listOf(LazyThreadSafetyMode.SYNCHRONIZED, LazyThreadSafetyMode.PUBLICATION)) {
+                    var initializations = 0
+                    val value = lazy(mode) { ++initializations }
+                    check(value.value == 1)
+                    check(value.value == 1)
+                    check(initializations == 1)
+                }
+
+                val mutable = Mutable(1)
+                mutable.ensureNeverFrozen()
+                check(!mutable.isFrozen)
+                check(mutable.freeze() === mutable)
+                check(!mutable.isFrozen)
+                mutable.value = 2
+                check(mutable.value == 2)
+            }
+            """
+        )
+    }
 
     @Test
     fun weakAndUnownedPropertiesFieldsAndLocalsCompile() {

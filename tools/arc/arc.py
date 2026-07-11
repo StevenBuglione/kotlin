@@ -29,7 +29,10 @@ EXCLUDED_PATHS = (
     "wasm/wasm.debug.browsers",
     "tools/arc/__pycache__",
 )
-PROFILES = ("dist", "runtime", "sanity", "full", "arc-smoke", "arc-stress", "arc-sanitize", "arc-bench")
+PROFILES = (
+    "dist", "runtime", "sanity", "full", "arc-smoke", "arc-stress", "arc-race", "arc-race-tsan",
+    "arc-sanitize", "arc-bench",
+)
 
 
 def run(
@@ -165,7 +168,7 @@ def tasks_from_environment(name: str, defaults: list[str]) -> list[str]:
 def profile_command(profile: str) -> list[str]:
     gradle = ["./gradlew", "-Pkotlin.native.enabled=true", f"--max-workers={workers()}", "--no-daemon"]
     profiles = {
-        "dist": ("ARC_DIST_TASKS", [":kotlin-native:dist"]),
+        "dist": ("ARC_DIST_TASKS", [":kotlin-native:dist", ":kotlin-native:distPlatformLibs"]),
         "runtime": ("ARC_RUNTIME_TASKS", [":kotlin-native:runtime:hostRuntimeTests"]),
         "sanity": ("ARC_SANITY_TASKS", [":kotlin-native:backend.native:tests:sanity"]),
         "full": ("ARC_FULL_TASKS", [":kotlin-native:backend.native:tests:run"]),
@@ -179,6 +182,23 @@ def profile_command(profile: str) -> list[str]:
     if profile == "arc-stress":
         override = os.environ.get("ARC_STRESS_TASKS")
         return gradle + shlex.split(override) if override else ["bash", "tools/arc/run_fixture.sh", "stress"]
+    if profile == "arc-race":
+        override = os.environ.get("ARC_RACE_TASKS")
+        return gradle + shlex.split(override) if override else ["bash", "tools/arc/run_fixture.sh", "race"]
+    if profile == "arc-race-tsan":
+        override = os.environ.get("ARC_RACE_TSAN_TASKS")
+        if override:
+            return gradle + shlex.split(override)
+        sanitizer = setting("ARC_RACE_SANITIZER", "thread")
+        tsan_options = setting("ARC_TSAN_OPTIONS", "halt_on_error=1:history_size=7:second_deadlock_stack=1")
+        return [
+            "env",
+            f"ARC_FIXTURE_SANITIZER={sanitizer}",
+            f"TSAN_OPTIONS={tsan_options}",
+            "bash",
+            "tools/arc/run_fixture.sh",
+            "race",
+        ]
     if profile == "arc-sanitize":
         sanitizer = setting("ARC_SANITIZER", "address")
         return gradle + [f"-Psanitizer={sanitizer}"] + tasks_from_environment(

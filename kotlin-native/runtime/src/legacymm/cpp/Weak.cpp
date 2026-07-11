@@ -18,6 +18,9 @@
 
 #include "Memory.h"
 #include "Types.h"
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+#include "MemoryPrivate.hpp"
+#endif
 
 namespace {
 
@@ -85,11 +88,28 @@ OBJ_GETTER(Konan_RegularWeakReferenceImpl_get, ObjHeader* counter) {
 // Materialize a weak reference to either null or the real reference.
 OBJ_GETTER(Konan_WeakReferenceCounterLegacyMM_get, ObjHeader* counter) {
   ObjHeader** referredAddress = &asWeakReferenceCounter(counter)->referred;
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+  ObjHeader* referred = nullptr;
+#if KONAN_NO_THREADS
+  referred = *referredAddress;
+  if (referred != nullptr && !TryAddHeapRef(referred)) referred = nullptr;
+#else
+  auto* weakCounter = asWeakReferenceCounter(counter);
+  lock(&weakCounter->lock);
+  referred = *referredAddress;
+  if (referred != nullptr && !TryAddHeapRef(referred)) referred = nullptr;
+  unlock(&weakCounter->lock);
+#endif
+  // Successful promotion already owns +1. Move it to the result slot without retaining again.
+  MoveReferenceIntoReturnSlotArc(OBJ_RESULT, referred);
+  return referred;
+#else
 #if KONAN_NO_THREADS
   RETURN_OBJ(*referredAddress);
 #else
   auto* weakCounter = asWeakReferenceCounter(counter);
   RETURN_RESULT_OF(ReadHeapRefLocked, referredAddress,  &weakCounter->lock,  &weakCounter->cookie);
+#endif
 #endif
 }
 

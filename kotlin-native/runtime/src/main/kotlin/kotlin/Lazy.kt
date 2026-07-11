@@ -8,7 +8,7 @@ package kotlin
 import kotlin.native.concurrent.*
 import kotlin.native.internal.FixmeConcurrency
 import kotlin.reflect.KProperty
-import kotlin.native.isExperimentalMM
+import kotlin.native.isSharedHeap
 
 /**
  * Creates a new instance of the [Lazy] that uses the specified initialization function [initializer]
@@ -21,7 +21,7 @@ import kotlin.native.isExperimentalMM
  */
 @OptIn(kotlin.ExperimentalStdlibApi::class, FreezingIsDeprecated::class)
 public actual fun <T> lazy(initializer: () -> T): Lazy<T> =
-        if (isExperimentalMM())
+        if (isSharedHeap())
             SynchronizedLazyImpl(initializer)
         else
             FreezeAwareLazyImpl(initializer)
@@ -41,8 +41,8 @@ public actual fun <T> lazy(initializer: () -> T): Lazy<T> =
 @OptIn(kotlin.ExperimentalStdlibApi::class, FreezingIsDeprecated::class)
 public actual fun <T> lazy(mode: LazyThreadSafetyMode, initializer: () -> T): Lazy<T> =
         when (mode) {
-            LazyThreadSafetyMode.SYNCHRONIZED -> if (isExperimentalMM()) SynchronizedLazyImpl(initializer) else throw UnsupportedOperationException()
-            LazyThreadSafetyMode.PUBLICATION -> if (isExperimentalMM()) SafePublicationLazyImpl(initializer) else FreezeAwareLazyImpl(initializer)
+            LazyThreadSafetyMode.SYNCHRONIZED -> if (isSharedHeap()) SynchronizedLazyImpl(initializer) else throw UnsupportedOperationException()
+            LazyThreadSafetyMode.PUBLICATION -> if (isSharedHeap()) SafePublicationLazyImpl(initializer) else FreezeAwareLazyImpl(initializer)
             LazyThreadSafetyMode.NONE -> UnsafeLazyImpl(initializer)
         }
 

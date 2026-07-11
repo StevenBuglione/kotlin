@@ -1270,7 +1270,8 @@ KBoolean Kotlin_Worker_isFrozenInternal(KRef object) {
 }
 
 void Kotlin_Worker_ensureNeverFrozen(KRef object) {
-  EnsureNeverFrozen(object);
+  if (compiler::freezingEnabled())
+    EnsureNeverFrozen(object);
 }
 
 void Kotlin_Worker_waitTermination(KInt id) {

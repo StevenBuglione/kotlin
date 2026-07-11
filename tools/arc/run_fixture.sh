@@ -3,8 +3,8 @@ set -euo pipefail
 
 profile=${1:-}
 case "$profile" in
-    smoke|stress) ;;
-    *) echo "usage: $0 smoke|stress" >&2; exit 2 ;;
+    smoke|stress|race) ;;
+    *) echo "usage: $0 smoke|stress|race" >&2; exit 2 ;;
 esac
 
 root=$(git rev-parse --show-toplevel)
@@ -15,6 +15,7 @@ source="$root/tools/arc/fixtures/$profile.kt"
 artifacts="$state/artifacts"
 output="$artifacts/arc-$profile"
 executable="$output.kexe"
+compiler_log="$artifacts/compiler.log"
 
 [[ -x "$compiler" ]] || {
     echo "ARC fixture requires a built Kotlin/Native distribution at $dist; run remote-dist first" >&2
@@ -23,9 +24,19 @@ executable="$output.kexe"
 [[ -f "$source" ]] || { echo "missing ARC fixture: $source" >&2; exit 1; }
 
 mkdir -p "$artifacts"
-rm -f "$output" "$executable" "$artifacts/max-rss-kib"
+rm -f "$output" "$executable" "$artifacts/max-rss-kib" "$compiler_log"
 
-"$compiler" "$source" -target linux_x64 -memory-model arc -o "$output"
+compiler_args=("$source" -target linux_x64 -memory-model arc -o "$output")
+if [[ -n "${ARC_FIXTURE_SANITIZER:-}" ]]; then
+    compiler_args+=("-Xbinary=sanitizer=$ARC_FIXTURE_SANITIZER")
+    echo "ARC_FIXTURE_SANITIZER=$ARC_FIXTURE_SANITIZER"
+fi
+"$compiler" "${compiler_args[@]}" 2>&1 | tee "$compiler_log"
+if [[ -n "${ARC_FIXTURE_SANITIZER:-}" ]] &&
+        grep -Eiq 'sanitizer is unsupported|sanitizer is not supported' "$compiler_log"; then
+    echo "requested $ARC_FIXTURE_SANITIZER sanitizer was not enabled by the Kotlin/Native compiler" >&2
+    exit 1
+fi
 if [[ ! -x "$executable" && -x "$output" ]]; then
     executable=$output
 fi

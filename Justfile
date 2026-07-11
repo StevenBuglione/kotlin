@@ -30,6 +30,12 @@ remote-arc-smoke: remote-snapshot
 remote-arc-stress: remote-snapshot
     {{python}} tools/arc/arc.py run arc-stress
 
+remote-arc-race: remote-snapshot
+    {{python}} tools/arc/arc.py run arc-race
+
+remote-arc-race-tsan: remote-snapshot
+    {{python}} tools/arc/arc.py run arc-race-tsan
+
 remote-arc-sanitize: remote-snapshot
     {{python}} tools/arc/arc.py run arc-sanitize
 

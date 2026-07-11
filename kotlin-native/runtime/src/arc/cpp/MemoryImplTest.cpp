@@ -6,12 +6,16 @@
 #include "Memory.h"
 
 #include <atomic>
+#include <thread>
+#include <vector>
 
 #include "FinalizerHooks.hpp"
 #include "gtest/gtest.h"
+#include "MemorySharedRefs.hpp"
 #include "ObjectTestSupport.hpp"
 #include "PointerBits.h"
 #include "TestSupport.hpp"
+#include "MemoryPrivate.hpp"
 
 #if !defined(KONAN_ARC_MEMORY_MANAGER) || KONAN_ARC_MEMORY_MANAGER != 1
 #error "ARC runtime tests must use the dedicated ARC compile-time configuration"
@@ -22,6 +26,19 @@ TEST(ArcMemoryModelTest, HasDedicatedRuntimeIdentity) {
     EXPECT_NE(CurrentMemoryModel, MemoryModel::kStrict);
     EXPECT_NE(CurrentMemoryModel, MemoryModel::kRelaxed);
     EXPECT_NE(CurrentMemoryModel, MemoryModel::kExperimental);
+}
+
+TEST(ArcReferenceCountStateTest, FinalReleaseAtomicallyEntersPermanentDeallocatingState) {
+    ContainerHeader header{};
+    header.setRefCount(1);
+    EXPECT_EQ(header.decRefCount<true>(), 0);
+    EXPECT_TRUE(header.arcDeallocating());
+    EXPECT_FALSE(header.tryIncRefCount<true>());
+}
+
+TEST(ArcReferenceCountStateDeathTest, GeneralRetainCannotCreateInitialOwnership) {
+    ContainerHeader header{};
+    EXPECT_DEATH(header.incRefCount<true>(), "Attempted to retain a zero-count or deallocating ARC object");
 }
 
 namespace {
@@ -35,8 +52,16 @@ struct NodePayload {
     static constexpr std::array<ObjHeader* NodePayload::*, 1> kFields{&NodePayload::next};
 };
 
+struct WeakCounterPayload {
+    ObjHeader* referred = nullptr;
+    KInt lock = 0;
+    KInt cookie = 0;
+    static constexpr std::array<ObjHeader* WeakCounterPayload::*, 0> kFields{};
+};
+
 using Object = kotlin::test_support::Object<Payload>;
 using Node = kotlin::test_support::Object<NodePayload>;
+using WeakCounter = kotlin::test_support::Object<WeakCounterPayload>;
 
 struct FrameStorage {
     FrameOverlay overlay{};
@@ -55,7 +80,15 @@ kotlin::test_support::TypeInfoHolder permanentTypeInfo{
 Object permanentObject(permanentTypeInfo.typeInfo());
 kotlin::test_support::TypeInfoHolder nodeTypeInfo{
         kotlin::test_support::TypeInfoHolder::ObjectBuilder<NodePayload>().addFlag(TF_HAS_FINALIZER)};
+kotlin::test_support::TypeInfoHolder weakCounterTypeInfo{
+        kotlin::test_support::TypeInfoHolder::ObjectBuilder<WeakCounterPayload>()};
 std::atomic<int> finalizedNodes = 0;
+std::atomic<bool> finalizerSawRegisteredRuntime = false;
+std::atomic<bool> resurrectionRejected = false;
+std::atomic<bool> weakWasZeroBeforeFinalizer = false;
+std::atomic<ObjHeader*> weakCounterForFinalizer = nullptr;
+
+extern "C" OBJ_GETTER(Konan_WeakReferenceCounterLegacyMM_get, ObjHeader* counter);
 
 ObjHeader* permanentHeader() {
     permanentObject.header()->typeInfoOrMeta_ =
@@ -64,21 +97,43 @@ ObjHeader* permanentHeader() {
 }
 
 void countNodeFinalizer(ObjHeader* object) {
-    if (object->type_info() == nodeTypeInfo.typeInfo()) finalizedNodes.fetch_add(1, std::memory_order_relaxed);
+    if (object->type_info() != nodeTypeInfo.typeInfo()) return;
+    finalizedNodes.fetch_add(1, std::memory_order_relaxed);
+    finalizerSawRegisteredRuntime.store(kotlin::mm::IsCurrentThreadRegistered(), std::memory_order_relaxed);
+    resurrectionRejected.store(!TryAddHeapRef(object), std::memory_order_relaxed);
+    if (ObjHeader* counter = weakCounterForFinalizer.load(std::memory_order_relaxed)) {
+        ObjHeader* promoted = nullptr;
+        Konan_WeakReferenceCounterLegacyMM_get(counter, &promoted);
+        weakWasZeroBeforeFinalizer.store(promoted == nullptr, std::memory_order_relaxed);
+        if (promoted != nullptr) ReleaseHeapRef(promoted);
+    }
 }
 
 class ScopedNodeFinalizerHook {
 public:
     ScopedNodeFinalizerHook() {
         finalizedNodes.store(0, std::memory_order_relaxed);
+        finalizerSawRegisteredRuntime.store(false, std::memory_order_relaxed);
+        resurrectionRejected.store(false, std::memory_order_relaxed);
+        weakWasZeroBeforeFinalizer.store(false, std::memory_order_relaxed);
+        weakCounterForFinalizer.store(nullptr, std::memory_order_relaxed);
         kotlin::SetFinalizerHookForTesting(countNodeFinalizer);
     }
 
-    ~ScopedNodeFinalizerHook() { kotlin::SetFinalizerHookForTesting(nullptr); }
+    ~ScopedNodeFinalizerHook() {
+        kotlin::SetFinalizerHookForTesting(nullptr);
+        weakCounterForFinalizer.store(nullptr, std::memory_order_relaxed);
+    }
 };
 
 ObjHeader** nextSlot(ObjHeader* node) {
     return &Node::FromObjHeader(node)->next;
+}
+
+void installWeakCounter(ObjHeader* object, ObjHeader* counter) {
+    WeakCounter::FromObjHeader(counter)->referred = object;
+    MetaObjHeader* meta = object->meta_object();
+    UpdateHeapRef(&meta->WeakReference.counter_, counter);
 }
 
 } // namespace
@@ -172,6 +227,104 @@ TEST(ArcDestructionTest, NewAllocationMovesInitialOwnershipIntoResultSlot) {
 
         result.clear();
         EXPECT_EQ(finalizedNodes.load(std::memory_order_relaxed), 2);
+    });
+}
+
+TEST(ArcForeignReferenceTest, FinalReleaseOnInitiallyUnregisteredThreadRegistersRuntimeBeforeFinalization) {
+    ScopedNodeFinalizerHook finalizers;
+    kotlin::RunInNewThread([] {
+        ObjHolder object;
+        ObjHeader* allocatedObject = AllocInstance(nodeTypeInfo.typeInfo(), object.slot());
+        KRefSharedHolder holder;
+        holder.init(allocatedObject);
+        object.clear();
+
+        std::atomic<bool> initiallyRegistered = true;
+        std::atomic<bool> registeredAfterDispose = false;
+        std::thread foreignThread([&] {
+            initiallyRegistered.store(kotlin::mm::IsCurrentThreadRegistered(), std::memory_order_relaxed);
+            holder.dispose();
+            registeredAfterDispose.store(kotlin::mm::IsCurrentThreadRegistered(), std::memory_order_relaxed);
+        });
+        foreignThread.join();
+
+        EXPECT_FALSE(initiallyRegistered.load(std::memory_order_relaxed));
+        EXPECT_TRUE(registeredAfterDispose.load(std::memory_order_relaxed));
+        EXPECT_TRUE(finalizerSawRegisteredRuntime.load(std::memory_order_relaxed));
+        EXPECT_EQ(finalizedNodes.load(std::memory_order_relaxed), 1);
+    });
+}
+
+TEST(ArcMemoryModelTest, OrdinaryHeapObjectsAreShareableForCleanerEligibility) {
+    kotlin::RunInNewThread([] {
+        ObjHolder object;
+        ObjHeader* allocatedObject = AllocInstance(permanentTypeInfo.typeInfo(), object.slot());
+        EXPECT_TRUE(Kotlin_Any_isShareable(allocatedObject));
+    });
+}
+
+TEST(ArcDestructionTest, WeakTargetIsZeroBeforeFinalizerAndCannotResurrect) {
+    ScopedNodeFinalizerHook finalizers;
+    kotlin::RunInNewThread([] {
+        ObjHolder object;
+        ObjHolder counter;
+        ObjHeader* allocatedObject = AllocInstance(nodeTypeInfo.typeInfo(), object.slot());
+        ObjHeader* allocatedCounter = AllocInstance(weakCounterTypeInfo.typeInfo(), counter.slot());
+        installWeakCounter(allocatedObject, allocatedCounter);
+        weakCounterForFinalizer.store(allocatedCounter, std::memory_order_relaxed);
+
+        object.clear();
+
+        EXPECT_EQ(finalizedNodes.load(std::memory_order_relaxed), 1);
+        EXPECT_TRUE(resurrectionRejected.load(std::memory_order_relaxed));
+        EXPECT_TRUE(weakWasZeroBeforeFinalizer.load(std::memory_order_relaxed));
+        EXPECT_EQ(WeakCounter::FromObjHeader(allocatedCounter)->referred, nullptr);
+    });
+}
+
+TEST(ArcDestructionTest, WeakPromotionRacesFinalReleaseWithoutResurrection) {
+    ScopedNodeFinalizerHook finalizers;
+    kotlin::RunInNewThread([] {
+        ObjHolder object;
+        ObjHolder counter;
+        ObjHeader* allocatedObject = AllocInstance(nodeTypeInfo.typeInfo(), object.slot());
+        ObjHeader* allocatedCounter = AllocInstance(weakCounterTypeInfo.typeInfo(), counter.slot());
+        installWeakCounter(allocatedObject, allocatedCounter);
+
+        std::atomic<bool> start = false;
+        std::atomic<bool> stop = false;
+        std::atomic<int> successfulPromotions = 0;
+        std::vector<std::thread> workers;
+        for (int worker = 0; worker < 4; ++worker) {
+            workers.emplace_back([&] {
+                kotlin::RunInNewThread([&] {
+                    while (!start.load(std::memory_order_acquire)) {
+                    }
+                    while (!stop.load(std::memory_order_acquire)) {
+                        ObjHeader* promoted = nullptr;
+                        Konan_WeakReferenceCounterLegacyMM_get(allocatedCounter, &promoted);
+                        if (promoted != nullptr) {
+                            successfulPromotions.fetch_add(1, std::memory_order_relaxed);
+                            ReleaseHeapRef(promoted);
+                        }
+                    }
+                });
+            });
+        }
+
+        start.store(true, std::memory_order_release);
+        while (successfulPromotions.load(std::memory_order_relaxed) < 100) {
+            std::this_thread::yield();
+        }
+        object.clear();
+        stop.store(true, std::memory_order_release);
+        for (auto& worker : workers) worker.join();
+
+        ObjHeader* promoted = nullptr;
+        Konan_WeakReferenceCounterLegacyMM_get(allocatedCounter, &promoted);
+        EXPECT_EQ(promoted, nullptr);
+        EXPECT_EQ(finalizedNodes.load(std::memory_order_relaxed), 1);
+        EXPECT_TRUE(resurrectionRejected.load(std::memory_order_relaxed));
     });
 }
 

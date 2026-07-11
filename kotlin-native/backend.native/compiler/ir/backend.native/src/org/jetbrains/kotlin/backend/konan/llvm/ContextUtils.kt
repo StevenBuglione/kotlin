@@ -477,6 +477,7 @@ internal class CodegenLlvmHelpers(private val generationState: NativeGenerationS
     val Kotlin_processEmptyObjectInMark by lazyRtFunction
 
     val UpdateVolatileHeapRef by lazyRtFunction
+    val ReadVolatileHeapRef by lazyRtFunction
     val CompareAndSetVolatileHeapRef by lazyRtFunction
     val CompareAndSwapVolatileHeapRef by lazyRtFunction
     val GetAndSetVolatileHeapRef by lazyRtFunction

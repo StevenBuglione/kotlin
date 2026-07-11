@@ -68,6 +68,11 @@ typedef enum {
   CONTAINER_TAG_GC_HAS_OBJECT_COUNT = 1 << (CONTAINER_TAG_COLOR_SHIFT + 3)
 } ContainerTag;
 
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+static constexpr uint32_t CONTAINER_TAG_ARC_DEALLOCATING = uint32_t{1} << 31;
+static constexpr uint32_t CONTAINER_TAG_ARC_REFCOUNT_MASK = ~CONTAINER_TAG_ARC_DEALLOCATING;
+#endif
+
 // Header of all container objects. Contains reference counter.
 struct ContainerHeader {
   // Reference counter of container. Uses CONTAINER_TAG_SHIFT, lower bits of counter
@@ -105,15 +110,53 @@ struct ContainerHeader {
   }
 
   inline int refCount() const {
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+    return static_cast<int>(refCount_ & CONTAINER_TAG_ARC_REFCOUNT_MASK) >> CONTAINER_TAG_SHIFT;
+#else
     return (int)refCount_ >> CONTAINER_TAG_SHIFT;
+#endif
   }
 
   inline void setRefCount(unsigned refCount) {
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+    RuntimeCheck((refCount_ & CONTAINER_TAG_ARC_DEALLOCATING) == 0, "Cannot reset a deallocating ARC object");
+    RuntimeCheck(refCount <= (CONTAINER_TAG_ARC_REFCOUNT_MASK >> CONTAINER_TAG_SHIFT), "ARC reference count overflow");
+#endif
     refCount_ = tag() | (refCount << CONTAINER_TAG_SHIFT);
   }
 
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+  inline bool arcDeallocating() const {
+    return (__atomic_load_n(&refCount_, __ATOMIC_ACQUIRE) & CONTAINER_TAG_ARC_DEALLOCATING) != 0;
+  }
+#endif
+
   template <bool Atomic>
   inline void incRefCount() {
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+    if (Atomic) {
+      while (true) {
+        uint32_t current = __atomic_load_n(&refCount_, __ATOMIC_ACQUIRE);
+        uint32_t count = (current & CONTAINER_TAG_ARC_REFCOUNT_MASK) >> CONTAINER_TAG_SHIFT;
+        if ((current & CONTAINER_TAG_ARC_DEALLOCATING) != 0 || count == 0) {
+          RuntimeFail("Attempted to retain a zero-count or deallocating ARC object");
+        }
+        if (count == (CONTAINER_TAG_ARC_REFCOUNT_MASK >> CONTAINER_TAG_SHIFT)) {
+          RuntimeFail("ARC reference count overflow");
+        }
+        uint32_t desired = current + CONTAINER_TAG_INCREMENT;
+        if (__atomic_compare_exchange_n(&refCount_, &current, desired, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return;
+      }
+    } else {
+      if ((refCount_ & CONTAINER_TAG_ARC_DEALLOCATING) != 0 || refCount() == 0) {
+        RuntimeFail("Attempted to retain a zero-count or deallocating ARC object");
+      }
+      if (refCount() == static_cast<int>(CONTAINER_TAG_ARC_REFCOUNT_MASK >> CONTAINER_TAG_SHIFT)) {
+        RuntimeFail("ARC reference count overflow");
+      }
+      refCount_ += CONTAINER_TAG_INCREMENT;
+    }
+#else
 #ifdef KONAN_NO_THREADS
     refCount_ += CONTAINER_TAG_INCREMENT;
 #else
@@ -122,10 +165,31 @@ struct ContainerHeader {
     else
       refCount_ += CONTAINER_TAG_INCREMENT;
 #endif
+#endif
   }
 
   template <bool Atomic>
   inline bool tryIncRefCount() {
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+    if (Atomic) {
+      while (true) {
+        uint32_t current = __atomic_load_n(&refCount_, __ATOMIC_ACQUIRE);
+        uint32_t count = (current & CONTAINER_TAG_ARC_REFCOUNT_MASK) >> CONTAINER_TAG_SHIFT;
+        if ((current & CONTAINER_TAG_ARC_DEALLOCATING) != 0 || count == 0) return false;
+        if (count == (CONTAINER_TAG_ARC_REFCOUNT_MASK >> CONTAINER_TAG_SHIFT)) {
+          RuntimeFail("ARC reference count overflow");
+        }
+        uint32_t desired = current + CONTAINER_TAG_INCREMENT;
+        if (__atomic_compare_exchange_n(&refCount_, &current, desired, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+          return true;
+        }
+      }
+    } else {
+      if ((refCount_ & CONTAINER_TAG_ARC_DEALLOCATING) != 0 || refCount() == 0) return false;
+      incRefCount</* Atomic = */ false>();
+      return true;
+    }
+#else
     if (Atomic) {
       while (true) {
         uint32_t currentRefCount_ = refCount_;
@@ -148,10 +212,38 @@ struct ContainerHeader {
         return false;
       }
     }
+#endif
   }
 
   template <bool Atomic>
   inline int decRefCount() {
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+    if (Atomic) {
+      while (true) {
+        uint32_t current = __atomic_load_n(&refCount_, __ATOMIC_ACQUIRE);
+        uint32_t count = (current & CONTAINER_TAG_ARC_REFCOUNT_MASK) >> CONTAINER_TAG_SHIFT;
+        if ((current & CONTAINER_TAG_ARC_DEALLOCATING) != 0 || count == 0) {
+          RuntimeFail("Attempted to release a zero-count or deallocating ARC object");
+        }
+        uint32_t desired = count == 1
+                ? ((current - CONTAINER_TAG_INCREMENT) | CONTAINER_TAG_ARC_DEALLOCATING)
+                : current - CONTAINER_TAG_INCREMENT;
+        if (__atomic_compare_exchange_n(&refCount_, &current, desired, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+          return static_cast<int>(count - 1);
+        }
+      }
+    } else {
+      if ((refCount_ & CONTAINER_TAG_ARC_DEALLOCATING) != 0 || refCount() == 0) {
+        RuntimeFail("Attempted to release a zero-count or deallocating ARC object");
+      }
+      if (refCount() == 1) {
+        refCount_ = (refCount_ - CONTAINER_TAG_INCREMENT) | CONTAINER_TAG_ARC_DEALLOCATING;
+        return 0;
+      }
+      refCount_ -= CONTAINER_TAG_INCREMENT;
+      return refCount();
+    }
+#else
 #ifdef KONAN_NO_THREADS
     int value = refCount_ -= CONTAINER_TAG_INCREMENT;
 #else
@@ -159,6 +251,7 @@ struct ContainerHeader {
        __sync_sub_and_fetch(&refCount_, CONTAINER_TAG_INCREMENT) : refCount_ -= CONTAINER_TAG_INCREMENT;
 #endif
     return value >> CONTAINER_TAG_SHIFT;
+#endif
   }
 
   inline int decRefCount() {
@@ -327,6 +420,7 @@ MODEL_VARIANTS(void, SetCurrentFrame, ObjHeader** start);
 void EnterFrameArc(ObjHeader** start, int parameters, int count) RUNTIME_NOTHROW;
 void LeaveFrameArc(ObjHeader** start, int parameters, int count) RUNTIME_NOTHROW;
 void SetCurrentFrameArc(ObjHeader** start) RUNTIME_NOTHROW;
+void MoveReferenceIntoReturnSlotArc(ObjHeader** returnSlot, ObjHeader* object) RUNTIME_NOTHROW;
 #endif
 
 void ReleaseHeapRef(const ObjHeader* object) RUNTIME_NOTHROW;

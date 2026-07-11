@@ -1694,6 +1694,15 @@ internal class CodeGeneratorVisitor(
                 alignment = generationState.llvmDeclarations.forStaticField(value.symbol.owner).alignment
             }
         }
+        if (context.memoryModel == MemoryModel.ARC &&
+                order != null && value.type.binaryTypeIsReference()) {
+            return functionGenerationContext.call(
+                    llvm.ReadVolatileHeapRef,
+                    listOf(fieldAddress),
+                    resultLifetime(value),
+                    resultSlot = resultSlot,
+            )
+        }
         return functionGenerationContext.loadSlot(
                 fieldAddress, !value.symbol.owner.isFinal, resultSlot,
                 memoryOrder = order,

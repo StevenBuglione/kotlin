@@ -11,6 +11,12 @@ import arc
 
 
 class ArcProfileTest(unittest.TestCase):
+    def test_distribution_includes_linux_platform_libraries(self):
+        with patch.dict(os.environ, {}, clear=True):
+            command = arc.profile_command("dist")
+        self.assertIn(":kotlin-native:dist", command)
+        self.assertIn(":kotlin-native:distPlatformLibs", command)
+
     def test_smoke_uses_distribution_fixture(self):
         with patch.dict(os.environ, {}, clear=True):
             command = arc.profile_command("arc-smoke")
@@ -21,6 +27,18 @@ class ArcProfileTest(unittest.TestCase):
             command = arc.profile_command("arc-stress")
         self.assertIn(":custom:arcStress", command)
         self.assertIn("--max-workers=28", command)
+
+    def test_race_tsan_uses_thread_sanitizer_without_changing_general_sanitize(self):
+        with patch.dict(os.environ, {}, clear=True):
+            command = arc.profile_command("arc-race-tsan")
+        self.assertIn("ARC_FIXTURE_SANITIZER=thread", command)
+        self.assertTrue(any(value.startswith("TSAN_OPTIONS=halt_on_error=1") for value in command))
+        self.assertEqual("race", command[-1])
+
+    def test_fixture_rejects_ignored_sanitizer_requests(self):
+        script = (Path(__file__).parent / "run_fixture.sh").read_text()
+        self.assertIn("sanitizer was not enabled", script)
+        self.assertIn("sanitizer is unsupported", script)
 
     def test_sanitizer_is_configurable(self):
         with patch.dict(os.environ, {"ARC_SANITIZER": "thread"}, clear=True):

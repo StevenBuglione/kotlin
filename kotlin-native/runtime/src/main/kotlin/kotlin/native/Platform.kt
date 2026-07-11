@@ -188,3 +188,7 @@ private external fun Platform_getAvailableProcessors(): Int
 @TypedIntrinsic(IntrinsicType.IS_EXPERIMENTAL_MM)
 @ExperimentalStdlibApi
 external fun isExperimentalMM(): Boolean
+
+@TypedIntrinsic(IntrinsicType.IS_SHARED_HEAP)
+@ExperimentalStdlibApi
+internal external fun isSharedHeap(): Boolean
