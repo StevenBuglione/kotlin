@@ -97,7 +97,7 @@ internal class DynamicCompilerDriver(
 
     private fun produceKlib(engine: PhaseEngine<PhaseContext>, config: KonanConfig, environment: KotlinCoreEnvironment) {
         val serializerOutput = if (environment.configuration.getBoolean(CommonConfigurationKeys.USE_FIR))
-            serializeKLibK2(engine, environment)
+            serializeKLibK2(engine, config, environment)
         else
             serializeKlibK1(engine, config, environment)
         serializerOutput?.let { engine.writeKlib(it) }
@@ -105,6 +105,7 @@ internal class DynamicCompilerDriver(
 
     private fun serializeKLibK2(
             engine: PhaseEngine<PhaseContext>,
+            config: KonanConfig,
             environment: KotlinCoreEnvironment
     ): SerializerOutput? {
         val frontendOutput = engine.runFirFrontend(environment)
@@ -113,6 +114,9 @@ internal class DynamicCompilerDriver(
 
         val fir2IrOutput = engine.runFir2Ir(frontendOutput)
         engine.runK2SpecialBackendChecks(fir2IrOutput)
+        if (fir2IrOutput.irModuleFragment.callsArcDetectCycles()) {
+            config.configuration.put(KonanConfigKeys.ARC_DIAGNOSTICS_REQUIRED, true)
+        }
         return engine.runFirSerializer(fir2IrOutput)
     }
 

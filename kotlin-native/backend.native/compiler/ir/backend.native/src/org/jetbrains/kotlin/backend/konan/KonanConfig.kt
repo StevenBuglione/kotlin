@@ -275,7 +275,8 @@ class KonanConfig(val project: Project, val configuration: CompilerConfiguration
                 dependenciesRequireArcDiagnostics
 
     internal val arcDiagnosticsEnabled: Boolean
-        get() = arcLeakCheck != ArcLeakCheck.DISABLED || arcDiagnosticsRequiredByCode
+        get() = memoryModel == MemoryModel.ARC &&
+                (arcLeakCheck != ArcLeakCheck.DISABLED || arcDiagnosticsRequiredByCode)
 
     internal val externalDependenciesFile = configuration.get(KonanConfigKeys.EXTERNAL_DEPENDENCIES)?.let(::File)
 

@@ -2466,9 +2466,11 @@ void deinitMemory(MemoryState* memoryState, bool destroyRuntime) {
   // Return the last cached physical allocation only after those release sources stop.
   flushArcRecycledContainer(memoryState);
 #if KONAN_ARC_DIAGNOSTICS
-  // Only the final orderly runtime teardown owns process-wide leak reporting. Concurrent
-  // foreign-thread teardown is not an orderly shutdown and is deliberately not diagnosed.
-  if (destroyRuntime && lastMemoryState && atomicGet(&pendingDeinit) == 1) {
+  // Only an explicitly requested leak check at the final orderly runtime teardown owns
+  // process-wide reporting. Concurrent foreign-thread teardown and other shutdown checkers
+  // must not implicitly run ARC diagnostics.
+  if (kotlin::compiler::arcLeakCheck() != kotlin::compiler::ArcLeakCheck::kDisabled &&
+      destroyRuntime && lastMemoryState && atomicGet(&pendingDeinit) == 1) {
     reportArcCyclesAtShutdown();
   }
 #endif

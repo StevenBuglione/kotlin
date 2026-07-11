@@ -267,8 +267,12 @@ bitcode {
             srcRoot.set(layout.projectDirectory.dir("src/legacymm"))
             headersDirs.from(files("src/main/cpp"))
             sourceSets {
-                main {}
-                testFixtures {}
+                main {
+                    inputFiles.exclude("**/CyclicCollector.cpp")
+                }
+                testFixtures {
+                    inputFiles.exclude("**/CyclicCollector.cpp")
+                }
             }
 
             compilerArgs.addAll("-DKONAN_ARC_MEMORY_MANAGER=1", "-DKONAN_ARC_DIAGNOSTICS=0")
@@ -279,8 +283,12 @@ bitcode {
             srcRoot.set(layout.projectDirectory.dir("src/legacymm"))
             headersDirs.from(files("src/main/cpp"))
             sourceSets {
-                main {}
-                testFixtures {}
+                main {
+                    inputFiles.exclude("**/CyclicCollector.cpp")
+                }
+                testFixtures {
+                    inputFiles.exclude("**/CyclicCollector.cpp")
+                }
             }
 
             compilerArgs.addAll("-DKONAN_ARC_MEMORY_MANAGER=1", "-DKONAN_ARC_DIAGNOSTICS=1")

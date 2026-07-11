@@ -281,6 +281,7 @@ Task linkTest(String name, Closure<KonanLinkTest> configureClosure) {
                     baseDir  "$testOutputLocal/$name"
                     extraOpts task.flags
                     extraOpts project.globalTestArgs.findAll { !it.contains("-Xpartial-linkage") }
+                    extraOpts task.libraryFlags
                 }
                 UtilsKt.dependsOnKonanBuildingTask(task, lib, target)
 
@@ -3434,6 +3435,87 @@ standaloneTest("arc_leak_check_fail") {
 }
 
 standaloneTest("cycle_collector") {
+linkTest("arc_debug_detect_cycles_k2_klib") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    source = "runtime/memory/arc_debug_klib/main.kt"
+    lib = "runtime/memory/arc_debug_klib/library.kt"
+    flags = ['-Xskip-prerelease-check']
+    libraryFlags = ['-language-version', '2.0']
+}
+
+standaloneTest("arc_debug_no_implicit_shutdown_scan") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    source = "runtime/memory/arc_debug_no_implicit_shutdown_scan.kt"
+    outputChecker = { output ->
+        output.contains("ARC_DEBUG_EXPLICIT_ONLY") &&
+                !output.contains("Kotlin/Native ARC leak check:")
+    }
+}
+
+def readDefinedNativeSymbols = { KonanStandaloneTest test ->
+    def output = new ByteArrayOutputStream()
+    exec {
+        commandLine 'nm', '-a', '-C', '--defined-only', file(test.executable)
+        standardOutput = output
+    }
+    output.toString('UTF-8')
+}
+
+def legacyCycleSymbolFragments = [
+        'CyclicCollector',
+        'CycleDetector',
+        'MemoryStatistic',
+        'Kotlin_native_internal_GC_detectCycles',
+        'Kotlin_native_internal_GC_findCycle',
+        'cyclicInit()',
+        'cyclicDeinit(bool)',
+        'cyclicAddWorker(',
+        'cyclicRemoveWorker(',
+        'cyclicCollectorCallback(',
+        'cyclicScheduleGarbageCollect()',
+        'cyclicAddAtomicRoot(',
+        'cyclicRemoveAtomicRoot(',
+        'cyclicMutateAtomicRoot(',
+        'cyclicLocalGC()',
+        'collectCycles(',
+        'garbageCollect(',
+        'scanRoots(',
+        'scanBlack',
+]
+
+def arcDiagnosticSymbolFragments = [
+        'Kotlin_ArcDebug_detectCycles',
+        'ArcCycleRegistry',
+        'findArcStronglyConnectedComponents',
+        'detectArcCycles(',
+]
+
+def ordinaryArcSymbolAudit = standaloneTest("arc_runtime_symbols_ordinary") {
+    enabled = HostManager.hostIsLinux && project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    flags = ['-opt']
+    source = "runtime/memory/arc_runtime_symbols_ordinary.kt"
+    outputChecker = { it.contains("ARC_ORDINARY_SYMBOL_AUDIT") }
+}
+ordinaryArcSymbolAudit.doLast {
+    def symbols = readDefinedNativeSymbols(ordinaryArcSymbolAudit)
+    def forbidden = (legacyCycleSymbolFragments + arcDiagnosticSymbolFragments).findAll { symbols.contains(it) }
+    assert forbidden.empty : "Ordinary ARC release binary contains forbidden cycle symbols: $forbidden"
+}
+
+def diagnosticArcSymbolAudit = standaloneTest("arc_runtime_symbols_diagnostic") {
+    enabled = HostManager.hostIsLinux && project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    flags = ['-opt']
+    source = "runtime/memory/arc_runtime_symbols_diagnostic.kt"
+    outputChecker = { it.contains("ARC_DIAGNOSTIC_SYMBOL_AUDIT:") }
+}
+diagnosticArcSymbolAudit.doLast {
+    def symbols = readDefinedNativeSymbols(diagnosticArcSymbolAudit)
+    def forbidden = legacyCycleSymbolFragments.findAll { symbols.contains(it) }
+    assert forbidden.empty : "Diagnostic ARC release binary contains legacy cycle collector symbols: $forbidden"
+    assert arcDiagnosticSymbolFragments.any { symbols.contains(it) } :
+            "Diagnostic ARC release binary contains no recognizable ArcDebug detector symbol"
+}
+
     disabled = true // Needs USE_CYCLIC_GC, which is disabled.
     source = "runtime/memory/cycle_collector.kt"
 }

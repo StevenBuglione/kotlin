@@ -6,6 +6,14 @@
 package org.jetbrains.kotlin.backend.konan
 
 import org.jetbrains.kotlin.backend.konan.driver.phases.FrontendPhaseOutput
+import org.jetbrains.kotlin.ir.IrElement
+import org.jetbrains.kotlin.ir.declarations.IrFunction
+import org.jetbrains.kotlin.ir.declarations.IrModuleFragment
+import org.jetbrains.kotlin.ir.expressions.IrCall
+import org.jetbrains.kotlin.ir.expressions.IrFunctionReference
+import org.jetbrains.kotlin.ir.util.fqNameWhenAvailable
+import org.jetbrains.kotlin.ir.visitors.IrElementVisitorVoid
+import org.jetbrains.kotlin.ir.visitors.acceptChildrenVoid
 import org.jetbrains.kotlin.psi.KtExpression
 import org.jetbrains.kotlin.psi.KtTreeVisitorVoid
 import org.jetbrains.kotlin.resolve.calls.util.getResolvedCall
@@ -31,5 +39,37 @@ internal fun FrontendPhaseOutput.Full.sourceCallsArcDetectCycles(): Boolean {
             }
         })
     }
+    return found
+}
+
+/** K2 serializes FIR through IR, so detect the same resolved call without relying on PSI binding data. */
+internal fun IrModuleFragment.callsArcDetectCycles(): Boolean {
+    var found = false
+
+    fun isArcDetectCycles(function: IrFunction): Boolean =
+            function.fqNameWhenAvailable?.asString() == ARC_DETECT_CYCLES_FQ_NAME
+
+    acceptChildrenVoid(object : IrElementVisitorVoid {
+        override fun visitElement(element: IrElement) {
+            if (!found) element.acceptChildrenVoid(this)
+        }
+
+        override fun visitCall(expression: IrCall) {
+            if (isArcDetectCycles(expression.symbol.owner)) {
+                found = true
+            } else {
+                expression.acceptChildrenVoid(this)
+            }
+        }
+
+        override fun visitFunctionReference(expression: IrFunctionReference) {
+            if (isArcDetectCycles(expression.symbol.owner) ||
+                    expression.reflectionTarget?.owner?.let(::isArcDetectCycles) == true) {
+                found = true
+            } else {
+                expression.acceptChildrenVoid(this)
+            }
+        }
+    })
     return found
 }

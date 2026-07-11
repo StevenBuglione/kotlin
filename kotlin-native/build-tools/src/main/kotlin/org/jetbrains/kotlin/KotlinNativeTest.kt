@@ -487,6 +487,10 @@ open class KonanInteropTest : KonanStandaloneTest() {
 open class KonanLinkTest : KonanStandaloneTest() {
     @Input
     lateinit var lib: String
+
+    /** Additional compiler arguments used only when producing [lib]. */
+    @Input
+    var libraryFlags: List<String> = listOf()
 }
 
 /**
