@@ -167,6 +167,19 @@ struct FrameStorage {
 static_assert(sizeof(FrameStorage) % sizeof(void*) == 0);
 constexpr int kFrameStorageCount = sizeof(FrameStorage) / sizeof(void*);
 
+struct MultiLocalFrameStorage {
+    FrameOverlay overlay{};
+    ObjHeader* parameter = nullptr;
+    ObjHeader* first = nullptr;
+    ObjHeader* second = nullptr;
+
+    ObjHeader** start() { return reinterpret_cast<ObjHeader**>(&overlay); }
+    static constexpr int kParameters = 1;
+};
+
+static_assert(sizeof(MultiLocalFrameStorage) % sizeof(void*) == 0);
+constexpr int kMultiLocalFrameStorageCount = sizeof(MultiLocalFrameStorage) / sizeof(void*);
+
 kotlin::test_support::TypeInfoHolder permanentTypeInfo{
         kotlin::test_support::TypeInfoHolder::ObjectBuilder<Payload>()};
 Object permanentObject(permanentTypeInfo.typeInfo());
@@ -251,6 +264,14 @@ void derivedArcDestroy(ObjHeader* object) {
     arcDeinitResurrectionRejected.store(!TryAddHeapRef(object), std::memory_order_relaxed);
 }
 
+void firstFrameArcDestroy(ObjHeader*) {
+    arcDeinitOrder.push_back("first");
+}
+
+void secondFrameArcDestroy(ObjHeader*) {
+    arcDeinitOrder.push_back("second");
+}
+
 void derivedArcDestroyWithField(ObjHeader* object) {
     derivedArcDestroy(object);
     arcDeinitFieldWasAlive.store(Node::FromObjHeader(object)->next != nullptr, std::memory_order_relaxed);
@@ -311,6 +332,39 @@ TEST(ArcFrameTest, NormalLeaveReleasesLocalsButNotBorrowedParameters) {
         EXPECT_EQ(getCurrentFrame(), nullptr);
         EXPECT_EQ(frame.parameter, permanentHeader());
         EXPECT_EQ(frame.local, nullptr);
+    });
+}
+
+TEST(ArcFrameTest, NormalLeaveReleasesOwningLocalsInReverseSlotOrder) {
+    kotlin::RunInNewThread([] {
+        arcDeinitOrder.clear();
+        kotlin::test_support::TypeInfoHolder firstType{
+                kotlin::test_support::TypeInfoHolder::ObjectBuilder<Payload>().setArcDestroy(firstFrameArcDestroy)};
+        kotlin::test_support::TypeInfoHolder secondType{
+                kotlin::test_support::TypeInfoHolder::ObjectBuilder<Payload>().setArcDestroy(secondFrameArcDestroy)};
+        ObjHolder firstOwner;
+        ObjHolder secondOwner;
+        ObjHeader* first = AllocInstance(firstType.typeInfo(), firstOwner.slot());
+        ObjHeader* second = AllocInstance(secondType.typeInfo(), secondOwner.slot());
+        Kotlin_ArcMarkDeinitInitialized(first, firstType.typeInfo());
+        Kotlin_ArcMarkDeinitInitialized(second, secondType.typeInfo());
+
+        MultiLocalFrameStorage frame;
+        frame.parameter = permanentHeader();
+        EnterFrame(frame.start(), MultiLocalFrameStorage::kParameters, kMultiLocalFrameStorageCount);
+        UpdateStackRef(&frame.first, first);
+        UpdateStackRef(&frame.second, second);
+        firstOwner.clear();
+        secondOwner.clear();
+
+        LeaveFrame(frame.start(), MultiLocalFrameStorage::kParameters, kMultiLocalFrameStorageCount);
+
+        EXPECT_EQ(frame.parameter, permanentHeader());
+        EXPECT_EQ(frame.first, nullptr);
+        EXPECT_EQ(frame.second, nullptr);
+        ASSERT_EQ(arcDeinitOrder.size(), 2u);
+        EXPECT_STREQ(arcDeinitOrder[0], "second");
+        EXPECT_STREQ(arcDeinitOrder[1], "first");
     });
 }
 

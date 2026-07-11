@@ -2967,13 +2967,16 @@ void checkArcFrameLayout(FrameOverlay* frame) {
 void releaseArcFrameLocals(FrameOverlay* frame) {
   checkArcFrameLayout(frame);
   RuntimeAssert(currentFrame != frame, "ARC frame must be unlinked before its owning locals are released");
-  ObjHeader** current = reinterpret_cast<ObjHeader**>(frame + 1) + frame->parameters;
-  ObjHeader** end = reinterpret_cast<ObjHeader**>(frame) + frame->count;
-  while (current < end) {
+  ObjHeader** begin = reinterpret_cast<ObjHeader**>(frame + 1) + frame->parameters;
+  ObjHeader** current = reinterpret_cast<ObjHeader**>(frame) + frame->count;
+  // Tear down owning locals in reverse slot-allocation order (LIFO). This conventional cleanup
+  // direction also preserves the observable C++ interop order exercised by compatibility tests.
+  while (current > begin) {
+    --current;
     ObjHeader* object = *current;
     // Clear the owning slot before releasing it. Destruction is deliberately performed without
     // a frame or reference lock, and a reentrant path cannot release this slot a second time.
-    *current++ = nullptr;
+    *current = nullptr;
     if (object != nullptr) releaseHeapRef<false>(object);
   }
 }
