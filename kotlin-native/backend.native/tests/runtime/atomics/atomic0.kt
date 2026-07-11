@@ -162,7 +162,7 @@ fun test7() {
     test1(workers)
     test2(workers)
     test3(workers)
-    if (Platform.memoryModel == MemoryModel.EXPERIMENTAL) {
+    if (!Platform.isFreezingEnabled) {
         test4()
         test5()
     } else {
@@ -177,4 +177,3 @@ fun test7() {
     }
     println("OK")
 }
-

@@ -8,6 +8,7 @@ package org.jetbrains.kotlin.konan.blackboxtest
 import org.jetbrains.kotlin.konan.blackboxtest.support.ClassLevelProperty
 import org.jetbrains.kotlin.konan.blackboxtest.support.EnforcedHostTarget
 import org.jetbrains.kotlin.konan.blackboxtest.support.EnforcedProperty
+import org.jetbrains.kotlin.konan.blackboxtest.support.LoggedData
 import org.jetbrains.kotlin.konan.blackboxtest.support.TestCase
 import org.jetbrains.kotlin.konan.blackboxtest.support.TestCompilerArgs
 import org.jetbrains.kotlin.konan.blackboxtest.support.TestKind
@@ -30,6 +31,10 @@ private const val WEAK_SHAPE = "@ArcWeak is applicable only to mutable nullable 
 private const val UNOWNED_SHAPE = "@ArcUnowned is applicable only to non-null reference declarations"
 private const val DEINIT_SHAPE =
     "@ArcDeinit is applicable only to a private final zero-argument non-suspend Unit member function"
+private const val DIRECT_CYCLE_WARNING =
+    "ARC strong reference cycle: an object is stored strongly in storage owned by itself"
+private const val CLOSURE_CYCLE_WARNING =
+    "ARC strong reference cycle: a stored closure strongly captures the object that owns its storage"
 
 private fun AbstractNativeSimpleTest.assumeLinuxHost() {
     assumeTrue(testRunSettings.get<KotlinNativeTargets>().hostTarget.family == Family.LINUX)
@@ -53,6 +58,21 @@ private fun AbstractNativeSimpleTest.compileLibrary(name: String, source: String
 
 private fun AbstractNativeSimpleTest.assertCompiles(name: String, source: String) {
     compileLibrary(name, source).assertSuccess()
+}
+
+private fun AbstractNativeSimpleTest.compileLibraryOutput(name: String, source: String): String {
+    val success = compileLibrary(name, source).assertSuccess()
+    return (success.loggedData as? LoggedData.CompilationToolCall)?.toolOutput.orEmpty()
+}
+
+private fun AbstractNativeSimpleTest.assertWarns(name: String, source: String, expectedMessage: String) {
+    val output = compileLibraryOutput(name, source)
+    assertTrue(output.contains(expectedMessage)) {
+        "Expected compiler output to contain '$expectedMessage', but was:\n$output"
+    }
+    assertTrue(output.contains("$name.kt")) {
+        "Expected warning to contain a source location for $name.kt, but was:\n$output"
+    }
 }
 
 private fun AbstractNativeSimpleTest.assertFails(name: String, source: String, expectedMessage: String) {
@@ -346,6 +366,67 @@ class ArcExplicitMemoryModelTest : AbstractNativeSimpleTest() {
             """,
             "ARC reference annotations are not supported on delegated properties"
         )
+    }
+
+    @Test
+    fun definiteStrongCyclesAreSourceMappedWarnings() {
+        assumeLinuxHost()
+        assertWarns(
+            "directSelfCycle",
+            """
+            class Holder {
+                var initializedReference: Holder? = this
+                var assignedReference: Holder? = null
+                fun createAnotherCycle() { assignedReference = this }
+            }
+            """,
+            DIRECT_CYCLE_WARNING
+        )
+        assertWarns(
+            "capturingClosureCycle",
+            """
+            class Holder {
+                var initializedCallback: (() -> Unit)? = { println(this) }
+                var assignedCallback: (() -> Unit)? = null
+                fun createAnotherCycle() { assignedCallback = { println(this) } }
+            }
+            """,
+            CLOSURE_CYCLE_WARNING
+        )
+    }
+
+    @Test
+    fun weakStorageAndNonDefiniteRelationshipsDoNotWarnAboutCycles() {
+        assumeLinuxHost()
+        val output = compileLibraryOutput(
+            "noDefiniteCycles",
+            """
+            import kotlin.native.arc.ArcWeak
+
+            class Other { fun touch() {} }
+
+            class Holder {
+                @ArcWeak var reference: Holder? = null
+                @ArcWeak var callback: (() -> Unit)? = null
+                var otherCallback: (() -> Unit)? = null
+
+                fun assignWeak() {
+                    reference = this
+                    callback = { println(this) }
+                }
+
+                fun captureDifferentObject(other: Other) {
+                    otherCallback = { other.touch() }
+                }
+            }
+
+            class Left { var right: Right? = null }
+            class Right { var left: Left? = null }
+            """
+        )
+        assertTrue(!output.contains(DIRECT_CYCLE_WARNING) && !output.contains(CLOSURE_CYCLE_WARNING)) {
+            "Unexpected definite-cycle warning:\n$output"
+        }
     }
 
     @Test

@@ -85,6 +85,7 @@ kotlin::test_support::TypeInfoHolder weakCounterTypeInfo{
         kotlin::test_support::TypeInfoHolder::ObjectBuilder<WeakCounterPayload>()};
 std::atomic<int> finalizedNodes = 0;
 std::atomic<bool> finalizerSawRegisteredRuntime = false;
+std::atomic<FrameOverlay*> finalizerObservedFrame = nullptr;
 std::atomic<bool> resurrectionRejected = false;
 std::atomic<bool> weakWasZeroBeforeFinalizer = false;
 std::atomic<ObjHeader*> weakCounterForFinalizer = nullptr;
@@ -105,6 +106,7 @@ void countNodeFinalizer(ObjHeader* object) {
     if (object->type_info() != nodeTypeInfo.typeInfo()) return;
     finalizedNodes.fetch_add(1, std::memory_order_relaxed);
     finalizerSawRegisteredRuntime.store(kotlin::mm::IsCurrentThreadRegistered(), std::memory_order_relaxed);
+    finalizerObservedFrame.store(getCurrentFrame(), std::memory_order_relaxed);
     resurrectionRejected.store(!TryAddHeapRef(object), std::memory_order_relaxed);
     if (ObjHeader* counter = weakCounterForFinalizer.load(std::memory_order_relaxed)) {
         ObjHeader* promoted = nullptr;
@@ -142,6 +144,7 @@ public:
     ScopedNodeFinalizerHook() {
         finalizedNodes.store(0, std::memory_order_relaxed);
         finalizerSawRegisteredRuntime.store(false, std::memory_order_relaxed);
+        finalizerObservedFrame.store(nullptr, std::memory_order_relaxed);
         resurrectionRejected.store(false, std::memory_order_relaxed);
         weakWasZeroBeforeFinalizer.store(false, std::memory_order_relaxed);
         weakCounterForFinalizer.store(nullptr, std::memory_order_relaxed);
@@ -205,6 +208,37 @@ TEST(ArcFrameTest, CleanupLandingpadsReleaseTheirOwnFrames) {
         EXPECT_EQ(getCurrentFrame(), nullptr);
         EXPECT_EQ(outer.local, nullptr);
         EXPECT_EQ(outer.parameter, permanentHeader());
+    });
+}
+
+TEST(ArcFrameTest, LeaveUnlinksBeforeReentrantDestructionAndDoesNotReleaseBorrowedParameters) {
+    ScopedNodeFinalizerHook finalizers;
+    kotlin::RunInNewThread([] {
+        FrameStorage outer;
+        FrameStorage inner;
+        ObjHolder borrowedOwner;
+        ObjHolder localOwner;
+        ObjHeader* borrowed = AllocInstance(nodeTypeInfo.typeInfo(), borrowedOwner.slot());
+        ObjHeader* local = AllocInstance(nodeTypeInfo.typeInfo(), localOwner.slot());
+
+        EnterFrame(outer.start(), FrameStorage::kParameters, kFrameStorageCount);
+        inner.parameter = borrowed;
+        UpdateStackRef(&inner.local, local);
+        localOwner.clear();
+        EnterFrame(inner.start(), FrameStorage::kParameters, kFrameStorageCount);
+
+        LeaveFrame(inner.start(), FrameStorage::kParameters, kFrameStorageCount);
+
+        EXPECT_EQ(getCurrentFrame(), &outer.overlay);
+        EXPECT_EQ(finalizerObservedFrame.load(std::memory_order_relaxed), &outer.overlay);
+        EXPECT_EQ(finalizedNodes.load(std::memory_order_relaxed), 1);
+        EXPECT_EQ(inner.local, nullptr);
+        EXPECT_EQ(inner.parameter, borrowed);
+
+        // The parameter was +0 and remains owned by the caller.
+        borrowedOwner.clear();
+        EXPECT_EQ(finalizedNodes.load(std::memory_order_relaxed), 2);
+        LeaveFrame(outer.start(), FrameStorage::kParameters, kFrameStorageCount);
     });
 }
 

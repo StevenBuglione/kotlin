@@ -59,6 +59,9 @@ private class BackendChecker(
     fun reportError(location: IrElement, message: String): Nothing =
             context.reportCompilationError(message, irFile, location)
 
+    fun reportWarning(location: IrElement, message: String) =
+            context.report(location, irFile, message, isError = false)
+
     private val outerDeclarations = mutableListOf<IrDeclaration>()
 
     private val outerClass: IrClass? get() = outerDeclarations.last { it is IrClass } as? IrClass
@@ -348,6 +351,14 @@ private class BackendChecker(
 
         val parent = declaration.parent
 
+        if (context.config.memoryModel == MemoryModel.ARC && !declaration.hasNonStrongArcStorage()) {
+            val owner = (parent as? IrClass)?.thisReceiver
+            val initializer = declaration.initializer?.expression
+            if (owner != null && initializer != null) {
+                checkDefiniteArcCycle(declaration, owner, initializer)
+            }
+        }
+
         if (parent is IrClass && parent.defaultType.isNativePointed(symbols) && parent.symbol != symbols.nativePointed) {
             reportError(declaration, "Subclasses of ${InteropFqNames.nativePointed} cannot have properties with backing fields")
         }
@@ -373,6 +384,19 @@ private class BackendChecker(
         expression.acceptChildrenVoid(this)
 
         val callee = expression.symbol.owner
+
+        if (context.config.memoryModel == MemoryModel.ARC &&
+                callee.origin == IrDeclarationOrigin.DEFAULT_PROPERTY_ACCESSOR) {
+            val property = callee.correspondingPropertySymbol?.owner
+            val field = property?.backingField
+            if (callee == property?.setter && field != null && !field.hasNonStrongArcStorage()) {
+                checkDefiniteArcCycle(
+                        location = expression,
+                        storageOwner = expression.dispatchReceiver,
+                        storedValue = expression.getValueArgument(0),
+                )
+            }
+        }
 
         callee.getObjCFactoryInitMethodInfo()?.let { _ ->
             val arguments = (0 until expression.valueArgumentsCount).map(expression::getValueArgument)
@@ -502,6 +526,87 @@ private class BackendChecker(
                     checkIrKType(expression, expression.getTypeArgument(0)!!)
             }
         }
+    }
+
+    override fun visitSetField(expression: IrSetField) {
+        expression.acceptChildrenVoid(this)
+
+        if (context.config.memoryModel == MemoryModel.ARC && !expression.symbol.owner.hasNonStrongArcStorage()) {
+            checkDefiniteArcCycle(
+                    location = expression,
+                    storageOwner = expression.receiver,
+                    storedValue = expression.value,
+            )
+        }
+    }
+
+    private fun IrField.hasNonStrongArcStorage(): Boolean {
+        val propertyAnnotations = correspondingPropertySymbol?.owner?.annotations.orEmpty()
+        return annotations.hasAnnotation(KonanFqNames.arcWeak) ||
+                annotations.hasAnnotation(KonanFqNames.arcUnowned) ||
+                propertyAnnotations.hasAnnotation(KonanFqNames.arcWeak) ||
+                propertyAnnotations.hasAnnotation(KonanFqNames.arcUnowned)
+    }
+
+    private fun checkDefiniteArcCycle(
+            location: IrElement,
+            storageOwner: IrExpression?,
+            storedValue: IrExpression?,
+    ) {
+        val owner = storageOwner?.arcCycleIdentity() ?: return
+        checkDefiniteArcCycle(location, owner, storedValue ?: return)
+    }
+
+    private fun checkDefiniteArcCycle(
+            location: IrElement,
+            owner: IrValueDeclaration,
+            storedValue: IrExpression,
+    ) {
+        val value = storedValue.unwrapArcCycleExpression()
+
+        if (value.arcCycleIdentity() == owner) {
+            reportWarning(
+                    location,
+                    "ARC strong reference cycle: an object is stored strongly in storage owned by itself; " +
+                            "use @ArcWeak or @ArcUnowned to break the cycle"
+            )
+        } else if (value.isCallableReferenceCapturing(owner)) {
+            reportWarning(
+                    location,
+                    "ARC strong reference cycle: a stored closure strongly captures the object that owns its storage; " +
+                            "use @ArcWeak or @ArcUnowned to break the cycle"
+            )
+        }
+    }
+
+    private fun IrExpression.arcCycleIdentity(): IrValueDeclaration? =
+            (unwrapArcCycleExpression() as? IrGetValue)?.symbol?.owner
+
+    private fun IrExpression.unwrapArcCycleExpression(): IrExpression = when (this) {
+        is IrTypeOperatorCall -> when (operator) {
+            IrTypeOperator.CAST, IrTypeOperator.IMPLICIT_CAST -> argument.unwrapArcCycleExpression()
+            else -> this
+        }
+        is IrContainerExpression ->
+            (statements.lastOrNull() as? IrExpression)?.unwrapArcCycleExpression() ?: this
+        else -> this
+    }
+
+    private fun IrExpression.isCallableReferenceCapturing(owner: IrValueDeclaration): Boolean {
+        val callableReference = unwrapArcCycleExpression()
+        if (callableReference !is IrFunctionExpression && callableReference !is IrFunctionReference) return false
+
+        var capturesOwner = false
+        callableReference.acceptChildrenVoid(object : IrElementVisitorVoid {
+            override fun visitElement(element: IrElement) {
+                if (!capturesOwner) element.acceptChildrenVoid(this)
+            }
+
+            override fun visitGetValue(expression: IrGetValue) {
+                if (expression.symbol.owner == owner) capturesOwner = true
+            }
+        })
+        return capturesOwner
     }
 
     override fun visitFunctionExpression(expression: IrFunctionExpression) {

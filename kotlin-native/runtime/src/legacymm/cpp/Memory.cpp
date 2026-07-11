@@ -2896,6 +2896,7 @@ void checkArcFrameLayout(FrameOverlay* frame) {
 
 void releaseArcFrameLocals(FrameOverlay* frame) {
   checkArcFrameLayout(frame);
+  RuntimeAssert(currentFrame != frame, "ARC frame must be unlinked before its owning locals are released");
   ObjHeader** current = reinterpret_cast<ObjHeader**>(frame + 1) + frame->parameters;
   ObjHeader** end = reinterpret_cast<ObjHeader**>(frame) + frame->count;
   while (current < end) {
@@ -2924,8 +2925,11 @@ void leaveFrameArc(ObjHeader** start, int parameters, int count) {
   RuntimeAssert(frame->parameters == parameters,
                 "ARC frame parameter count is expected to be %d, but is %d", frame->parameters, parameters);
   RuntimeAssert(frame->count == count, "ARC frame slot count is expected to be %d, but is %d", frame->count, count);
-  releaseArcFrameLocals(frame);
+  // Unlink before releasing locals. Releasing the final strong reference may synchronously run
+  // arbitrary Kotlin deinitialization code, which can enter more frames. Such reentrant code must
+  // observe the caller as the current frame, never this partially drained frame.
   currentFrame = frame->previous;
+  releaseArcFrameLocals(frame);
 }
 
 void setCurrentFrameArc(ObjHeader** start) {
