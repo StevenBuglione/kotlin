@@ -16,7 +16,8 @@ class A(var x:Int)
 @Test
 fun testClassNotFrozen(){
     val a = A(1)
-    a.freeze()
+    assertSame(a, a.freeze())
+    assertFalse(a.isFrozen)
     a.x = 2
     assertEquals(a.x, 2)
 }
@@ -24,7 +25,8 @@ fun testClassNotFrozen(){
 @Test
 fun testArrayNotFrozen(){
     val a = arrayOf(1, 2, 3, 4, 5)
-    a.freeze()
+    assertSame(a, a.freeze())
+    assertFalse(a.isFrozen)
     a[0] = 6
     assertEquals(a[0], 6)
 }

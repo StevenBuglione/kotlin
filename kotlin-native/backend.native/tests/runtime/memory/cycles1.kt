@@ -16,9 +16,15 @@ import kotlin.native.ref.*
     if (Platform.memoryModel == MemoryModel.RELAXED) return
     val weakRefToTrashCycle = createLoop()
     kotlin.native.runtime.GC.collect()
-    assertNull(weakRefToTrashCycle.get())
+    if (Platform.memoryModel == MemoryModel.ARC) {
+        // ARC has no cycle collector: the strong self-cycle intentionally remains alive.
+        assertNotNull(weakRefToTrashCycle.get())
+    } else {
+        assertNull(weakRefToTrashCycle.get())
+    }
 }
 
+@Suppress("ARC_STRONG_REFERENCE_CYCLE") // Deliberate strong cycle used to verify ARC's non-collecting semantics.
 private fun createLoop(): WeakReference<Any> {
     val loop = Array<Any?>(1, { null })
     loop[0] = loop

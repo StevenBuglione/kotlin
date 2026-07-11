@@ -1107,8 +1107,10 @@ task worker_list_workers(type: KonanLocalTest) {
     source = "runtime/workers/worker_list_workers.kt"
 }
 
+// Fixtures below that assert full-freezing behavior remain legacy-manager oracles.
+// ARC treats freeze() as a no-op; that behavior is covered by freeze_disabled and freeze3.
 standaloneTest("freeze0") {
-    enabled = (project.testTarget != 'wasm32') && (cacheTesting == null) // No workers on WASM.
+    enabled = (project.testTarget != 'wasm32') && (cacheTesting == null) && !isArcMM // No workers on WASM.
     useGoldenData = true
     flags = ["-Xbinary=freezing=full", "-tr"]
     source = "runtime/workers/freeze0.kt"
@@ -1116,7 +1118,7 @@ standaloneTest("freeze0") {
 }
 
 standaloneTest("freeze1") {
-    enabled = (project.testTarget != 'wasm32') && (cacheTesting == null) // No exceptions on WASM.
+    enabled = (project.testTarget != 'wasm32') && (cacheTesting == null) && !isArcMM // No exceptions on WASM.
     useGoldenData = true
     flags = ["-Xbinary=freezing=full", "-tr"]
     source = "runtime/workers/freeze1.kt"
@@ -1125,7 +1127,7 @@ standaloneTest("freeze1") {
 
 standaloneTest("freeze_stress") {
     enabled = (project.testTarget != 'wasm32') && (cacheTesting == null) // No exceptions on WASM.
-        && !isAggressiveGC // TODO: Investigate why too slow
+        && !isAggressiveGC && !isArcMM // TODO: Investigate why too slow
     useGoldenData = true
     flags = ["-Xbinary=freezing=full", "-tr"]
     source = "runtime/workers/freeze_stress.kt"
@@ -1133,7 +1135,7 @@ standaloneTest("freeze_stress") {
 }
 
 standaloneTest("freeze2") {
-    enabled = (project.testTarget != 'wasm32') && (cacheTesting == null) // No exceptions on WASM.
+    enabled = (project.testTarget != 'wasm32') && (cacheTesting == null) && !isArcMM // No exceptions on WASM.
     useGoldenData = true
     flags = ["-Xbinary=freezing=full", "-tr"]
     source = "runtime/workers/freeze2.kt"
@@ -1149,7 +1151,7 @@ standaloneTest("freeze3") {
 }
 
 standaloneTest("freeze4") {
-    enabled = (project.testTarget != 'wasm32') && (cacheTesting == null) // No exceptions on WASM.
+    enabled = (project.testTarget != 'wasm32') && (cacheTesting == null) && !isArcMM // No exceptions on WASM.
     useGoldenData = true
     flags = ["-Xbinary=freezing=full", "-tr"]
     source = "runtime/workers/freeze4.kt"
@@ -1166,7 +1168,7 @@ standaloneTest("freeze5") {
 
 standaloneTest("freeze6") {
     enabled = (project.testTarget != 'wasm32') && (cacheTesting == null) // No exceptions on WASM.
-        && !isNoopGC
+        && !isNoopGC && !isArcMM
     useGoldenData = true
     flags = ["-Xbinary=freezing=full", "-tr"]
     source = "runtime/workers/freeze6.kt"
