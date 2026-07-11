@@ -71,6 +71,7 @@ check_no_active_runs() {
         profile=${state##*/}
         profile_is_running "$profile" && fail "build profile $profile is still running; refusing to change its checkout"
     done
+    return 0
 }
 
 write_runner() {
@@ -82,6 +83,7 @@ write_runner() {
         printf 'cd %q\n' "$repo"
         printf 'export JAVA_HOME=%q\n' "$java_home"
         printf 'export PATH=%q:$PATH\n' "$java_home/bin"
+        printf 'export ARC_RUN_STATE_DIR=%q\n' "$state"
         printf '%q ' "$@"
         printf '>>%q 2>&1\n' "$log"
         echo 'result=$?'
@@ -167,6 +169,10 @@ case "$action" in
         [[ "$pid" =~ ^[0-9]+$ ]] || fail "profile $profile has invalid pid state"
         touch "$state/build.log"
         tail -n +1 --pid="$pid" -f "$state/build.log" || true
+        for _ in {1..50}; do
+            [[ -f "$state/exit-status" ]] && break
+            sleep 0.1
+        done
         [[ -f "$state/exit-status" ]] || fail "profile $profile stopped without publishing an exit status"
         exit "$(cat "$state/exit-status")"
         ;;

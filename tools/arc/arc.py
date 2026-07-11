@@ -169,12 +169,16 @@ def profile_command(profile: str) -> list[str]:
         "runtime": ("ARC_RUNTIME_TASKS", [":kotlin-native:runtime:hostRuntimeTests"]),
         "sanity": ("ARC_SANITY_TASKS", [":kotlin-native:backend.native:tests:sanity"]),
         "full": ("ARC_FULL_TASKS", [":kotlin-native:backend.native:tests:run"]),
-        "arc-smoke": ("ARC_SMOKE_TASKS", [":kotlin-native:backend.native:tests:hello0"]),
-        "arc-stress": ("ARC_STRESS_TASKS", [":kotlin-native:runtime:hostRuntimeTests"]),
     }
     if profile in profiles:
         variable, defaults = profiles[profile]
         return gradle + tasks_from_environment(variable, defaults)
+    if profile == "arc-smoke":
+        override = os.environ.get("ARC_SMOKE_TASKS")
+        return gradle + shlex.split(override) if override else ["bash", "tools/arc/run_fixture.sh", "smoke"]
+    if profile == "arc-stress":
+        override = os.environ.get("ARC_STRESS_TASKS")
+        return gradle + shlex.split(override) if override else ["bash", "tools/arc/run_fixture.sh", "stress"]
     if profile == "arc-sanitize":
         sanitizer = setting("ARC_SANITIZER", "address")
         return gradle + [f"-Psanitizer={sanitizer}"] + tasks_from_environment(

@@ -11,10 +11,15 @@ import arc
 
 
 class ArcProfileTest(unittest.TestCase):
-    def test_smoke_uses_existing_native_test(self):
+    def test_smoke_uses_distribution_fixture(self):
         with patch.dict(os.environ, {}, clear=True):
             command = arc.profile_command("arc-smoke")
-        self.assertIn(":kotlin-native:backend.native:tests:hello0", command)
+        self.assertEqual(["bash", "tools/arc/run_fixture.sh", "smoke"], command)
+
+    def test_arc_fixture_tasks_remain_overrideable(self):
+        with patch.dict(os.environ, {"ARC_STRESS_TASKS": ":custom:arcStress"}, clear=True):
+            command = arc.profile_command("arc-stress")
+        self.assertIn(":custom:arcStress", command)
         self.assertIn("--max-workers=28", command)
 
     def test_sanitizer_is_configurable(self):

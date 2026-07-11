@@ -59,6 +59,7 @@ val debuggerTest = nativeTest("debuggerTest", "debugger")
 val cachesTest = nativeTest("cachesTest", "caches")
 val k1libContentsTest = nativeTest("k1libContentsTest", "k1libContents")
 val k2libContentsTest = nativeTest("k2libContentsTest", "k2libContents")
+val arcTest = nativeTest("arcTest", "arc")
 
 val testTags = findProperty("kotlin.native.tests.tags")?.toString()
 // Note: arbitrary JUnit tag expressions can be used in this property.

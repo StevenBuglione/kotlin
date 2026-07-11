@@ -50,4 +50,17 @@ invoke follow durable-test | grep -q completed
 invoke status durable-test | grep -q 'profile=durable-test state=finished.*exit=0'
 [[ "$(invoke log durable-test)" == $'started\ncompleted' ]]
 
+head=$(git -C "$repo" rev-parse HEAD)
+invoke checkout HEAD "$head"
+[[ "$(git -C "$repo" rev-parse HEAD)" == "$head" ]]
+
+fixture_state="$tmp/fixture-state"
+mkdir -p "$fixture_state"
+if (cd "$repo" && ARC_RUN_STATE_DIR="$fixture_state" ARC_DIST_DIR="$tmp/missing-dist" \
+    bash "$root/tools/arc/run_fixture.sh" smoke) >"$tmp/fixture-error" 2>&1; then
+    echo "fixture unexpectedly accepted a missing distribution" >&2
+    exit 1
+fi
+grep -q 'run remote-dist first' "$tmp/fixture-error"
+
 echo 'remote state self-test passed'

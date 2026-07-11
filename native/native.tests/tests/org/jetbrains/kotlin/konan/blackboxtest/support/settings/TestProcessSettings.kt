@@ -120,11 +120,15 @@ internal enum class OptimizationMode(private val description: String, val compil
  * The Kotlin/Native memory model.
  */
 internal enum class MemoryModel(val compilerFlags: List<String>?) {
+    /** Do not pass a memory model flag, allowing the target-specific compiler default to be tested. */
+    DEFAULT(null),
+
     /**
      * but it should be done at some point.
      */
     LEGACY(listOf("-memory-model", "strict")),
-    EXPERIMENTAL(listOf("-memory-model", "experimental"));
+    EXPERIMENTAL(listOf("-memory-model", "experimental")),
+    ARC(listOf("-memory-model", "arc"));
 
     override fun toString() = compilerFlags?.joinToString(prefix = "(", separator = " ", postfix = ")").orEmpty()
 }
