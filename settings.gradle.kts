@@ -237,6 +237,7 @@ include(
     ":native:base",
     ":native:native.config",
     ":native:binary-options",
+    ":native:rust-interop",
     ":native:analysis-api-based-test-utils",
     ":native:analysis-api-based-export-common",
     ":native:external-projects-test-utils",
