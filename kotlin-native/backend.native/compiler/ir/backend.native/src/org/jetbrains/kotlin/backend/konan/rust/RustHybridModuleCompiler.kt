@@ -35,8 +35,10 @@ import org.jetbrains.kotlin.backend.konan.rust.codegen.RustIrCodegen
 import org.jetbrains.kotlin.backend.konan.rust.codegen.RustLinkerSymbolNamer
 import org.jetbrains.kotlin.backend.konan.rust.codegen.RustManagedFieldCodegenResult
 import org.jetbrains.kotlin.backend.konan.rust.codegen.RustManagedReferenceCodegenResult
+import org.jetbrains.kotlin.backend.konan.rust.codegen.RustPrimitiveFieldReadCodegenResult
 import org.jetbrains.kotlin.backend.konan.rust.codegen.generateRustManagedFieldFunction
 import org.jetbrains.kotlin.backend.konan.rust.codegen.generateRustManagedReferenceFunction
+import org.jetbrains.kotlin.backend.konan.rust.codegen.generateRustPrimitiveFieldReadFunction
 import org.jetbrains.kotlin.backend.konan.rust.codegen.rustManagedReferenceRuntimePrelude
 import org.jetbrains.kotlin.descriptors.ModuleDescriptor
 import org.jetbrains.kotlin.ir.declarations.IrDeclarationOrigin
@@ -126,8 +128,23 @@ internal fun tryCompileRustHybridModule(
         }
         .filterIsInstance<RustManagedFieldCodegenResult.Generated>()
         .toList()
+    val primitiveFieldReadResults = bodyCandidates.asSequence()
+        .map { function ->
+            generateRustPrimitiveFieldReadFunction(
+                function,
+                symbolNamer,
+                frameOverlayWords,
+                sourceFunctionSet::contains,
+            ) { field ->
+                val declaration = generationState.llvmDeclarations.forField(field)
+                LLVMOffsetOfElement(generationState.runtime.targetData, declaration.classBodyType, declaration.index)
+            }
+        }
+        .filterIsInstance<RustPrimitiveFieldReadCodegenResult.Generated>()
+        .toList()
     val managedDeclarations = (managedResults.flatMap { it.generatedFunctions + it.fallbackFunctions } +
-            managedFieldResults.flatMap { it.generatedFunctions + it.fallbackFunctions }).toSet()
+            managedFieldResults.flatMap { it.generatedFunctions + it.fallbackFunctions } +
+            primitiveFieldReadResults.flatMap { it.generatedFunctions + it.fallbackFunctions }).toSet()
     val primitiveCandidates = bodyCandidates.filter { function ->
         function.hasPrimitiveRustAbi() && function !in managedDeclarations
     }
@@ -138,15 +155,17 @@ internal fun tryCompileRustHybridModule(
     ).generate(irModule, primitiveCandidates, moduleFunctionScope = primitiveCandidates)
     val candidateSet = primitiveCandidates.toSet()
     val generated = result.generatedFunctions.filter { it.declaration in candidateSet }
-    if (generated.isEmpty() && managedResults.isEmpty() && managedFieldResults.isEmpty()) return null
+    if (generated.isEmpty() && managedResults.isEmpty() && managedFieldResults.isEmpty() && primitiveFieldReadResults.isEmpty()) return null
     if (generated.size != result.generatedFunctions.size) return null
     if (result.fallbackFunctions.any { it.declaration !in candidateSet }) return null
     if (result.generatedFunctions.any { it.declaration === entryPoint }) return null
     val generatedFunctions = (generated.map { it.declaration } + managedResults.flatMap { it.generatedFunctions } +
-            managedFieldResults.flatMap { it.generatedFunctions }).distinct()
+            managedFieldResults.flatMap { it.generatedFunctions } +
+            primitiveFieldReadResults.flatMap { it.generatedFunctions }).distinct()
     val fallbackFunctions = (
             result.fallbackFunctions.map { it.declaration } + managedResults.flatMap { it.fallbackFunctions } +
-                    managedFieldResults.flatMap { it.fallbackFunctions }
+                    managedFieldResults.flatMap { it.fallbackFunctions } +
+                    primitiveFieldReadResults.flatMap { it.fallbackFunctions }
             ).distinct()
 
     val outputFile = File(generationState.outputFiles.mainFileName).absoluteFile
@@ -163,7 +182,7 @@ internal fun tryCompileRustHybridModule(
                 appendLine("#![no_std]")
                 append(result.source)
                 appendLine()
-                if (managedResults.isEmpty() && managedFieldResults.isEmpty()) {
+                if (managedResults.isEmpty() && managedFieldResults.isEmpty() && primitiveFieldReadResults.isEmpty()) {
                     appendLine("extern \"C\" {")
                     appendLine("    fn Kotlin_mm_safePointFunctionPrologue();")
                     appendLine("}")
@@ -176,6 +195,10 @@ internal fun tryCompileRustHybridModule(
                     for (managedFieldResult in managedFieldResults) {
                         appendLine()
                         append(managedFieldResult.source)
+                    }
+                    for (primitiveFieldReadResult in primitiveFieldReadResults) {
+                        appendLine()
+                        append(primitiveFieldReadResult.source)
                     }
                 }
             },
@@ -190,7 +213,8 @@ internal fun tryCompileRustHybridModule(
             artifact.llvmBitcode.toFile(),
             generatedFunctions,
             fallbackFunctions,
-            needsRustEhPersonality = managedResults.isNotEmpty() || managedFieldResults.isNotEmpty(),
+            needsRustEhPersonality = managedResults.isNotEmpty() || managedFieldResults.isNotEmpty() ||
+                    primitiveFieldReadResults.isNotEmpty(),
         )
     } catch (failure: Exception) {
         if (failure is InterruptedException) Thread.currentThread().interrupt()
