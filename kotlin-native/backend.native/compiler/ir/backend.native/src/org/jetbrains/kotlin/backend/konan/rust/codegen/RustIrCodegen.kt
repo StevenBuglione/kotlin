@@ -36,13 +36,18 @@ import org.jetbrains.kotlin.ir.expressions.IrWhen
 import org.jetbrains.kotlin.ir.expressions.IrWhileLoop
 import org.jetbrains.kotlin.ir.types.IrType
 import org.jetbrains.kotlin.ir.types.isBoolean
+import org.jetbrains.kotlin.ir.types.isByte
+import org.jetbrains.kotlin.ir.types.isChar
 import org.jetbrains.kotlin.ir.types.isDouble
 import org.jetbrains.kotlin.ir.types.isFloat
 import org.jetbrains.kotlin.ir.types.isInt
 import org.jetbrains.kotlin.ir.types.isLong
+import org.jetbrains.kotlin.ir.types.isShort
 import org.jetbrains.kotlin.ir.types.isString
+import org.jetbrains.kotlin.ir.types.isUByte
 import org.jetbrains.kotlin.ir.types.isUInt
 import org.jetbrains.kotlin.ir.types.isULong
+import org.jetbrains.kotlin.ir.types.isUShort
 import org.jetbrains.kotlin.ir.types.isUnit
 import org.jetbrains.kotlin.ir.util.fqNameWhenAvailable
 import org.jetbrains.kotlin.ir.util.isTopLevel
@@ -453,23 +458,22 @@ internal class RustIrCodegen(
             call: IrCall,
         ): String? {
             val conversion = callee.name.asString()
-            if (conversion != "toInt" && conversion != "toLong") return null
+            if (conversion !in INTEGER_CONVERSION_NAMES) return null
             val fqName = callee.fqNameWhenAvailable?.asString()
             if (fqName != null && !fqName.startsWith("kotlin.")) return null
             val value = arguments.singleOrNull()
                 ?: unsupported(call, RustUnsupportedCode.UNSUPPORTED_CALL, "Malformed primitive conversion call ${displayName(callee)}")
-            val renderedValue = expression(value)
-            return when {
-                conversion == "toLong" && value.type.isInt() -> "($renderedValue as i64)"
-                conversion == "toLong" && value.type.isLong() -> renderedValue
-                conversion == "toInt" && value.type.isLong() -> "($renderedValue as i32)"
-                conversion == "toInt" && value.type.isInt() -> renderedValue
-                else -> unsupported(
+            if (!value.type.isSupportedInteger() || !call.type.isSupportedInteger()) {
+                unsupported(
                     call,
                     RustUnsupportedCode.UNSUPPORTED_CALL,
                     "Primitive conversion ${displayName(callee)} requires unsupported numeric conversion semantics",
                 )
             }
+            val renderedValue = expression(value)
+            val sourceType = rustType(value.type, call)
+            val targetType = rustType(call.type, call)
+            return if (sourceType == targetType) renderedValue else "($renderedValue as $targetType)"
         }
 
         private fun unwrapBoxForPrint(argument: IrExpression): IrExpression {
@@ -499,46 +503,72 @@ internal class RustIrCodegen(
                 ) {
                     render(expression(lhs), expression(arguments[1]))
                 } else null
-            val integer = lhs.type.isInt() || lhs.type.isLong() || lhs.type.isUInt() || lhs.type.isULong()
+            fun coerceInteger(value: IrExpression, rendered: String, targetRustType: String): String =
+                if (rustType(value.type, call) == targetRustType) rendered else "($rendered as $targetRustType)"
+            fun integerUnary(render: (String) -> String): String? {
+                if (arguments.size != 1 || !lhs.type.isSupportedInteger() || !call.type.isSupportedInteger()) return null
+                val targetType = rustType(call.type, call)
+                return render(coerceInteger(lhs, expression(lhs), targetType))
+            }
+            fun integerBinary(render: (String, String) -> String): String? {
+                val rhs = arguments.getOrNull(1) ?: return null
+                if (arguments.size != 2 || !lhs.type.isSupportedInteger() || !rhs.type.isSupportedInteger() ||
+                    !call.type.isSupportedInteger()
+                ) return null
+                val targetType = rustType(call.type, call)
+                return render(
+                    coerceInteger(lhs, expression(lhs), targetType),
+                    coerceInteger(rhs, expression(rhs), targetType),
+                )
+            }
+            fun integerShift(render: (String, String) -> String): String? {
+                val rhs = arguments.getOrNull(1) ?: return null
+                if (arguments.size != 2 || !lhs.type.isSupportedInteger() || !call.type.isSupportedInteger() || !rhs.type.isInt()) {
+                    return null
+                }
+                val targetType = rustType(call.type, call)
+                return render(coerceInteger(lhs, expression(lhs), targetType), expression(rhs))
+            }
+            val integer = lhs.type.isSupportedInteger()
             return when (name) {
-                "plus" -> binary { a, b -> if (integer) "($a).wrapping_add($b)" else "($a + $b)" }
-                "minus" -> binary { a, b -> if (integer) "($a).wrapping_sub($b)" else "($a - $b)" }
-                "times" -> binary { a, b -> if (integer) "($a).wrapping_mul($b)" else "($a * $b)" }
+                "plus" -> if (integer) integerBinary { a, b -> "($a).wrapping_add($b)" } else binary { a, b -> "($a + $b)" }
+                "minus" -> if (integer) integerBinary { a, b -> "($a).wrapping_sub($b)" } else binary { a, b -> "($a - $b)" }
+                "times" -> if (integer) integerBinary { a, b -> "($a).wrapping_mul($b)" } else binary { a, b -> "($a * $b)" }
                 // Integer division by zero must throw Kotlin's ArithmeticException, so it cannot be
                 // emitted for a zero or non-constant divisor until the exception ABI is available.
                 "div" -> if (integer) {
-                    if (arguments.size == 2 && rustType(lhs.type, call) == rustType(arguments[1].type, call)) {
+                    if (arguments.size == 2 && arguments[1].type.isSupportedInteger() && call.type.isSupportedInteger()) {
                         if (!arguments[1].isNonZeroIntegerConstant()) {
                             unsupported(call, RustUnsupportedCode.UNSUPPORTED_CALL, "Integer division requires Kotlin exception interop")
                         }
-                        binary { a, b -> "($a).wrapping_div($b)" }
+                        integerBinary { a, b -> "($a).wrapping_div($b)" }
                     } else null
                 } else {
                     binary { a, b -> "($a / $b)" }
                 }
                 "rem", "mod" -> if (integer) {
-                    if (arguments.size == 2 && rustType(lhs.type, call) == rustType(arguments[1].type, call)) {
+                    if (arguments.size == 2 && arguments[1].type.isSupportedInteger() && call.type.isSupportedInteger()) {
                         if (!arguments[1].isNonZeroIntegerConstant()) {
                             unsupported(call, RustUnsupportedCode.UNSUPPORTED_CALL, "Integer remainder requires Kotlin exception interop")
                         }
-                        binary { a, b -> "($a).wrapping_rem($b)" }
+                        integerBinary { a, b -> "($a).wrapping_rem($b)" }
                     } else null
                 } else {
                     binary { a, b -> "($a % $b)" }
                 }
-                "unaryMinus" -> unary { value -> if (integer) "($value).wrapping_neg()" else "(-$value)" }
-                "unaryPlus" -> unary { value -> value }
-                "inc" -> unary { value -> if (integer) "($value).wrapping_add(1)" else "($value + 1.0)" }
-                "dec" -> unary { value -> if (integer) "($value).wrapping_sub(1)" else "($value - 1.0)" }
-                "and" -> binary { a, b -> "($a & $b)" }
-                "or" -> binary { a, b -> "($a | $b)" }
-                "xor" -> binary { a, b -> "($a ^ $b)" }
-                "not" -> unary { value -> "(!$value)" }
+                "unaryMinus" -> if (integer) integerUnary { value -> "($value).wrapping_neg()" } else unary { value -> "(-$value)" }
+                "unaryPlus" -> if (integer) integerUnary { it } else unary { it }
+                "inc" -> if (integer) integerUnary { value -> "($value).wrapping_add(1)" } else unary { value -> "($value + 1.0)" }
+                "dec" -> if (integer) integerUnary { value -> "($value).wrapping_sub(1)" } else unary { value -> "($value - 1.0)" }
+                "and" -> if (integer) integerBinary { a, b -> "($a & $b)" } else binary { a, b -> "($a & $b)" }
+                "or" -> if (integer) integerBinary { a, b -> "($a | $b)" } else binary { a, b -> "($a | $b)" }
+                "xor" -> if (integer) integerBinary { a, b -> "($a ^ $b)" } else binary { a, b -> "($a ^ $b)" }
+                "not" -> if (integer) integerUnary { value -> "(!$value)" } else unary { value -> "(!$value)" }
                 "shl" -> if (integer && arguments.getOrNull(1)?.type?.isInt() == true) {
-                    binary(requireSameType = false) { a, b -> "($a).wrapping_shl($b as u32)" }
+                    integerShift { a, b -> "($a).wrapping_shl($b as u32)" }
                 } else null
                 "shr" -> if (integer && arguments.getOrNull(1)?.type?.isInt() == true) {
-                    binary(requireSameType = false) { a, b -> "($a).wrapping_shr($b as u32)" }
+                    integerShift { a, b -> "($a).wrapping_shr($b as u32)" }
                 } else null
                 "ushr" -> if (arguments.getOrNull(1)?.type?.isInt() != true) null
                     else if (lhs.type.isInt()) binary { a, b -> "(($a as u32).wrapping_shr($b as u32) as i32)" }
@@ -560,6 +590,9 @@ internal class RustIrCodegen(
 
         private fun IrExpression.isNonZeroIntegerConstant(): Boolean = when (this) {
             is IrConst -> when (kind) {
+                IrConstKind.Byte -> value as Byte != 0.toByte()
+                IrConstKind.Short -> value as Short != 0.toShort()
+                IrConstKind.Char -> value as Char != '\u0000'
                 IrConstKind.Int -> value as Int != 0
                 IrConstKind.Long -> value as Long != 0L
                 else -> false
@@ -569,6 +602,21 @@ internal class RustIrCodegen(
 
         private fun renderConst(constant: IrConst): String = when (constant.kind) {
             IrConstKind.Boolean -> (constant.value as Boolean).toString()
+            IrConstKind.Byte -> {
+                val value = constant.value as Byte
+                if (constant.type.isUByte()) "${value.toInt() and 0xff}_u8" else when (value) {
+                    Byte.MIN_VALUE -> "i8::MIN"
+                    else -> "${value}_i8"
+                }
+            }
+            IrConstKind.Short -> {
+                val value = constant.value as Short
+                if (constant.type.isUShort()) "${value.toInt() and 0xffff}_u16" else when (value) {
+                    Short.MIN_VALUE -> "i16::MIN"
+                    else -> "${value}_i16"
+                }
+            }
+            IrConstKind.Char -> "${(constant.value as Char).code}_u16"
             IrConstKind.Int -> {
                 val value = constant.value as Int
                 if (constant.type.isUInt()) "${Integer.toUnsignedString(value)}_u32" else when (value) {
@@ -711,10 +759,15 @@ internal class RustIrCodegen(
             return when {
                 type.isUnit() -> "()"
                 type.isBoolean() -> "bool"
+                type.isByte() -> "i8"
+                type.isShort() -> "i16"
+                type.isChar() -> "u16"
                 type.isInt() -> "i32"
                 type.isLong() -> "i64"
                 type.isFloat() -> "f32"
                 type.isDouble() -> "f64"
+                type.isUByte() -> "u8"
+                type.isUShort() -> "u16"
                 type.isUInt() -> "u32"
                 type.isULong() -> "u64"
                 else -> unsupported(element, RustUnsupportedCode.UNSUPPORTED_TYPE, "Unsupported Kotlin type $type")
@@ -722,7 +775,16 @@ internal class RustIrCodegen(
         }
 
         fun IrType.isSupportedPrimitive(): Boolean =
-            !isNullable() && (isBoolean() || isInt() || isLong() || isFloat() || isDouble() || isUInt() || isULong())
+            !isNullable() && (
+                    isBoolean() || isByte() || isShort() || isChar() || isInt() || isLong() || isFloat() || isDouble() ||
+                            isUByte() || isUShort() || isUInt() || isULong()
+                    )
+
+        fun IrType.isSupportedInteger(): Boolean =
+            !isNullable() && (
+                    isByte() || isShort() || isChar() || isInt() || isLong() ||
+                            isUByte() || isUShort() || isUInt() || isULong()
+                    )
 
         fun IrType.isSupportedPrintType(): Boolean =
             !isNullable() && (isBoolean() || isInt() || isLong() || isString())
@@ -854,6 +916,10 @@ internal class RustIrCodegen(
             "and", "or", "xor", "not", "shl", "shr", "ushr", "less", "lessOrEqual", "greater",
             "greaterOrEqual", "EQEQ", "EQEQEQ", "eqeq", "eqeqeq", "areEqualByValue", "ieee754equals",
             "ANDAND", "andand", "OROR", "oror",
+        )
+
+        private val INTEGER_CONVERSION_NAMES = setOf(
+            "toByte", "toShort", "toChar", "toInt", "toLong", "toUByte", "toUShort", "toUInt", "toULong",
         )
     }
 }
