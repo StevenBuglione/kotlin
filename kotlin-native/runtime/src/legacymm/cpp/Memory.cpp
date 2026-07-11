@@ -1516,11 +1516,19 @@ void drainArcDestructionWorklist(ContainerHeader* container) {
 
   ContainerHeaderList worklist;
   arcDestructionWorklist = &worklist;
-  worklist.push_back(container);
-  while (!worklist.empty()) {
-    ContainerHeader* next = worklist.back();
-    worklist.pop_back();
+  // Process the first object directly. Most final releases destroy a leaf object, so
+  // putting it in the vector would allocate backing storage that is never otherwise
+  // needed. Recursive field releases still enqueue their objects and reuse one vector
+  // for the entire destruction chain.
+  ContainerHeader* next = container;
+  while (next != nullptr) {
     freeContainer(next);
+    if (worklist.empty()) {
+      next = nullptr;
+    } else {
+      next = worklist.back();
+      worklist.pop_back();
+    }
   }
   arcDestructionWorklist = nullptr;
 }
