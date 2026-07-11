@@ -39,7 +39,6 @@ object RustInteropBridgePlanBuilder {
                 buildOperation(index, operation, handleIds)
             }
 
-            if (definition.handles.isEmpty()) report("handle", "at least one opaque handle is required")
             if (definition.operations.isEmpty()) report("operation", "at least one operation is required")
 
             if (diagnostics.isNotEmpty()) throw RustInteropDefinitionException(diagnostics.toList())

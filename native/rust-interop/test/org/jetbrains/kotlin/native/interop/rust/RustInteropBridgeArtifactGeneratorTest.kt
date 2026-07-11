@@ -7,9 +7,11 @@ package org.jetbrains.kotlin.native.interop.rust
 
 import java.security.MessageDigest
 import kotlin.test.Test
+import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 class RustInteropBridgeArtifactGeneratorTest {
@@ -82,6 +84,122 @@ class RustInteropBridgeArtifactGeneratorTest {
     }
 
     @Test
+    fun generatesPrimitiveFreeFunctionArtifactsWithContainedPanicsAndStableSymbols() {
+        val plan = primitiveFunctionPlan()
+        val operation = plan.operations.single()
+        val repeatedPlan = primitiveFunctionPlan()
+        val changedOperation = operation.copy(rustPath = "kn_direct_fixture::other_add")
+
+        val artifacts = RustInteropBridgeArtifactGenerator.generate(plan)
+        val repeated = RustInteropBridgeArtifactGenerator.generate(repeatedPlan)
+        val kotlinFacade = artifacts.kotlinFacades.values.single()
+        val symbol = RustInteropBridgeSymbols.bindingSymbol(plan, operation)
+
+        assertEquals(artifacts, repeated)
+        assertTrue(symbol.matches(Regex("knri_v1_p[0-9a-f]{32}_b[0-9a-f]{16}")), symbol)
+        assertEquals(
+            symbol,
+            RustInteropBridgeSymbols.bindingSymbol(
+                repeatedPlan,
+                repeatedPlan.operations.single(),
+            ),
+        )
+        assertNotEquals(
+            symbol,
+            RustInteropBridgeSymbols.bindingSymbol(
+                plan.copy(operations = listOf(changedOperation)),
+                changedOperation,
+            ),
+        )
+
+        assertContains(artifacts.cargoManifest, "kn-direct-fixture = { version = \"=0.1.0\" }")
+        assertContains(
+            artifacts.cHeader,
+            "int32_t $symbol(int32_t left, int32_t right, int32_t *output, knri_utf8 *error);",
+        )
+        assertFalse("kn_direct_fixture::add" in artifacts.cHeader, "Rust paths must remain private")
+
+        assertContains(artifacts.rustSource, "#[no_mangle]\npub unsafe extern \"C\" fn $symbol(")
+        assertContains(artifacts.rustSource, "left: i32, right: i32, output: *mut i32, error: *mut KnriUtf8")
+        assertContains(artifacts.rustSource, "if output.is_null()")
+        assertContains(artifacts.rustSource, "*output = kn_direct_fixture::add(left, right);")
+        assertEquals(1, artifacts.rustSource.split("catch_unwind(AssertUnwindSafe").size - 1)
+        assertContains(
+            artifacts.rustSource,
+            "Err(payload) => report_failure(error, Failure { status: KNRI_PANIC, message: panic_message(payload) })",
+        )
+
+        assertContains(kotlinFacade, "public class FixtureException(message: String) : RuntimeException(message)")
+        assertContains(kotlinFacade, "public fun add(left: Int, right: Int): Int = memScoped {")
+        assertContains(kotlinFacade, "val output = alloc<IntVar>()")
+        assertContains(kotlinFacade, "val status = $symbol(left, right, output.ptr, error.ptr)")
+        assertContains(kotlinFacade, "throw FixtureException(knriMessage(error))")
+        assertContains(kotlinFacade, "output.value")
+        assertFalse("kn_direct_fixture::add" in kotlinFacade, "Rust paths must remain private")
+        assertFalse("AtomicLong" in kotlinFacade, "Primitive facades must not import handle ownership support")
+        assertFalse("createCleaner" in kotlinFacade, "Primitive facades must not import Cleaner support")
+        assertFalse("HashMap" in artifacts.rustSource, "Primitive shims must not emit handle registries")
+    }
+
+    @Test
+    fun rejectsUnsupportedPrimitiveFreeFunctionShapesWithOperationContext() {
+        val plan = primitiveFunctionPlan()
+        val operation = plan.operations.single()
+        val unsupportedShapes = listOf(
+            Triple(
+                "Kotlin name",
+                operation.copy(kotlinName = "PrimitiveFixture.add"),
+                "requires a top-level Kotlin name without a receiver",
+            ),
+            Triple(
+                "receiver",
+                operation.copy(receiver = RustInteropReceiver(RustInteropReceiverOwnership.SHARED, "fixture")),
+                "requires receiver 'none'",
+            ),
+            Triple(
+                "parameter",
+                operation.copy(parameters = listOf(RustInteropParameter("value", RustInteropBridgeType.Utf8String))),
+                "has unsupported parameter 'value' of type 'string'; only primitive parameters are supported",
+            ),
+            Triple(
+                "return",
+                operation.copy(returnType = RustInteropBridgeType.Unit),
+                "has unsupported return type 'unit'; only primitive returns are supported",
+            ),
+            Triple(
+                "error policy",
+                operation.copy(
+                    errorPolicy = RustInteropErrorPolicy(RustInteropErrorMode.KOTLIN_EXCEPTION, "FixtureException")
+                ),
+                "requires error policy 'none'",
+            ),
+        )
+
+        unsupportedShapes.forEach { unsupportedShape ->
+            val description = unsupportedShape.first
+            val unsupportedOperation = unsupportedShape.second
+            val expectedMessage = unsupportedShape.third
+            val failure = assertFailsWith<RustInteropBridgeGenerationException>(description) {
+                RustInteropBridgeArtifactGenerator.generate(plan.copy(operations = listOf(unsupportedOperation)))
+            }
+            assertContains(failure.message.orEmpty(), "operation 'add'")
+            assertContains(failure.message.orEmpty(), expectedMessage)
+        }
+
+        val asyncFailure = assertFailsWith<RustInteropBridgeGenerationException> {
+            RustInteropBridgeArtifactGenerator.generate(
+                plan.copy(
+                    operations = listOf(
+                        operation.copy(asyncPolicy = RustInteropAsyncPolicy.RUST_FUTURE)
+                    )
+                )
+            )
+        }
+        assertContains(asyncFailure.message.orEmpty(), "operation 'add'")
+        assertContains(asyncFailure.message.orEmpty(), "unsupported async shape 'rust-future'")
+    }
+
+    @Test
     fun rejectsUnsupportedOperationShapeWithOperationContext() {
         val plan = RustInteropTomlParser.parsePlan(REGEX_DEFINITION)
         val pattern = plan.operations.single { it.id == "pattern" }
@@ -100,6 +218,43 @@ class RustInteropBridgeArtifactGeneratorTest {
     }
 
     private companion object {
+        fun primitiveFunctionPlan(): RustInteropBridgePlan {
+            val int32 = RustInteropBridgeType.Primitive(RustInteropPrimitive.INT32)
+            return RustInteropBridgePlan(
+                schemaVersion = RustInteropBridgePlanBuilder.SUPPORTED_SCHEMA_VERSION,
+                kotlinPackage = "fixture.primitive",
+                crate = RustInteropCrate(
+                    name = "kn-direct-fixture",
+                    version = "0.1.0",
+                    features = emptyList(),
+                    defaultFeatures = true,
+                ),
+                handles = emptyList(),
+                operations = listOf(
+                    RustInteropOperation(
+                        id = "add",
+                        kind = RustInteropOperationKind.FUNCTION,
+                        rustPath = "kn_direct_fixture::add",
+                        kotlinName = "add",
+                        receiver = RustInteropReceiver(RustInteropReceiverOwnership.NONE, null),
+                        parameters = listOf(
+                            RustInteropParameter("left", int32),
+                            RustInteropParameter("right", int32),
+                        ),
+                        returnType = int32,
+                        errorPolicy = RustInteropErrorPolicy(RustInteropErrorMode.NONE, null),
+                        panicPolicy = RustInteropPanicPolicy(
+                            RustInteropPanicMode.KOTLIN_EXCEPTION,
+                            "FixtureException",
+                        ),
+                        threading = RustInteropOperationThreading.CALLER,
+                        asyncPolicy = RustInteropAsyncPolicy.SYNCHRONOUS,
+                        targetPolicy = RustInteropTargetPolicy(emptyList(), emptyList()),
+                    )
+                ),
+            )
+        }
+
         fun sha256(value: String): String = MessageDigest.getInstance("SHA-256")
             .digest(value.encodeToByteArray())
             .joinToString(separator = "") { byte ->

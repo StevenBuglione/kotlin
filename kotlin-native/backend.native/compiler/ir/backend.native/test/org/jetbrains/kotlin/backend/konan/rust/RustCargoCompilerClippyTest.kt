@@ -71,6 +71,51 @@ class RustCargoCompilerClippyTest {
         assertContainsInOrder(commands.last(), "--lib", "--release", "--message-format=short", "--", "--emit=llvm-bc")
         assertFalse(staleArtifactPresentAtRustc, "Only stale root bitcode should be removed before rustc")
         assertEquals("generated_library-current.bc", artifact.llvmBitcode.fileName.toString())
+        assertEquals(null, artifact.staticLibrary)
+        assertTrue(artifact.nativeStaticLibraries.isEmpty())
+    }
+
+    @Test
+    fun emitsCompanionStaticLibraryForRegistryDependencies() = withTemporaryDirectory { directory ->
+        val commands = mutableListOf<List<String>>()
+        val staticLibrary = directory.resolve("target").resolve(TARGET).resolve("release").resolve("libgenerated_library.a")
+        val staleStaticLibrary = byteArrayOf(1)
+        Files.createDirectories(staticLibrary.parent)
+        Files.write(staticLibrary, staleStaticLibrary)
+        var staleStaticLibraryPresentAtRustc = true
+        val executor = RustCommandExecutor { command, _ ->
+            commands += command
+            if (command[1] == "rustc") {
+                staleStaticLibraryPresentAtRustc = Files.exists(staticLibrary)
+                Files.createDirectories(bitcodeDirectory(directory, TARGET))
+                Files.write(bitcodeDirectory(directory, TARGET).resolve("generated_library-current.bc"), byteArrayOf(2))
+                Files.write(staticLibrary, byteArrayOf(3))
+            }
+            if (command[1] == "rustc") {
+                "note: native-static-libs: -lgcc_s -lutil -lrt -lpthread -lm -ldl -lc\n"
+            } else {
+                ""
+            }
+        }
+
+        val artifact = RustBitcodeLibraryCompiler(commandExecutor = executor).compile(
+            packageName = "generated_library",
+            targetTriple = TARGET,
+            renderedLibraryRs = "#![no_std]\npub fn answer() -> i32 { direct_dep::answer() }",
+            outputDirectory = directory,
+            dependencies = listOf(RustCargoRegistryDependency("direct_dep", "1.2.3")),
+        )
+
+        assertEquals(listOf("clippy", "rustc"), commands.map { it[1] })
+        assertContainsInOrder(
+            commands.last(),
+            "--lib", "--release", "--message-format=short", "--", "--emit=llvm-bc,link", "-C", "embed-bitcode=yes",
+            "--print", "native-static-libs",
+        )
+        assertFalse(staleStaticLibraryPresentAtRustc, "The dependency archive must be produced by the current rustc invocation")
+        assertEquals(staticLibrary, artifact.staticLibrary)
+        assertEquals(listOf("-lgcc_s", "-lutil", "-lrt", "-lpthread", "-lm", "-ldl", "-lc"), artifact.nativeStaticLibraries)
+        assertTrue(Files.isRegularFile(artifact.llvmBitcode))
     }
 
     @Test

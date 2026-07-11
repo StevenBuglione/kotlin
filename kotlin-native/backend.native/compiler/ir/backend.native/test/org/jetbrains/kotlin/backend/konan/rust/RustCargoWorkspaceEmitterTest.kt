@@ -11,6 +11,7 @@ import java.nio.file.Path
 import java.nio.file.attribute.FileTime
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class RustCargoWorkspaceEmitterTest {
@@ -116,6 +117,85 @@ class RustCargoWorkspaceEmitterTest {
             "#![no_std]\npub fn twice(value: i32) -> i32 { value * 2 }\n",
             Files.readAllBytes(workspace.librarySource).toString(StandardCharsets.UTF_8),
         )
+    }
+
+    @Test
+    fun emitsDeterministicRegistryDependenciesAndFatLtoStaticLibrary() = withTemporaryDirectory { directory ->
+        val workspace = RustBitcodeLibraryWorkspaceEmitter.emit(
+            RustBitcodeLibraryWorkspaceSpec(
+                packageName = "kotlin_rust_module",
+                targetTriple = "x86_64-unknown-linux-gnu",
+                libraryRs = "#![no_std]\npub fn answer() -> i32 { direct_dep::answer() }",
+                outputDirectory = directory,
+                dependencies = listOf(
+                    RustCargoRegistryDependency(
+                        packageName = "z-dependency",
+                        version = "2.0.1",
+                        features = listOf("unicode", "perf", "unicode"),
+                        defaultFeatures = false,
+                    ),
+                    RustCargoRegistryDependency(
+                        packageName = "direct_dep",
+                        version = "1.2.3-beta.1",
+                    ),
+                ),
+            )
+        )
+
+        assertTrue(workspace.hasDependencies)
+        assertEquals(
+            """
+                [package]
+                name = "kotlin_rust_module"
+                version = "0.0.0"
+                edition = "2021"
+                publish = false
+
+                [lib]
+                name = "kotlin_rust_module"
+                path = "src/lib.rs"
+                crate-type = ["rlib", "staticlib"]
+
+                [dependencies]
+                direct_dep = { version = "=1.2.3-beta.1" }
+                z-dependency = { version = "=2.0.1", default-features = false, features = ["perf", "unicode"] }
+
+                [profile.dev]
+                codegen-units = 1
+                opt-level = 1
+                overflow-checks = false
+                panic = "unwind"
+                lto = "fat"
+
+                [profile.release]
+                codegen-units = 1
+                overflow-checks = false
+                panic = "unwind"
+                lto = "fat"
+
+                [workspace]
+            """.trimIndent() + "\n",
+            Files.readAllBytes(workspace.manifest).toString(StandardCharsets.UTF_8),
+        )
+    }
+
+    @Test
+    fun rejectsAmbiguousOrUnsafeRegistryDependencies() = withTemporaryDirectory { directory ->
+        assertFailsWith<IllegalArgumentException> {
+            RustBitcodeLibraryWorkspaceSpec(
+                packageName = "kotlin_rust_module",
+                targetTriple = "x86_64-unknown-linux-gnu",
+                libraryRs = "#![no_std]\npub fn answer() -> i32 { 42 }",
+                outputDirectory = directory,
+                dependencies = listOf(
+                    RustCargoRegistryDependency("same-name", "1.0.0"),
+                    RustCargoRegistryDependency("same_name", "1.0.0"),
+                ),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            RustCargoRegistryDependency("unsafe", "1.0.0\"\npath = \"elsewhere")
+        }
     }
 
     private inline fun withTemporaryDirectory(block: (Path) -> Unit) {

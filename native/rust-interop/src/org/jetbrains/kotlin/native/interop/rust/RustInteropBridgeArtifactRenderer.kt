@@ -79,6 +79,10 @@ object RustInteropBridgeArtifactGenerator {
         if (operation.asyncPolicy != RustInteropAsyncPolicy.SYNCHRONOUS) {
             fail("operation '${operation.id}' in crate '${plan.crate.name}' has unsupported async shape '${operation.asyncPolicy.externalName}'")
         }
+        if (operation.kind == RustInteropOperationKind.FUNCTION) {
+            validatePrimitiveFunction(plan, operation)
+            return
+        }
         val supported = when (operation.kind) {
             RustInteropOperationKind.CONSTRUCTOR ->
                 operation.receiver.ownership == RustInteropReceiverOwnership.NONE &&
@@ -98,7 +102,7 @@ object RustInteropBridgeArtifactGenerator {
                 operation.receiver.ownership == RustInteropReceiverOwnership.CONSUMING &&
                         operation.parameters.isEmpty() && operation.returnType == RustInteropBridgeType.Unit &&
                         operation.errorPolicy.mode == RustInteropErrorMode.NONE
-            RustInteropOperationKind.FUNCTION -> false
+            RustInteropOperationKind.FUNCTION -> error("validated above")
         }
         if (!supported) {
             fail("operation '${operation.id}' in crate '${plan.crate.name}' has an unsupported v1 bridge shape (${operation.kind.externalName})")
@@ -109,10 +113,50 @@ object RustInteropBridgeArtifactGenerator {
         }
     }
 
+    private fun validatePrimitiveFunction(plan: RustInteropBridgePlan, operation: RustInteropOperation) {
+        val description = "primitive function operation '${operation.id}' in crate '${plan.crate.name}'"
+        if (operation.receiver.ownership != RustInteropReceiverOwnership.NONE || operation.receiver.handleId != null) {
+            fail("$description requires receiver 'none'")
+        }
+        if ('.' in operation.kotlinName) {
+            fail("$description requires a top-level Kotlin name without a receiver")
+        }
+        operation.parameters.firstOrNull { it.type !is RustInteropBridgeType.Primitive }?.let { parameter ->
+            fail(
+                "$description has unsupported parameter '${parameter.name}' of type '${parameter.type.canonicalName()}'; " +
+                        "only primitive parameters are supported"
+            )
+        }
+        if (operation.returnType !is RustInteropBridgeType.Primitive) {
+            fail(
+                "$description has unsupported return type '${operation.returnType.canonicalName()}'; " +
+                        "only primitive returns are supported"
+            )
+        }
+        if (operation.errorPolicy.mode != RustInteropErrorMode.NONE) {
+            fail("$description requires error policy 'none'")
+        }
+    }
+
     private data class Aggregate(val plans: List<RustInteropBridgePlan>, val crateName: String) {
+        val operations = plans.flatMap { it.operations }
         val hash = sha256(plans.joinToString("\u0000") { RustInteropBridgePlanHash.planHash(it) })
         val prefix = "knri_v${RustInteropBridgePlanBuilder.SUPPORTED_SCHEMA_VERSION}_a${hash.take(24)}"
         val cInteropPackage = "kotlinx.rustinterop.generated.a" + hash.take(16)
+        val hasHandles = plans.any { it.handles.isNotEmpty() }
+        val needsUtf8Input = operations.any {
+            it.kind == RustInteropOperationKind.CONSTRUCTOR || it.kind == RustInteropOperationKind.METHOD
+        }
+        val needsErrorStatus = operations.any { it.errorPolicy.mode != RustInteropErrorMode.NONE }
+        val needsPanicStatus = operations.any { it.panicPolicy.mode != RustInteropPanicMode.ABORT }
+        val needsInvalidInputStatus = operations.any {
+            it.kind == RustInteropOperationKind.CONSTRUCTOR || it.kind == RustInteropOperationKind.METHOD ||
+                    it.kind == RustInteropOperationKind.FUNCTION
+        }
+        val needsClosedHandleStatus = operations.any {
+            it.kind == RustInteropOperationKind.METHOD || it.kind == RustInteropOperationKind.PROPERTY_GET ||
+                    it.kind == RustInteropOperationKind.CLOSE
+        }
     }
 
     private fun renderCargoManifest(aggregate: Aggregate): String = buildString {
@@ -140,21 +184,33 @@ object RustInteropBridgeArtifactGenerator {
 
     private fun renderRustSource(aggregate: Aggregate): String = buildString {
         append("#![allow(clippy::missing_safety_doc)]\n\n")
-        append("use std::any::Any;\nuse std::collections::HashMap;\nuse std::panic::{catch_unwind, AssertUnwindSafe};\n")
-        append("use std::slice;\nuse std::sync::{Arc, Mutex, OnceLock};\n\n")
-        append("const KNRI_OK: i32 = 0;\nconst KNRI_ERROR: i32 = 1;\nconst KNRI_PANIC: i32 = 2;\n")
-        append("const KNRI_INVALID_INPUT: i32 = 3;\nconst KNRI_CLOSED_HANDLE: i32 = 4;\n\n")
+        if (aggregate.needsPanicStatus) append("use std::any::Any;\n")
+        if (aggregate.hasHandles) append("use std::collections::HashMap;\n")
+        append("use std::panic::{catch_unwind, AssertUnwindSafe};\n")
+        if (aggregate.needsUtf8Input) append("use std::slice;\n")
+        if (aggregate.hasHandles) append("use std::sync::{Arc, Mutex, OnceLock};\n")
+        append('\n')
+        append("const KNRI_OK: i32 = 0;\n")
+        if (aggregate.needsErrorStatus) append("const KNRI_ERROR: i32 = 1;\n")
+        if (aggregate.needsPanicStatus) append("const KNRI_PANIC: i32 = 2;\n")
+        if (aggregate.needsInvalidInputStatus) append("const KNRI_INVALID_INPUT: i32 = 3;\n")
+        if (aggregate.needsClosedHandleStatus) append("const KNRI_CLOSED_HANDLE: i32 = 4;\n")
+        append('\n')
         append("#[repr(C)]\npub struct KnriUtf8 { pub data: *mut u8, pub len: usize }\n\n")
         append("struct Failure { status: i32, message: String }\n\n")
-        append("unsafe fn read_utf8<'a>(data: *const u8, len: usize) -> Result<&'a str, Failure> {\n")
-        append("    if len == 0 { return Ok(\"\"); }\n    if data.is_null() { return Err(Failure { status: KNRI_INVALID_INPUT, message: \"null UTF-8 pointer\".into() }); }\n")
-        append("    std::str::from_utf8(slice::from_raw_parts(data, len)).map_err(|error| Failure { status: KNRI_INVALID_INPUT, message: error.to_string() })\n}\n\n")
+        if (aggregate.needsUtf8Input) {
+            append("unsafe fn read_utf8<'a>(data: *const u8, len: usize) -> Result<&'a str, Failure> {\n")
+            append("    if len == 0 { return Ok(\"\"); }\n    if data.is_null() { return Err(Failure { status: KNRI_INVALID_INPUT, message: \"null UTF-8 pointer\".into() }); }\n")
+            append("    std::str::from_utf8(slice::from_raw_parts(data, len)).map_err(|error| Failure { status: KNRI_INVALID_INPUT, message: error.to_string() })\n}\n\n")
+        }
         append("unsafe fn write_utf8(output: *mut KnriUtf8, value: String) -> Result<(), Failure> {\n")
         append("    if output.is_null() { return Err(Failure { status: KNRI_INVALID_INPUT, message: \"null output pointer\".into() }); }\n")
         append("    let mut bytes = value.into_bytes().into_boxed_slice();\n    (*output).len = bytes.len();\n    (*output).data = bytes.as_mut_ptr();\n    std::mem::forget(bytes);\n    Ok(())\n}\n\n")
         append("unsafe fn report_failure(output: *mut KnriUtf8, failure: Failure) -> i32 {\n    let status = failure.status;\n    let _ = write_utf8(output, failure.message);\n    status\n}\n\n")
-        append("fn panic_message(payload: Box<dyn Any + Send>) -> String {\n")
-        append("    if let Some(value) = payload.downcast_ref::<&str>() { (*value).to_owned() } else if let Some(value) = payload.downcast_ref::<String>() { value.clone() } else { \"Rust panic\".into() }\n}\n\n")
+        if (aggregate.needsPanicStatus) {
+            append("fn panic_message(payload: Box<dyn Any + Send>) -> String {\n")
+            append("    if let Some(value) = payload.downcast_ref::<&str>() { (*value).to_owned() } else if let Some(value) = payload.downcast_ref::<String>() { value.clone() } else { \"Rust panic\".into() }\n}\n\n")
+        }
         append("#[no_mangle]\npub unsafe extern \"C\" fn ").append(aggregate.prefix).append("_free_utf8(data: *mut u8, len: usize) {\n")
         append("    if !data.is_null() { drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(data, len))); }\n}\n\n")
 
@@ -186,7 +242,12 @@ object RustInteropBridgeArtifactGenerator {
             RustInteropOperationKind.METHOD -> append("handle: u64, ").append(parameter).append("_data: *const u8, ").append(parameter).append("_len: usize, output: *mut bool, error: *mut KnriUtf8")
             RustInteropOperationKind.PROPERTY_GET -> append("handle: u64, output: *mut KnriUtf8, error: *mut KnriUtf8")
             RustInteropOperationKind.CLOSE -> append("handle: u64, error: *mut KnriUtf8")
-            RustInteropOperationKind.FUNCTION -> error("validated above")
+            RustInteropOperationKind.FUNCTION -> {
+                operation.parameters.forEach { parameter ->
+                    append(parameter.name).append(": ").append(parameter.type.rustPrimitiveType()).append(", ")
+                }
+                append("output: *mut ").append(operation.returnType.rustPrimitiveType()).append(", error: *mut KnriUtf8")
+            }
         }
         append(") -> i32 {\n    let result = catch_unwind(AssertUnwindSafe(|| -> Result<(), Failure> {\n")
         when (operation.kind) {
@@ -216,7 +277,12 @@ object RustInteropBridgeArtifactGenerator {
                 append("        ").append(registry!!.lowercase()).append("().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&handle)")
                 append(".ok_or_else(|| Failure { status: KNRI_CLOSED_HANDLE, message: \"closed handle\".into() })?;\n")
             }
-            RustInteropOperationKind.FUNCTION -> error("validated above")
+            RustInteropOperationKind.FUNCTION -> {
+                append("        if output.is_null() { return Err(Failure { status: KNRI_INVALID_INPUT, message: \"null output pointer\".into() }); }\n")
+                append("        *output = ").append(operation.rustPath).append('(')
+                operation.parameters.joinTo(this) { it.name }
+                append(");\n")
+            }
         }
         append("        Ok(())\n    }));\n    match result {\n        Ok(Ok(())) => KNRI_OK,\n        Ok(Err(failure)) => report_failure(error, failure),\n")
         when (panicMode) {
@@ -244,7 +310,12 @@ object RustInteropBridgeArtifactGenerator {
                     RustInteropOperationKind.METHOD -> append("uint64_t handle, const uint8_t *").append(parameter).append("_data, size_t ").append(parameter).append("_len, bool *output, knri_utf8 *error")
                     RustInteropOperationKind.PROPERTY_GET -> append("uint64_t handle, knri_utf8 *output, knri_utf8 *error")
                     RustInteropOperationKind.CLOSE -> append("uint64_t handle, knri_utf8 *error")
-                    RustInteropOperationKind.FUNCTION -> error("validated above")
+                    RustInteropOperationKind.FUNCTION -> {
+                        operation.parameters.forEach { parameter ->
+                            append(parameter.type.cPrimitiveType()).append(' ').append(parameter.name).append(", ")
+                        }
+                        append(operation.returnType.cPrimitiveType()).append(" *output, knri_utf8 *error")
+                    }
                 }
                 append(");\n")
             }
@@ -264,7 +335,8 @@ object RustInteropBridgeArtifactGenerator {
         val kotlinPackage = plan.kotlinPackage
         append("@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class, kotlin.experimental.ExperimentalNativeApi::class)\n\n")
         append("package ").append(kotlinPackage).append("\n\n")
-        append("import kotlin.concurrent.AtomicLong\nimport kotlin.native.ref.createCleaner\nimport kotlinx.cinterop.*\n")
+        if (plan.handles.isNotEmpty()) append("import kotlin.concurrent.AtomicLong\nimport kotlin.native.ref.createCleaner\n")
+        append("import kotlinx.cinterop.*\n")
         append("import ").append(aggregate.cInteropPackage).append(".*\n\n")
         append("private const val KNRI_OK_STATUS = 0\n\n")
         append("private fun knriMessage(value: knri_utf8): String {\n")
@@ -275,7 +347,26 @@ object RustInteropBridgeArtifactGenerator {
         }.filter { '.' !in it }.distinct().sorted().forEach { exception ->
             append("public class ").append(exception).append("(message: String) : RuntimeException(message)\n\n")
         }
+        plan.operations.filter { it.kind == RustInteropOperationKind.FUNCTION }.sortedBy { it.id }.forEach { operation ->
+            appendKotlinFunction(plan, operation)
+        }
         plan.handles.forEach { handle -> appendKotlinHandle(aggregate, plan, handle) }
+    }
+
+    private fun StringBuilder.appendKotlinFunction(plan: RustInteropBridgePlan, operation: RustInteropOperation) {
+        val returnType = operation.returnType.kotlinPrimitiveType()
+        append("public fun ").append(operation.kotlinName).append('(')
+        operation.parameters.joinTo(this) { parameter ->
+            "${parameter.name}: ${parameter.type.kotlinPrimitiveType()}"
+        }
+        append("): ").append(returnType).append(" = memScoped {\n")
+        append("    val output = alloc<").append(operation.returnType.kotlinPrimitiveVarType()).append(">()\n")
+        append("    val error = alloc<knri_utf8>()\n")
+        append("    val status = ").append(RustInteropBridgeSymbols.bindingSymbol(plan, operation)).append('(')
+        operation.parameters.forEach { parameter -> append(parameter.name).append(", ") }
+        append("output.ptr, error.ptr)\n")
+        append("    if (status != KNRI_OK_STATUS) throw ").append(exceptionFor(operation)).append("(knriMessage(error))\n")
+        append("    output.value\n}\n\n")
     }
 
     private fun StringBuilder.appendKotlinHandle(aggregate: Aggregate, plan: RustInteropBridgePlan, handle: RustInteropHandle) {
@@ -315,6 +406,41 @@ object RustInteropBridgeArtifactGenerator {
 
     private fun exceptionFor(operation: RustInteropOperation): String =
         operation.errorPolicy.kotlinException ?: operation.panicPolicy.kotlinException ?: "IllegalStateException"
+
+    private fun RustInteropBridgeType.rustPrimitiveType(): String = primitiveKind().externalName
+
+    private fun RustInteropBridgeType.cPrimitiveType(): String = when (primitiveKind()) {
+        RustInteropPrimitive.BOOLEAN -> "bool"
+        RustInteropPrimitive.INT8 -> "int8_t"
+        RustInteropPrimitive.INT16 -> "int16_t"
+        RustInteropPrimitive.INT32 -> "int32_t"
+        RustInteropPrimitive.INT64 -> "int64_t"
+        RustInteropPrimitive.UINT8 -> "uint8_t"
+        RustInteropPrimitive.UINT16 -> "uint16_t"
+        RustInteropPrimitive.UINT32 -> "uint32_t"
+        RustInteropPrimitive.UINT64 -> "uint64_t"
+        RustInteropPrimitive.FLOAT32 -> "float"
+        RustInteropPrimitive.FLOAT64 -> "double"
+    }
+
+    private fun RustInteropBridgeType.kotlinPrimitiveType(): String = when (primitiveKind()) {
+        RustInteropPrimitive.BOOLEAN -> "Boolean"
+        RustInteropPrimitive.INT8 -> "Byte"
+        RustInteropPrimitive.INT16 -> "Short"
+        RustInteropPrimitive.INT32 -> "Int"
+        RustInteropPrimitive.INT64 -> "Long"
+        RustInteropPrimitive.UINT8 -> "UByte"
+        RustInteropPrimitive.UINT16 -> "UShort"
+        RustInteropPrimitive.UINT32 -> "UInt"
+        RustInteropPrimitive.UINT64 -> "ULong"
+        RustInteropPrimitive.FLOAT32 -> "Float"
+        RustInteropPrimitive.FLOAT64 -> "Double"
+    }
+
+    private fun RustInteropBridgeType.kotlinPrimitiveVarType(): String = kotlinPrimitiveType() + "Var"
+
+    private fun RustInteropBridgeType.primitiveKind(): RustInteropPrimitive =
+        (this as? RustInteropBridgeType.Primitive)?.kind ?: error("validated primitive bridge type expected")
 
     private fun registryName(plan: RustInteropBridgePlan, handleId: String): String =
         "REGISTRY_" + RustInteropBridgePlanHash.planHash(plan).take(12).uppercase() + "_" + handleId.replace('-', '_').uppercase()
