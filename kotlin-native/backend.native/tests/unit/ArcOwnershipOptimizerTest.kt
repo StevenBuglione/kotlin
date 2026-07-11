@@ -96,6 +96,150 @@ class ArcOwnershipOptimizerTest {
     }
 
     @Test
+    fun eliminatesContainedOwnedCopyUsedByBorrowsAndStrongStores() {
+        val source = ArcValue("source")
+        val copied = ArcValue("copied")
+        val borrowed = ArcValue("borrowed")
+        val input = plan(
+            operations = listOf(
+                ArcOperation.Copy(source, copied),
+                ArcOperation.Borrow(copied, borrowed),
+                ArcOperation.StrongStore(ArcStorage("directField"), copied),
+                ArcOperation.StrongStore(ArcStorage("borrowedField"), borrowed),
+                ArcOperation.Destroy(copied),
+                ArcOperation.Destroy(source),
+            ),
+            entryValues = mapOf(source to ArcOwnership.Owned),
+        )
+
+        val result = ArcOwnershipOptimizer.optimizeVerified(input)
+
+        assertEquals(
+            listOf(
+                ArcOperation.Borrow(source, borrowed),
+                ArcOperation.StrongStore(ArcStorage("directField"), source),
+                ArcOperation.StrongStore(ArcStorage("borrowedField"), borrowed),
+                ArcOperation.Destroy(source),
+            ),
+            result.plan.blocks.getValue(entry).operations,
+        )
+        assertEquals(1, result.metrics.containedOwnedCopiesEliminated)
+        assertEquals(0, result.metrics.copyDestroyPairsEliminated)
+        assertEquals(2, result.metrics.eliminatedReferenceCountingOperations)
+        assertTrue(result.metrics.render().contains("1 contained owned copies eliminated"))
+        assertSame(ArcOwnershipVerificationResult.Success, ArcOwnershipVerifier.verify(result.plan))
+    }
+
+    @Test
+    fun eliminatesContainedOwnedCopyWhenSourceIsReturned() {
+        val source = ArcValue("source")
+        val copied = ArcValue("copied")
+        val input = plan(
+            operations = listOf(
+                ArcOperation.Copy(source, copied),
+                ArcOperation.StrongStore(ArcStorage("field"), copied),
+                ArcOperation.Destroy(copied),
+            ),
+            entryValues = mapOf(source to ArcOwnership.Owned),
+            terminator = ArcTerminator.Return(source),
+        )
+
+        val result = ArcOwnershipOptimizer.optimizeVerified(input)
+
+        assertEquals(
+            listOf(ArcOperation.StrongStore(ArcStorage("field"), source)),
+            result.plan.blocks.getValue(entry).operations,
+        )
+        assertEquals(1, result.metrics.containedOwnedCopiesEliminated)
+        assertSame(ArcOwnershipVerificationResult.Success, ArcOwnershipVerifier.verify(result.plan))
+    }
+
+    @Test
+    fun keepsContainedCopyWhenSourceDiesBeforeCopiedValue() {
+        val source = ArcValue("source")
+        val copied = ArcValue("copied")
+        val input = plan(
+            operations = listOf(
+                ArcOperation.Copy(source, copied),
+                ArcOperation.StrongStore(ArcStorage("field"), copied),
+                ArcOperation.Destroy(source),
+                ArcOperation.Destroy(copied),
+            ),
+            entryValues = mapOf(source to ArcOwnership.Owned),
+        )
+
+        val result = ArcOwnershipOptimizer.optimizeVerified(input)
+
+        assertSame(input, result.plan)
+        assertEquals(0, result.metrics.containedOwnedCopiesEliminated)
+    }
+
+    @Test
+    fun keepsContainedCopyWhoseResultIsReturned() {
+        val source = ArcValue("source")
+        val copied = ArcValue("copied")
+        val input = plan(
+            operations = listOf(
+                ArcOperation.Copy(source, copied),
+                ArcOperation.StrongStore(ArcStorage("field"), source),
+                ArcOperation.Destroy(source),
+            ),
+            entryValues = mapOf(source to ArcOwnership.Owned),
+            terminator = ArcTerminator.Return(copied),
+        )
+
+        val result = ArcOwnershipOptimizer.optimizeVerified(input)
+
+        assertSame(input, result.plan)
+        assertEquals(0, result.metrics.containedOwnedCopiesEliminated)
+    }
+
+    @Test
+    fun keepsContainedCopyWhenBorrowEscapesItsLifetime() {
+        val source = ArcValue("source")
+        val copied = ArcValue("copied")
+        val borrowed = ArcValue("borrowed")
+        val input = plan(
+            operations = listOf(
+                ArcOperation.Copy(source, copied),
+                ArcOperation.Borrow(copied, borrowed),
+                ArcOperation.Destroy(copied),
+                ArcOperation.StrongStore(ArcStorage("field"), borrowed),
+                ArcOperation.Destroy(source),
+            ),
+            entryValues = mapOf(source to ArcOwnership.Owned),
+        )
+
+        val result = ArcOwnershipOptimizer.optimizeVerified(input)
+
+        assertSame(input, result.plan)
+        assertEquals(0, result.metrics.containedOwnedCopiesEliminated)
+    }
+
+    @Test
+    fun keepsContainedCopyWithAnAmbiguousConsumingUse() {
+        val source = ArcValue("source")
+        val copied = ArcValue("copied")
+        val escapedCopy = ArcValue("escapedCopy")
+        val input = plan(
+            operations = listOf(
+                ArcOperation.Copy(source, copied),
+                ArcOperation.Copy(copied, escapedCopy),
+                ArcOperation.StrongStore(ArcStorage("field"), escapedCopy),
+                ArcOperation.Destroy(copied),
+                ArcOperation.Destroy(escapedCopy),
+                ArcOperation.Destroy(source),
+            ),
+            entryValues = mapOf(source to ArcOwnership.Owned),
+        )
+
+        val result = ArcOwnershipOptimizer.optimizeVerified(input)
+
+        assertSame(input, result.plan)
+        assertEquals(0, result.metrics.containedOwnedCopiesEliminated)
+    }
+
+    @Test
     fun curatedPlanReportsCompleteNaiveCopyDestroyElimination() {
         val argument = ArcValue("argument")
         val operations = buildList {

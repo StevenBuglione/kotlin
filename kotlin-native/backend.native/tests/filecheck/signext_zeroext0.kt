@@ -172,11 +172,12 @@ fun nullableId(arg: CharWrapper?): CharWrapper? {
 
 // Check that we don't pass primitive-specific attributes to their boxes
 fun checkBoxes() {
-    // CHECK: call %struct.ObjHeader* @"kfun:#nullableId(kotlin.Byte?){}kotlin.Byte?"(%struct.ObjHeader* {{.*}}, %struct.ObjHeader** {{.*}})
+    // ARC uses invoke when the boxed result is held in an owning cleanup frame.
+    // CHECK: {{call|invoke}} %struct.ObjHeader* @"kfun:#nullableId(kotlin.Byte?){}kotlin.Byte?"(%struct.ObjHeader* {{.*}}, %struct.ObjHeader** {{.*}})
     // CHECK-AAPCS: call %struct.ObjHeader* @"kfun:#nullableId(kotlin.Byte?){}kotlin.Byte?"(%struct.ObjHeader* {{.*}}, %struct.ObjHeader** {{.*}})
     // CHECK-WINDOWSX64: call %struct.ObjHeader* @"kfun:#nullableId(kotlin.Byte?){}kotlin.Byte?"(%struct.ObjHeader* {{.*}}, %struct.ObjHeader** {{.*}})
     nullableId(1.toByte())
-    // CHECK: call %struct.ObjHeader* @"kfun:#nullableId(CharWrapper?){}CharWrapper?"(%struct.ObjHeader* {{.*}}, %struct.ObjHeader** {{.*}})
+    // CHECK: {{call|invoke}} %struct.ObjHeader* @"kfun:#nullableId(CharWrapper?){}CharWrapper?"(%struct.ObjHeader* {{.*}}, %struct.ObjHeader** {{.*}})
     // CHECK-AAPCS: call %struct.ObjHeader* @"kfun:#nullableId(CharWrapper?){}CharWrapper?"(%struct.ObjHeader* {{.*}}, %struct.ObjHeader** {{.*}})
     // CHECK-WINDOWSX64: call %struct.ObjHeader* @"kfun:#nullableId(CharWrapper?){}CharWrapper?"(%struct.ObjHeader* {{.*}}, %struct.ObjHeader** {{.*}})
     nullableId(CharWrapper('a'))

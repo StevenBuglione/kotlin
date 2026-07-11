@@ -14,6 +14,7 @@ internal data class ArcOwnershipOptimizationMetrics(
     val referenceCountingOperationsAfter: Int = 0,
     val forwardedOwnedResults: Int = 0,
     val copyDestroyPairsEliminated: Int = 0,
+    val containedOwnedCopiesEliminated: Int = 0,
 ) {
     val eliminatedReferenceCountingOperations: Int
         get() = referenceCountingOperationsBefore - referenceCountingOperationsAfter
@@ -31,6 +32,7 @@ internal data class ArcOwnershipOptimizationMetrics(
         referenceCountingOperationsAfter = referenceCountingOperationsAfter + other.referenceCountingOperationsAfter,
         forwardedOwnedResults = forwardedOwnedResults + other.forwardedOwnedResults,
         copyDestroyPairsEliminated = copyDestroyPairsEliminated + other.copyDestroyPairsEliminated,
+        containedOwnedCopiesEliminated = containedOwnedCopiesEliminated + other.containedOwnedCopiesEliminated,
     )
 
     fun render(): String =
@@ -38,7 +40,8 @@ internal data class ArcOwnershipOptimizationMetrics(
                 "$eliminatedReferenceCountingOperations/$referenceCountingOperationsBefore " +
                 "reference-counting operations eliminated ($eliminationPercentage%), " +
                 "$forwardedOwnedResults owned results forwarded, " +
-                "$copyDestroyPairsEliminated copy/destroy pairs eliminated"
+                "$copyDestroyPairsEliminated copy/destroy pairs eliminated, " +
+                "$containedOwnedCopiesEliminated contained owned copies eliminated"
 }
 
 internal data class ArcOwnershipOptimizationResult(
@@ -61,11 +64,17 @@ internal object ArcOwnershipOptimizer {
         var operations = operationsBefore
         var forwardedOwnedResults = 0
         var copyDestroyPairsEliminated = 0
+        var containedOwnedCopiesEliminated = 0
 
         while (true) {
             val rewritten = forwardOneOwnedResult(operations, block.terminator) ?: break
             operations = rewritten
             forwardedOwnedResults++
+        }
+        while (true) {
+            val rewritten = eliminateOneContainedOwnedCopy(plan.entryValues, operations, block.terminator) ?: break
+            operations = rewritten
+            containedOwnedCopiesEliminated++
         }
         while (true) {
             val rewritten = eliminateOneCopyDestroyPair(operations, block.terminator) ?: break
@@ -85,6 +94,7 @@ internal object ArcOwnershipOptimizer {
                 operations,
                 forwardedOwnedResults,
                 copyDestroyPairsEliminated,
+                containedOwnedCopiesEliminated,
             ),
         )
     }
@@ -111,6 +121,7 @@ internal object ArcOwnershipOptimizer {
         after: List<ArcOperation>,
         forwardedOwnedResults: Int,
         copyDestroyPairsEliminated: Int,
+        containedOwnedCopiesEliminated: Int,
     ) = ArcOwnershipOptimizationMetrics(
         plansVisited = 1,
         plansChanged = if (before == after) 0 else 1,
@@ -120,6 +131,7 @@ internal object ArcOwnershipOptimizer {
         referenceCountingOperationsAfter = after.count(ArcOperation::isReferenceCountingOperation),
         forwardedOwnedResults = forwardedOwnedResults,
         copyDestroyPairsEliminated = copyDestroyPairsEliminated,
+        containedOwnedCopiesEliminated = containedOwnedCopiesEliminated,
     )
 
     /**
@@ -174,6 +186,100 @@ internal object ArcOwnershipOptimizer {
         }
         return null
     }
+
+    /**
+     * Remove a contained retain/release pair while an independent owned source keeps the object alive.
+     *
+     * This is intentionally restricted to a single block. The copied value may only be borrowed, stored into
+     * strong storage, and finally destroyed. The source must itself be owned and its destroy (or ownership-
+     * transferring return) must follow the copied value's destroy. Consequently the copied +1 cannot be the
+     * reference that controls deinitialization, and replacing its non-consuming uses with the source preserves
+     * both object identity and deinitialization timing.
+     */
+    private fun eliminateOneContainedOwnedCopy(
+        entryValues: Map<ArcValue, ArcOwnership>,
+        operations: List<ArcOperation>,
+        terminator: ArcTerminator,
+    ): List<ArcOperation>? {
+        val ownerships = entryValues.toMutableMap()
+
+        operations.forEachIndexed { copyIndex, operation ->
+            val copy = operation as? ArcOperation.Copy
+            if (copy != null && ownerships[copy.source] == ArcOwnership.Owned && !terminator.uses(copy.result)) {
+                val resultUses = operations.withIndex()
+                    .filter { it.index > copyIndex && it.value.uses(copy.result) }
+                val resultDestroy = resultUses.singleOrNull { it.value is ArcOperation.Destroy }
+                if (resultDestroy != null) {
+                    val nonDestroyUses = resultUses.filterNot { it.index == resultDestroy.index }
+                    val usesAreContained =
+                            nonDestroyUses.all { it.value is ArcOperation.Borrow || it.value is ArcOperation.StrongStore } &&
+                            nonDestroyUses.all { it.index < resultDestroy.index } &&
+                            borrowedResultsAreContained(nonDestroyUses, operations, resultDestroy.index, terminator)
+                    val sourceDestroyIndex = operations.indexOfFirstAfter(copyIndex) {
+                        it is ArcOperation.Destroy && it.value == copy.source
+                    }
+                    val sourceIsReturned = terminator is ArcTerminator.Return && terminator.value == copy.source
+                    val sourceOutlivesResult = sourceDestroyIndex > resultDestroy.index ||
+                            (sourceDestroyIndex < 0 && sourceIsReturned)
+
+                    if (usesAreContained && sourceOutlivesResult) {
+                        return operations.mapIndexedNotNull { index, current ->
+                            when (index) {
+                                copyIndex, resultDestroy.index -> null
+                                else -> current.replacingUse(copy.result, copy.source)
+                            }
+                        }
+                    }
+                }
+            }
+
+            operation.definedValue(ownerships)?.let { (value, ownership) -> ownerships[value] = ownership }
+        }
+        return null
+    }
+
+    /** A borrow may not indirectly extend the eliminated copy's lifetime or escape through a return. */
+    private fun borrowedResultsAreContained(
+        resultUses: List<IndexedValue<ArcOperation>>,
+        operations: List<ArcOperation>,
+        resultDestroyIndex: Int,
+        terminator: ArcTerminator,
+    ): Boolean {
+        val worklist = ArrayDeque<ArcValue>()
+        resultUses.forEach { (it.value as? ArcOperation.Borrow)?.result?.let(worklist::addLast) }
+        val visited = mutableSetOf<ArcValue>()
+        while (worklist.isNotEmpty()) {
+            val borrowed = worklist.removeFirst()
+            if (!visited.add(borrowed) || terminator.uses(borrowed)) return false
+            val uses = operations.withIndex().filter { it.value.uses(borrowed) }
+            if (uses.any { it.index >= resultDestroyIndex }) return false
+            uses.forEach { (it.value as? ArcOperation.Borrow)?.result?.let(worklist::addLast) }
+        }
+        return true
+    }
+}
+
+private fun List<ArcOperation>.indexOfFirstAfter(startIndex: Int, predicate: (ArcOperation) -> Boolean): Int {
+    for (index in startIndex + 1 until size) if (predicate(this[index])) return index
+    return -1
+}
+
+private fun ArcOperation.definedValue(ownerships: Map<ArcValue, ArcOwnership>): Pair<ArcValue, ArcOwnership>? = when (this) {
+    is ArcOperation.Define -> result to ownership
+    is ArcOperation.Copy -> result to if (ownerships[source] == ArcOwnership.Immortal) {
+        ArcOwnership.Immortal
+    } else {
+        ArcOwnership.Owned
+    }
+    is ArcOperation.StrongLoad -> result to ArcOwnership.Owned
+    is ArcOperation.Borrow -> result to ArcOwnership.Guaranteed
+    is ArcOperation.Destroy, is ArcOperation.StrongStore -> null
+}
+
+private fun ArcOperation.replacingUse(from: ArcValue, to: ArcValue): ArcOperation = when (this) {
+    is ArcOperation.Borrow -> if (source == from) copy(source = to) else this
+    is ArcOperation.StrongStore -> if (value == from) copy(value = to) else this
+    else -> this
 }
 
 private fun ArcOperation.uses(value: ArcValue): Boolean = when (this) {
