@@ -32,7 +32,7 @@ EXCLUDED_PATHS = (
 PROFILES = (
     "dist", "runtime", "sanity", "full", "arc-smoke", "arc-stress", "arc-race", "arc-race-tsan",
     "arc-unowned-death",
-    "arc-sanitize", "arc-bench",
+    "arc-sanitize", "arc-sanitize-asan", "arc-sanitize-ubsan", "arc-sanitize-tsan", "arc-bench",
 )
 
 
@@ -203,28 +203,12 @@ def profile_command(profile: str) -> list[str]:
     if profile == "arc-unowned-death":
         return ["bash", "tools/arc/run_fixture.sh", "unowned-death"]
     if profile == "arc-sanitize":
-        sanitizer = setting("ARC_SANITIZER", "address")
-        return gradle + [f"-Psanitizer={sanitizer}"] + tasks_from_environment(
-            "ARC_SANITIZE_TASKS", [":kotlin-native:runtime:hostRuntimeTests"]
-        )
+        return ["bash", "tools/arc/sanitizer_probe.sh", "all"]
+    if profile.startswith("arc-sanitize-"):
+        sanitizer = profile.removeprefix("arc-sanitize-")
+        return ["bash", "tools/arc/sanitizer_probe.sh", sanitizer]
     if profile == "arc-bench":
-        override = os.environ.get("ARC_BENCH_TASKS")
-        if override:
-            return gradle + shlex.split(override)
-        performance = ROOT / "kotlin-native" / "performance" / "settings.gradle"
-        if not performance.is_file():
-            raise SystemExit(
-                "No existing Kotlin/Native performance build was found; set ARC_BENCH_TASKS to the benchmark task(s)"
-            )
-        return [
-            "./gradlew",
-            "-p",
-            "kotlin-native/performance",
-            ":konanRun",
-            "-Pkotlin_dist=kotlin-native/dist",
-            f"--max-workers={workers()}",
-            "--no-daemon",
-        ]
+        return ["bash", "tools/arc/benchmark_compare.sh"]
     raise SystemExit(f"Unknown remote profile: {profile}")
 
 

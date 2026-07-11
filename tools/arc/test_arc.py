@@ -39,6 +39,7 @@ class ArcProfileTest(unittest.TestCase):
         script = (Path(__file__).parent / "run_fixture.sh").read_text()
         self.assertIn("sanitizer was not enabled", script)
         self.assertIn("sanitizer is unsupported", script)
+        self.assertIn("sanitizer produced no instrumentation symbols", script)
 
     def test_unowned_death_requires_the_lifetime_diagnostic(self):
         with patch.dict(os.environ, {}, clear=True):
@@ -47,11 +48,26 @@ class ArcProfileTest(unittest.TestCase):
         script = (Path(__file__).parent / "run_fixture.sh").read_text()
         self.assertIn("attempted to access an expired @ArcUnowned reference", script)
 
-    def test_sanitizer_is_configurable(self):
-        with patch.dict(os.environ, {"ARC_SANITIZER": "thread"}, clear=True):
-            command = arc.profile_command("arc-sanitize")
-        self.assertIn("-Psanitizer=thread", command)
-        self.assertIn(":kotlin-native:runtime:hostRuntimeTests", command)
+    def test_sanitizer_matrix_and_individual_probes_are_explicit(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(
+                ["bash", "tools/arc/sanitizer_probe.sh", "all"],
+                arc.profile_command("arc-sanitize"),
+            )
+            self.assertEqual(
+                ["bash", "tools/arc/sanitizer_probe.sh", "tsan"],
+                arc.profile_command("arc-sanitize-tsan"),
+            )
+
+    def test_benchmark_compares_arc_with_strict(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(["bash", "tools/arc/benchmark_compare.sh"], arc.profile_command("arc-bench"))
+
+    def test_sanitizer_probe_requires_binary_instrumentation_evidence(self):
+        script = (Path(__file__).parent / "sanitizer_probe.sh").read_text()
+        self.assertIn("readelf -Ws", script)
+        self.assertIn("UNSUPPORTED", script)
+        self.assertIn("exit 77", script)
 
     def test_snapshot_pathspec_excludes_browser_checkout(self):
         self.assertIn(".arc-runs", arc.EXCLUDED_PATHS)

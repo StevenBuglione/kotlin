@@ -42,6 +42,15 @@ remote-arc-unowned-death: remote-snapshot
 remote-arc-sanitize: remote-snapshot
     {{python}} tools/arc/arc.py run arc-sanitize
 
+remote-arc-sanitize-asan: remote-snapshot
+    {{python}} tools/arc/arc.py run arc-sanitize-asan
+
+remote-arc-sanitize-ubsan: remote-snapshot
+    {{python}} tools/arc/arc.py run arc-sanitize-ubsan
+
+remote-arc-sanitize-tsan: remote-snapshot
+    {{python}} tools/arc/arc.py run arc-sanitize-tsan
+
 remote-arc-bench: remote-snapshot
     {{python}} tools/arc/arc.py run arc-bench
 

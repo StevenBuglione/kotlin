@@ -42,6 +42,21 @@ if [[ ! -x "$executable" && -x "$output" ]]; then
 fi
 [[ -x "$executable" ]] || { echo "ARC fixture executable was not produced: $executable" >&2; exit 1; }
 
+if [[ -n "${ARC_FIXTURE_SANITIZER:-}" ]]; then
+    command -v readelf >/dev/null || { echo "readelf is required to verify sanitizer instrumentation" >&2; exit 1; }
+    case "$ARC_FIXTURE_SANITIZER" in
+        thread) sanitizer_symbol='__tsan_(init|func_entry|read|write)' ;;
+        address) sanitizer_symbol='__asan_(init|report|load|store)' ;;
+        undefined) sanitizer_symbol='__ubsan_handle_' ;;
+        *) echo "no instrumentation proof rule for sanitizer $ARC_FIXTURE_SANITIZER" >&2; exit 1 ;;
+    esac
+    readelf -Ws "$executable" >"$artifacts/sanitizer-symbols.txt"
+    grep -Eq "$sanitizer_symbol" "$artifacts/sanitizer-symbols.txt" || {
+        echo "requested $ARC_FIXTURE_SANITIZER sanitizer produced no instrumentation symbols" >&2
+        exit 1
+    }
+fi
+
 if [[ "$profile" == unowned-death ]]; then
     set +e
     "$executable" >"$artifacts/runtime.log" 2>&1
