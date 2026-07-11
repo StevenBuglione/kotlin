@@ -24,6 +24,7 @@ class ArcProfileTest(unittest.TestCase):
         self.assertIn(":kotlin-native:runtime:hostRuntimeTests", command)
 
     def test_snapshot_pathspec_excludes_browser_checkout(self):
+        self.assertIn(".arc-runs", arc.EXCLUDED_PATHS)
         self.assertIn("wasm/wasm.debug.browsers", arc.EXCLUDED_PATHS)
         self.assertIn("tools/arc/__pycache__", arc.EXCLUDED_PATHS)
 
@@ -33,6 +34,11 @@ class ArcProfileTest(unittest.TestCase):
                 "ssh://olfa@10.10.10.8/home/olfa/codex-kotlin-rust/.git",
                 arc.remote_url(),
             )
+
+    def test_all_durable_profiles_have_commands(self):
+        with patch.dict(os.environ, {}, clear=True):
+            for profile in arc.PROFILES:
+                self.assertTrue(arc.profile_command(profile), profile)
 
 
 if __name__ == "__main__":

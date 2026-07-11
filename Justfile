@@ -35,3 +35,9 @@ remote-arc-sanitize: remote-snapshot
 
 remote-arc-bench: remote-snapshot
     {{python}} tools/arc/arc.py run arc-bench
+
+remote-status profile:
+    {{python}} tools/arc/arc.py status {{profile}}
+
+remote-log profile:
+    {{python}} tools/arc/arc.py log {{profile}}

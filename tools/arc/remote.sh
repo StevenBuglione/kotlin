@@ -31,13 +31,65 @@ check_disk() {
 }
 
 marker_path() {
-    git -C "$repo" rev-parse --git-path codex-arc-managed
+    printf '%s/codex-arc-managed\n' "$(git -C "$repo" rev-parse --absolute-git-dir)"
+}
+
+check_managed_repo() {
+    git -C "$repo" rev-parse --is-inside-work-tree >/dev/null 2>&1 || fail "$repo is not a Git worktree"
+    [[ -f "$(marker_path)" ]] || fail "$repo is not a tools/arc-managed checkout; refusing to touch it"
+    [[ -z "$(git -C "$repo" ls-files -- .arc-runs)" ]] || fail "$repo has a tracked .arc-runs path; refusing unsafe state access"
 }
 
 check_managed_clean_repo() {
-    git -C "$repo" rev-parse --is-inside-work-tree >/dev/null 2>&1 || fail "$repo is not a Git worktree"
-    [[ -f "$(marker_path)" ]] || fail "$repo is not a tools/arc-managed checkout; refusing to touch it"
-    [[ -z "$(git -C "$repo" status --porcelain --untracked-files=normal)" ]] || fail "$repo has local changes; refusing to touch it"
+    check_managed_repo
+    [[ -z "$(git -C "$repo" status --porcelain --untracked-files=normal -- . ':(exclude).arc-runs' ':(exclude).arc-runs/**')" ]] ||
+        fail "$repo has local changes; refusing to touch it"
+}
+
+validate_profile() {
+    [[ "$1" =~ ^[a-z0-9][a-z0-9-]*$ ]] || fail "invalid build profile: $1"
+}
+
+profile_dir() {
+    validate_profile "$1"
+    printf '%s/.arc-runs/%s\n' "$repo" "$1"
+}
+
+profile_is_running() {
+    local state pid
+    state=$(profile_dir "$1")
+    [[ -f "$state/pid" && ! -f "$state/exit-status" ]] || return 1
+    pid=$(cat "$state/pid")
+    [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null
+}
+
+check_no_active_runs() {
+    local state profile
+    [[ -d "$repo/.arc-runs" ]] || return 0
+    for state in "$repo/.arc-runs"/*; do
+        [[ -d "$state" ]] || continue
+        profile=${state##*/}
+        profile_is_running "$profile" && fail "build profile $profile is still running; refusing to change its checkout"
+    done
+}
+
+write_runner() {
+    local state=$1 log=$2 status=$3 runner=$4
+    shift 4
+    {
+        echo '#!/usr/bin/env bash'
+        echo 'set +e'
+        printf 'cd %q\n' "$repo"
+        printf 'export JAVA_HOME=%q\n' "$java_home"
+        printf 'export PATH=%q:$PATH\n' "$java_home/bin"
+        printf '%q ' "$@"
+        printf '>>%q 2>&1\n' "$log"
+        echo 'result=$?'
+        printf 'printf "%%s\\n" "$result" >%q\n' "$state/exit-status.tmp"
+        printf 'mv %q %q\n' "$state/exit-status.tmp" "$status"
+        echo 'exit "$result"'
+    } >"$runner"
+    chmod 700 "$runner"
 }
 
 case "$action" in
@@ -69,21 +121,75 @@ case "$action" in
         reference=$1
         expected=$2
         check_managed_clean_repo
+        check_no_active_runs
         actual=$(git -C "$repo" rev-parse "$reference^{commit}")
         [[ "$actual" == "$expected" ]] || fail "snapshot ref resolved to $actual, expected $expected"
         git -C "$repo" checkout --detach "$expected"
         check_managed_clean_repo
         ;;
-    run)
+    start)
+        profile=$1
+        shift
         check_java
         check_disk
         check_managed_clean_repo
         (( workers >= 1 && workers <= 28 )) || fail "worker count must be between 1 and 28"
         [[ $# -gt 0 ]] || fail "no build command supplied"
-        export JAVA_HOME="$java_home"
-        export PATH="$JAVA_HOME/bin:$PATH"
-        cd "$repo"
-        exec "$@"
+        state=$(profile_dir "$profile")
+        if profile_is_running "$profile"; then
+            echo "profile=$profile state=running pid=$(cat "$state/pid")"
+            exit 0
+        fi
+        if [[ -f "$state/pid" && ! -f "$state/exit-status" ]]; then
+            fail "profile $profile has stale state without an exit status; inspect $state before retrying"
+        fi
+        mkdir -p "$state"
+        rm -f "$state/build.log" "$state/pid" "$state/exit-status" "$state/exit-status.tmp" \
+            "$state/started-at" "$state/command" "$state/runner.sh"
+        log="$state/build.log"
+        runner="$state/runner.sh"
+        : >"$log"
+        date --iso-8601=seconds >"$state/started-at"
+        printf '%q ' "$@" >"$state/command"
+        printf '\n' >>"$state/command"
+        write_runner "$state" "$log" "$state/exit-status" "$runner" "$@"
+        nohup bash "$runner" </dev/null >/dev/null 2>&1 &
+        pid=$!
+        printf '%s\n' "$pid" >"$state/pid"
+        echo "profile=$profile state=started pid=$pid log=$log"
+        ;;
+    follow)
+        profile=$1
+        check_managed_repo
+        state=$(profile_dir "$profile")
+        [[ -f "$state/pid" ]] || fail "profile $profile has not been started"
+        pid=$(cat "$state/pid")
+        [[ "$pid" =~ ^[0-9]+$ ]] || fail "profile $profile has invalid pid state"
+        touch "$state/build.log"
+        tail -n +1 --pid="$pid" -f "$state/build.log" || true
+        [[ -f "$state/exit-status" ]] || fail "profile $profile stopped without publishing an exit status"
+        exit "$(cat "$state/exit-status")"
+        ;;
+    status)
+        profile=$1
+        check_managed_repo
+        state=$(profile_dir "$profile")
+        if [[ ! -f "$state/pid" ]]; then
+            echo "profile=$profile state=not-started"
+        elif [[ -f "$state/exit-status" ]]; then
+            echo "profile=$profile state=finished pid=$(cat "$state/pid") exit=$(cat "$state/exit-status") started=$(cat "$state/started-at")"
+        elif profile_is_running "$profile"; then
+            echo "profile=$profile state=running pid=$(cat "$state/pid") started=$(cat "$state/started-at")"
+        else
+            echo "profile=$profile state=stale pid=$(cat "$state/pid") started=$(cat "$state/started-at")"
+        fi
+        ;;
+    log)
+        profile=$1
+        check_managed_repo
+        state=$(profile_dir "$profile")
+        [[ -f "$state/build.log" ]] || fail "profile $profile has no log"
+        cat "$state/build.log"
         ;;
     *)
         fail "unknown action: $action"

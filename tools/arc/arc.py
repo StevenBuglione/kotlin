@@ -25,9 +25,11 @@ DEFAULT_BASE_REF = "v1.9.10"
 MAX_WORKERS = 28
 MIN_AVAILABLE_GIB = 60
 EXCLUDED_PATHS = (
+    ".arc-runs",
     "wasm/wasm.debug.browsers",
     "tools/arc/__pycache__",
 )
+PROFILES = ("dist", "runtime", "sanity", "full", "arc-smoke", "arc-stress", "arc-sanitize", "arc-bench")
 
 
 def run(
@@ -83,7 +85,9 @@ def remote(action: str, *arguments: str) -> None:
         *arguments,
     ]
     print("+", shlex.join(command), flush=True)
-    subprocess.run(command, cwd=ROOT, check=True, input=helper.encode("utf-8"))
+    result = subprocess.run(command, cwd=ROOT, check=False, input=helper.encode("utf-8"))
+    if result.returncode != 0:
+        raise SystemExit(result.returncode)
 
 
 def doctor() -> None:
@@ -198,7 +202,16 @@ def profile_command(profile: str) -> list[str]:
 
 
 def remote_run(profile: str) -> None:
-    remote("run", *profile_command(profile))
+    remote("start", profile, *profile_command(profile))
+    remote("follow", profile)
+
+
+def remote_status(profile: str) -> None:
+    remote("status", profile)
+
+
+def remote_log(profile: str) -> None:
+    remote("log", profile)
 
 
 def main() -> None:
@@ -208,10 +221,11 @@ def main() -> None:
     subparsers.add_parser("remote-init")
     subparsers.add_parser("remote-snapshot")
     run_parser = subparsers.add_parser("run")
-    run_parser.add_argument(
-        "profile",
-        choices=("dist", "runtime", "sanity", "full", "arc-smoke", "arc-stress", "arc-sanitize", "arc-bench"),
-    )
+    run_parser.add_argument("profile", choices=PROFILES)
+    status_parser = subparsers.add_parser("status")
+    status_parser.add_argument("profile", choices=PROFILES)
+    log_parser = subparsers.add_parser("log")
+    log_parser.add_argument("profile", choices=PROFILES)
     arguments = parser.parse_args()
     if arguments.command == "doctor":
         doctor()
@@ -219,6 +233,10 @@ def main() -> None:
         remote_init()
     elif arguments.command == "remote-snapshot":
         remote_snapshot()
+    elif arguments.command == "status":
+        remote_status(arguments.profile)
+    elif arguments.command == "log":
+        remote_log(arguments.profile)
     else:
         remote_run(arguments.profile)
 
