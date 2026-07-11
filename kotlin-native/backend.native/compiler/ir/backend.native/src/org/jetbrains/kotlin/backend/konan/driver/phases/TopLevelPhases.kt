@@ -5,7 +5,11 @@
 
 package org.jetbrains.kotlin.backend.konan.driver.phases
 
+import llvm.LLVMLinkage
+import llvm.LLVMGetLinkage
+import llvm.LLVMGetNamedFunction
 import llvm.LLVMModuleRef
+import llvm.LLVMSetLinkage
 import org.jetbrains.kotlin.backend.common.phaser.PhaseEngine
 import org.jetbrains.kotlin.backend.konan.*
 import org.jetbrains.kotlin.backend.konan.driver.PerformanceManagerContext
@@ -13,6 +17,7 @@ import org.jetbrains.kotlin.backend.konan.driver.NativeBackendPhaseContext
 import org.jetbrains.kotlin.backend.konan.driver.utilities.CExportFiles
 import org.jetbrains.kotlin.backend.konan.driver.utilities.createTempFiles
 import org.jetbrains.kotlin.backend.konan.ir.konanLibrary
+import org.jetbrains.kotlin.backend.konan.rust.tryCompileRustHybridModule
 import org.jetbrains.kotlin.backend.konan.serialization.CacheDeserializationStrategy
 import org.jetbrains.kotlin.backend.konan.serialization.PartialCacheInfo
 import org.jetbrains.kotlin.cli.common.config.kotlinSourceRoots
@@ -500,8 +505,8 @@ internal fun PhaseEngine<NativeGenerationState>.partiallyLowerModuleWithDependen
 }
 
 internal fun PhaseEngine<NativeGenerationState>.runBackendCodegen(module: IrModuleFragment, irBuiltIns: IrBuiltIns, cExportFiles: CExportFiles?) {
-    runCodegen(module, irBuiltIns)
-    val generatedBitcodeFiles = if (context.config.produceCInterface) {
+    val rustBitcodeFiles = runCodegen(module, irBuiltIns)
+    val cExportBitcodeFiles = if (context.config.produceCInterface) {
         require(cExportFiles != null)
         val input = CExportGenerateApiInput(
                 context.context.cAdapterExportedElements!!,
@@ -526,7 +531,15 @@ internal fun PhaseEngine<NativeGenerationState>.runBackendCodegen(module: IrModu
     if (context.shouldPrintBitCode()) {
         runAndMeasurePhase(PrintBitcodePhase, llvmModule)
     }
-    runAndMeasurePhase(LinkBitcodeDependenciesPhase, generatedBitcodeFiles)
+    runAndMeasurePhase(LinkBitcodeDependenciesPhase, rustBitcodeFiles + cExportBitcodeFiles)
+    context.rustBoundaryLinkages.entries.forEach { entry ->
+        val mergedFunction = LLVMGetNamedFunction(context.llvm.module, entry.key)
+            ?: error("Rust-linked function ${entry.key} disappeared while linking LLVM modules")
+        LLVMSetLinkage(mergedFunction, entry.value)
+    }
+    if (rustBitcodeFiles.isNotEmpty()) {
+        runAndMeasurePhase(VerifyBitcodePhase, llvmModule)
+    }
 }
 
 internal fun <Context, Input, Output, P> PhaseEngine<Context>.runAndMeasurePhase(phase: P, input: Input, disable: Boolean = false): Output
@@ -546,7 +559,7 @@ internal fun <Context, Output, P> PhaseEngine<Context>.runAndMeasurePhase(phase:
  * Compile lowered [module] to object file.
  * @return absolute path to object file.
  */
-private fun PhaseEngine<NativeGenerationState>.runCodegen(module: IrModuleFragment, irBuiltIns: IrBuiltIns) {
+private fun PhaseEngine<NativeGenerationState>.runCodegen(module: IrModuleFragment, irBuiltIns: IrBuiltIns): List<java.io.File> {
     val optimize = context.shouldOptimize()
     // It's ok to run global optimizations on a cache as long as it doesn't have other dependencies (stdlib)
     val runGlobalOptimizations = optimize && !context.config.cachedLibraries.hasStaticCaches
@@ -575,10 +588,24 @@ private fun PhaseEngine<NativeGenerationState>.runCodegen(module: IrModuleFragme
         runAndMeasurePhase(CoroutinesVarSpillingPhase, it)
     }
     runAndMeasurePhase(CreateLLVMDeclarationsPhase, module)
+    val rustArtifact = tryCompileRustHybridModule(context, module)
+    rustArtifact?.let { artifact ->
+        (artifact.generatedFunctions + artifact.fallbackFunctions).distinct().forEach { function ->
+            val llvmFunction = context.llvmDeclarations.forFunction(function)
+            val symbolName = llvmFunction.name
+                ?: error("Kotlin/Native produced an unnamed LLVM function for ${function.name}")
+            context.rustBoundaryLinkages[symbolName] = LLVMGetLinkage(llvmFunction.asCallback())
+            LLVMSetLinkage(llvmFunction.asCallback(), LLVMLinkage.LLVMExternalLinkage)
+        }
+    }
+    rustArtifact?.generatedFunctions?.forEach { function ->
+        context.rustGeneratedFunctions += function
+    }
     runAndMeasurePhase(GHAPhase, module, disable = !runGlobalOptimizations || context.config.produce.isCache)
     runAndMeasurePhase(RTTIPhase, RTTIInput(module, dceResult))
     val lifetimes = runAndMeasurePhase(EscapeAnalysisPhase, EscapeAnalysisInput(module, moduleDFG), disable = !runGlobalOptimizations)
     runAndMeasurePhase(CodegenPhase, CodegenInput(module, irBuiltIns, lifetimes))
+    return listOfNotNull(rustArtifact?.bitcodeFile)
 }
 
 private fun PhaseEngine<NativeGenerationState>.findDependenciesToCompile(): List<IrModuleFragment> {

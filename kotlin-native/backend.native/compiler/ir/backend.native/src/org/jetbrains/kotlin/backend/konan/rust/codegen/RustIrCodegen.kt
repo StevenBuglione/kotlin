@@ -63,6 +63,8 @@ import java.util.IdentityHashMap
 @OptIn(UnsafeDuringIrConstructionAPI::class)
 internal class RustIrCodegen(
     private val linkerSymbolNamer: RustLinkerSymbolNamer = RustLinkerSymbolNamer(::defaultLinkerName),
+    private val allowRustStandardIo: Boolean = true,
+    private val functionPrologue: String? = null,
 ) {
     fun generate(module: IrModuleFragment): RustCodegenResult =
         generate(module, collectTopLevelFunctions(module))
@@ -99,7 +101,14 @@ internal class RustIrCodegen(
         for (function in reachableFunctions) {
             try {
                 validateSignature(function)
-                generatedBodies[function] = FunctionRenderer(function, moduleFunctions, names).render()
+                generatedBodies[function] = FunctionRenderer(
+                    function,
+                    moduleFunctions,
+                    names,
+                    emptySet(),
+                    allowRustStandardIo,
+                    functionPrologue,
+                ).render()
             } catch (unsupported: UnsupportedIr) {
                 diagnostics += diagnostic(function, unsupported.element, unsupported.code, unsupported.message.orEmpty())
                 if (hasSupportedSignature(function)) fallbackFunctions += function
@@ -127,10 +136,20 @@ internal class RustIrCodegen(
             }
         } while (changed)
 
-        val generated = generatedBodies.keys.map { names.getValue(it) }
+        val finalizedBodies = generatedBodies.keys.associateWith { function ->
+            FunctionRenderer(
+                function,
+                moduleFunctions,
+                names,
+                fallbackFunctions,
+                allowRustStandardIo,
+                functionPrologue,
+            ).render()
+        }
+        val generated = finalizedBodies.keys.map { names.getValue(it) }
         val fallbacks = fallbackFunctions.sortedBy(::functionKey).map { names.getValue(it) }
         return RustCodegenResult(
-            source = renderModule(generatedBodies, fallbacks),
+            source = renderModule(finalizedBodies, fallbacks),
             generatedFunctions = generated,
             fallbackFunctions = fallbacks,
             diagnostics = diagnostics.distinctBy { listOf(it.functionName, it.code, it.location.startOffset, it.message) },
@@ -172,21 +191,6 @@ internal class RustIrCodegen(
             }
             appendLine("}")
             appendLine()
-            for (fallback in fallbacks) {
-                val function = fallback.declaration
-                append("#[inline]\nfn ")
-                append(fallback.rustName)
-                append('(')
-                append(renderParameters(function))
-                append(')')
-                append(renderReturnType(function.returnType))
-                append(" { unsafe { ")
-                append(fallback.rustName)
-                append("__llvm(")
-                append(renderArgumentNames(function))
-                appendLine(") } }")
-                appendLine()
-            }
         }
         for (entry in generatedBodies) {
             val function = entry.key
@@ -211,6 +215,9 @@ internal class RustIrCodegen(
         private val function: IrSimpleFunction,
         private val moduleFunctions: Set<IrSimpleFunction>,
         private val functionNames: Map<IrSimpleFunction, RustGeneratedFunction>,
+        private val fallbackFunctions: Set<IrSimpleFunction>,
+        private val allowRustStandardIo: Boolean,
+        private val functionPrologue: String?,
     ) {
         private val valueNames = IdentityHashMap<IrValueDeclaration, String>()
         private val loopNames = IdentityHashMap<IrLoop, String>()
@@ -227,10 +234,16 @@ internal class RustIrCodegen(
             return when (body) {
                 is IrBlockBody -> buildString {
                     appendLine("{")
+                    functionPrologue?.let { appendLine(indent(it)) }
                     body.statements.forEach { appendLine(indent(statement(it))) }
                     append('}')
                 }
-                is IrExpressionBody -> "{\n${indent(expression(body.expression))}\n}"
+                is IrExpressionBody -> buildString {
+                    appendLine("{")
+                    functionPrologue?.let { appendLine(indent(it)) }
+                    appendLine(indent(expression(body.expression)))
+                    append('}')
+                }
                 else -> unsupported(body, RustUnsupportedCode.UNSUPPORTED_DECLARATION, "Unsupported function body ${body::class.simpleName}")
             }
         }
@@ -399,7 +412,12 @@ internal class RustIrCodegen(
                 validateSignature(callee)
                 val target = functionNames[callee]
                     ?: unsupported(call, RustUnsupportedCode.MALFORMED_IR, "Reachable call target has no assigned Rust name")
-                return "${target.rustName}(${arguments.joinToString { expression(it) }})"
+                val renderedArguments = arguments.joinToString { expression(it) }
+                return if (callee in fallbackFunctions) {
+                    "unsafe { ${target.rustName}__llvm($renderedArguments) }"
+                } else {
+                    "${target.rustName}($renderedArguments)"
+                }
             }
             unsupported(call, RustUnsupportedCode.UNSUPPORTED_CALL, "Unsupported call to ${displayName(callee)}")
         }
@@ -408,6 +426,9 @@ internal class RustIrCodegen(
             if (callee.name.asString() != "println") return null
             val fqName = callee.fqNameWhenAvailable?.asString()
             if (fqName != "kotlin.io.println") return null
+            if (!allowRustStandardIo) {
+                unsupported(callee, RustUnsupportedCode.UNSUPPORTED_CALL, "println requires the Kotlin/Native runtime bridge")
+            }
             if (arguments.isEmpty()) return "println!()"
             if (arguments.size != 1) return null
             val argument = unwrapBoxForPrint(arguments.single())
@@ -620,10 +641,6 @@ internal class RustIrCodegen(
 
         fun renderParameters(function: IrSimpleFunction): String = function.parameters.mapIndexed { index, parameter ->
             "${sanitizeIdentifier(parameter.name.asString()).ifEmpty { "arg" }}_$index: ${rustType(parameter.type, parameter)}"
-        }.joinToString()
-
-        fun renderArgumentNames(function: IrSimpleFunction): String = function.parameters.mapIndexed { index, parameter ->
-            "${sanitizeIdentifier(parameter.name.asString()).ifEmpty { "arg" }}_$index"
         }.joinToString()
 
         fun renderReturnType(type: IrType): String =

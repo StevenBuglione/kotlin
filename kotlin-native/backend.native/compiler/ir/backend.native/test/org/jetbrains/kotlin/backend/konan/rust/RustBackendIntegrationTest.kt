@@ -5,6 +5,7 @@
 
 package org.jetbrains.kotlin.backend.konan.rust
 
+import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
@@ -20,7 +21,9 @@ class RustBackendIntegrationTest {
     @Test
     fun strictAndHybridPrograms() {
         val distribution = System.getenv(DISTRIBUTION_ENV)?.let(Paths::get) ?: return
-        val windows = System.getProperty("os.name").startsWith("Windows", ignoreCase = true)
+        val hostOs = System.getProperty("os.name")
+        val windows = hostOs.startsWith("Windows", ignoreCase = true)
+        if (!windows && !hostOs.startsWith("Linux", ignoreCase = true)) return
         val compiler = distribution.resolve("bin").resolve(if (windows) "konanc.bat" else "konanc")
         assertTrue(Files.isRegularFile(compiler), "Kotlin/Native compiler not found: $compiler")
 
@@ -42,6 +45,74 @@ class RustBackendIntegrationTest {
             val strictCompilation = compile(compiler, strictSource, strictOutput, "rust-strict", windows)
             assertEquals(0, strictCompilation.exitCode, strictCompilation.output)
             assertEquals("42", runProgram(executable(strictOutput, windows)).output.trim())
+
+            val mixedSource = directory.resolve("mixed.kt").apply {
+                writeText(
+                    """
+                        fun llvmLeaf(x: Int) = x / 1
+
+                        fun rustMiddle(x: Int) = llvmLeaf(x) * 2
+
+                        fun llvmDivide(x: Int) = 42 / x
+
+                        fun rustDivide(x: Int) = llvmDivide(x)
+
+                        fun main() {
+                            println(rustMiddle(21))
+                            try {
+                                rustDivide(0)
+                                println("not caught")
+                            } catch (_: ArithmeticException) {
+                                println("caught")
+                            }
+                        }
+                    """.trimIndent()
+                )
+            }
+            val mixedOutput = directory.resolve("mixed-hybrid")
+            val mixedCompilation = compile(compiler, mixedSource, mixedOutput, "rust-hybrid", windows)
+            assertEquals(0, mixedCompilation.exitCode, mixedCompilation.output)
+            val mixedProgramOutput = runProgram(executable(mixedOutput, windows)).output
+                .lineSequence()
+                .filter(String::isNotBlank)
+                .toList()
+            assertEquals(listOf("42", "caught"), mixedProgramOutput)
+            val linkedRustSource = directory.resolve(".kotlin-rust/mixed-hybrid/src/lib.rs")
+            assertTrue(Files.isRegularFile(linkedRustSource), "Linked Rust source not found: $linkedRustSource")
+            val preflightMarker = directory.resolve(".kotlin-rust/mixed-hybrid/rust-bitcode-preflight-ok")
+            assertTrue(Files.isRegularFile(preflightMarker), "Rust bitcode was not preflight-linked: $preflightMarker")
+            val linkedRustText = Files.readAllBytes(linkedRustSource).toString(StandardCharsets.UTF_8)
+            assertContains(linkedRustText, "Kotlin_mm_safePointFunctionPrologue")
+            assertContains(linkedRustText, "extern \"C-unwind\"")
+            assertContains(linkedRustText, "__llvm")
+            assertContains(linkedRustText, "kfun:#llvmLeaf")
+            assertContains(linkedRustText, "kfun:#llvmDivide")
+
+            val unitParameterSource = directory.resolve("unit-parameter.kt").apply {
+                writeText(
+                    """
+                        fun unitParameter(value: Unit): Int = 42
+
+                        fun main() {
+                            println(unitParameter(Unit))
+                        }
+                    """.trimIndent()
+                )
+            }
+            val unitParameterOutput = directory.resolve("unit-parameter-hybrid")
+            val unitParameterCompilation = compile(
+                compiler,
+                unitParameterSource,
+                unitParameterOutput,
+                "rust-hybrid",
+                windows,
+            )
+            assertEquals(0, unitParameterCompilation.exitCode, unitParameterCompilation.output)
+            assertEquals("42", runProgram(executable(unitParameterOutput, windows)).output.trim())
+            assertTrue(
+                Files.notExists(directory.resolve(".kotlin-rust/unit-parameter-hybrid/rust-bitcode-preflight-ok")),
+                "A Unit parameter must remain on the LLVM backend",
+            )
 
             val unsupportedSource = directory.resolve("unsupported.kt").apply {
                 writeText(

@@ -96,6 +96,11 @@ internal class NativeGenerationState(
 
     val virtualFunctionTrampolines = mutableMapOf<IrSimpleFunction, LlvmCallable>()
 
+    /** Kotlin functions whose bodies are supplied by Rust bitcode in the current module. */
+    val rustGeneratedFunctions = mutableSetOf<IrSimpleFunction>()
+    /** Original linkage for Kotlin/Rust boundary symbols while separate LLVM modules are joined. */
+    val rustBoundaryLinkages = mutableMapOf<String, LLVMLinkage>()
+
     val bindClassToObjCNameClassAdapters = mutableMapOf<String, ConstPointer>()
     val bindClassToObjCNameInterfaceAdapters = mutableMapOf<String, ConstPointer>()
 

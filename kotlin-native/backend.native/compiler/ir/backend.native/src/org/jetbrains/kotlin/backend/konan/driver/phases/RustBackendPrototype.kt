@@ -47,7 +47,10 @@ internal fun tryCompileRustProgramPrototype(
     cacheDeserializationStrategy: CacheDeserializationStrategy?,
 ): Boolean {
     val mode = config.configuration.nativeCodegenMode
-    if (mode == NativeCodegenMode.LLVM) return false
+    // Hybrid mode now rejoins the normal Kotlin/Native bitcode and linker pipeline. Keep this
+    // self-contained executable path only as the strict-mode bootstrap until its entry point and
+    // runtime calls use the Native ABI as well.
+    if (mode != NativeCodegenMode.RUST_STRICT) return false
 
     fun unsupportedConfiguration(message: String): Boolean {
         if (mode == NativeCodegenMode.RUST_HYBRID) return false

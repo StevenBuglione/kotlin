@@ -736,6 +736,13 @@ internal class CodeGeneratorVisitor(
         if (!declaration.shouldGenerateBody())
             return
 
+        if (declaration in generationState.rustGeneratedFunctions) {
+            if (declaration.retainAnnotation(context.config.target)) {
+                llvm.usedFunctions.add(codegen.llvmFunction(declaration))
+            }
+            return
+        }
+
         // Some special functions may have empty body, they are handled separately.
         val body = declaration.body ?: return
 

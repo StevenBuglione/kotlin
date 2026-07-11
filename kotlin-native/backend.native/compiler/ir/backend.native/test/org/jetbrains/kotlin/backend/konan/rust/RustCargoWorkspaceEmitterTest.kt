@@ -71,6 +71,52 @@ class RustCargoWorkspaceEmitterTest {
         assertTrue(Files.notExists(directory.resolve("src/.main.rs.tmp")))
     }
 
+    @Test
+    fun emitsNoStdBitcodeLibraryWorkspace() = withTemporaryDirectory { directory ->
+        val workspace = RustBitcodeLibraryWorkspaceEmitter.emit(
+            RustBitcodeLibraryWorkspaceSpec(
+                packageName = "kotlin_rust_module",
+                targetTriple = "x86_64-unknown-linux-gnu",
+                libraryRs = "#![no_std]\npub fn twice(value: i32) -> i32 { value * 2 }",
+                outputDirectory = directory,
+                release = false,
+            )
+        )
+
+        assertEquals(directory.resolve("src/lib.rs"), workspace.librarySource)
+        assertEquals(
+            """
+                [package]
+                name = "kotlin_rust_module"
+                version = "0.0.0"
+                edition = "2021"
+                publish = false
+
+                [lib]
+                name = "kotlin_rust_module"
+                path = "src/lib.rs"
+                crate-type = ["rlib"]
+
+                [profile.dev]
+                codegen-units = 1
+                overflow-checks = false
+                panic = "unwind"
+
+                [profile.release]
+                codegen-units = 1
+                overflow-checks = false
+                panic = "unwind"
+
+                [workspace]
+            """.trimIndent() + "\n",
+            Files.readAllBytes(workspace.manifest).toString(StandardCharsets.UTF_8),
+        )
+        assertEquals(
+            "#![no_std]\npub fn twice(value: i32) -> i32 { value * 2 }\n",
+            Files.readAllBytes(workspace.librarySource).toString(StandardCharsets.UTF_8),
+        )
+    }
+
     private inline fun withTemporaryDirectory(block: (Path) -> Unit) {
         val directory = Files.createTempDirectory("rust-workspace-emitter-test")
         try {
