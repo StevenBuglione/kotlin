@@ -11,9 +11,10 @@ fun id(a: Any?): Any? {
 
 // CHECK-LABEL: "kfun:#main(){}"
 fun main() {
-    // CHECK: call %struct.ObjHeader* @"kfun:#id(kotlin.Any?){}kotlin.Any?"
+    // ARC uses invoke while the returned reference is protected by an owning cleanup frame.
+    // CHECK: {{call|invoke}} %struct.ObjHeader* @"kfun:#id(kotlin.Any?){}kotlin.Any?"
     val x = id("Hello")
-    // CHECK: call void @"kfun:kotlin.io#println(kotlin.Any?){}"(%struct.ObjHeader* {{.*}})
+    // CHECK: {{call|invoke}} void @"kfun:kotlin.io#println(kotlin.Any?){}"(%struct.ObjHeader* {{.*}})
     println(x)
 // CHECK-LABEL: epilogue
 }
