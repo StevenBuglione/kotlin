@@ -16,6 +16,7 @@ import org.jetbrains.kotlin.konan.blackboxtest.support.settings.KotlinNativeTarg
 import org.jetbrains.kotlin.konan.blackboxtest.support.settings.MemoryModel
 import org.jetbrains.kotlin.konan.blackboxtest.support.settings.OptimizationMode
 import org.jetbrains.kotlin.konan.blackboxtest.support.settings.UsedPartialLinkageConfig
+import org.jetbrains.kotlin.konan.target.KonanTarget
 import org.jetbrains.kotlin.test.TestMetadata
 import org.jetbrains.kotlin.test.services.JUnit5Assertions.assertFalse
 import org.jetbrains.kotlin.test.services.JUnit5Assertions.assertTrue
@@ -94,6 +95,32 @@ class CachesAutoBuildTest : AbstractNativeSimpleTest() {
         val main2 = compileToExecutable(rootDir.resolve("main"), autoCacheFrom = buildDir, emptyList(), listOf(customRuntimeAsserts), lib)
 
         assertTrue(main2.executableFile.exists())
+    }
+
+    @Test
+    @TestMetadata("simple")
+    fun testArcAutoCacheDoesNotReuseLegacyFlavor() {
+        Assumptions.assumeTrue(testRunSettings.get<KotlinNativeTargets>().testTarget == KonanTarget.LINUX_X64)
+        Assumptions.assumeTrue(testRunSettings.get<MemoryModel>() == MemoryModel.ARC)
+
+        val legacyFlavor = CacheMode.computeCacheDirName(
+            KonanTarget.LINUX_X64,
+            "STATIC",
+            debuggable = testRunSettings.get<OptimizationMode>() == OptimizationMode.DEBUG,
+            partialLinkageEnabled = testRunSettings.get<UsedPartialLinkageConfig>().config.isEnabled,
+            memoryModel = MemoryModel.LEGACY,
+        )
+        val legacyMarker = autoCacheDir.resolve(legacyFlavor).resolve("lib/legacy-cache.marker")
+        legacyMarker.parentFile.mkdirs()
+        legacyMarker.writeText("must not be selected by ARC")
+
+        val rootDir = File("$TEST_SUITE_PATH/simple")
+        val lib = compileToLibrary(rootDir.resolve("lib"), buildDir)
+        val main = compileToExecutable(rootDir.resolve("main"), autoCacheFrom = buildDir, emptyList(), emptyList(), lib)
+
+        assertTrue(main.executableFile.exists())
+        assertTrue(legacyMarker.exists())
+        assertTrue(autoCacheDir.resolve(cacheFlavor).resolve("lib").exists())
     }
 
     private fun compileToExecutable(

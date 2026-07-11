@@ -95,6 +95,9 @@ class KonanDriver(
         if (cacheBuilder.needToBuild()) {
             cacheBuilder.build()
             konanConfig = KonanConfig(project, configuration) // TODO: Just set freshly built caches.
+            // Cache building changes which dependency modules are deserialized into IR.
+            // A frontend analyzed before those caches existed cannot be reused safely.
+            precomputedFrontendOutput = null
         }
 
         konanConfig.cacheSupport.checkConsistency()

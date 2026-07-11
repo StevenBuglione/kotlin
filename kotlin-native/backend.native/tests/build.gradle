@@ -5455,6 +5455,30 @@ dynamicTest("produce_dynamic") {
     useGoldenData = true
 }
 
+def arcCompatibilityLinuxX64 = tasks.register("arcCompatibilityLinuxX64", Exec) {
+    group = "verification"
+    description = "Verifies ARC executable, native library, KLIB, and cinterop compatibility on Linux x64"
+    enabled = project.target.name == "linux_x64"
+    dependsOn(":kotlin-native:dist")
+
+    def compatibilitySources = fileTree("arc/compatibility")
+    def compatibilityOutput = file("$buildDir/arcCompatibilityLinuxX64")
+    inputs.files(compatibilitySources)
+    outputs.dir(compatibilityOutput)
+    outputs.upToDateWhen { false }
+
+    commandLine(
+            "bash",
+            file("arc/compatibility/run.sh").absolutePath,
+            kotlinNativeDist.absolutePath,
+            compatibilityOutput.absolutePath,
+    )
+}
+
+if (project.target.name == "linux_x64") {
+    sanity.dependsOn(arcCompatibilityLinuxX64)
+}
+
 dynamicTest("kt36639") {
     disabled = (project.testTarget == 'wasm32') // wasm doesn't support -produce dynamic
     source = "produce_dynamic/kt-36639/main.kt"

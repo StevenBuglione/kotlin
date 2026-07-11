@@ -25,6 +25,7 @@ import org.jetbrains.kotlin.konan.blackboxtest.support.settings.CacheMode
 import org.jetbrains.kotlin.konan.blackboxtest.support.util.*
 import org.jetbrains.kotlin.konan.target.Distribution
 import org.jetbrains.kotlin.konan.target.HostManager
+import org.jetbrains.kotlin.konan.target.KonanTarget
 import org.jetbrains.kotlin.test.TestMetadata
 import org.jetbrains.kotlin.test.services.JUnit5Assertions.assertEquals
 import org.jetbrains.kotlin.test.services.JUnit5Assertions.fail
@@ -275,6 +276,28 @@ private object NativeTestSupport {
         }
         val makePerFileCaches = cacheMode == CacheMode.Alias.STATIC_PER_FILE_EVERYWHERE
 
+        // Linux distributions contain the default ARC cache. Differential oracle tests may enforce a
+        // non-default memory model without building the corresponding distribution cache first. Such tests
+        // must compile uncached instead of reusing the ABI-incompatible ARC cache. Explicit user-cache modes
+        // still construct WithStaticCache below and fail clearly when their prerequisite cache is absent.
+        if (cacheMode == CacheMode.Alias.STATIC_ONLY_DIST &&
+            memoryModel.isNonDefaultFor(kotlinNativeTargets.testTarget)
+        ) {
+            val cacheDirectory = File(distribution.klib)
+                .resolve("cache")
+                .resolve(
+                    CacheMode.computeDistroCacheDirName(
+                        testTarget = kotlinNativeTargets.testTarget,
+                        cacheKind = "STATIC",
+                        debuggable = optimizationMode == OptimizationMode.DEBUG,
+                        memoryModel = memoryModel,
+                    )
+                )
+            if (!cacheDirectory.isDirectory || cacheDirectory.list().orEmpty().isEmpty()) {
+                return CacheMode.WithoutCache
+            }
+        }
+
         return CacheMode.WithStaticCache(
             distribution,
             kotlinNativeTargets,
@@ -283,6 +306,11 @@ private object NativeTestSupport {
             useStaticCacheForUserLibraries,
             makePerFileCaches
         )
+    }
+
+    private fun MemoryModel.isNonDefaultFor(target: KonanTarget): Boolean = when (target) {
+        KonanTarget.LINUX_X64 -> this != MemoryModel.DEFAULT && this != MemoryModel.ARC
+        else -> false
     }
 
     private fun computeTestMode(enforcedProperties: EnforcedProperties): TestMode =

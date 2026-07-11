@@ -1,0 +1,2 @@
+headers = arc_compat_c.h
+package = arc.compat.c
