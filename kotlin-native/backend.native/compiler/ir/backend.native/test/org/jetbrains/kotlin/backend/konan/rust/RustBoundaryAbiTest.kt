@@ -69,15 +69,12 @@ class RustBoundaryAbiTest {
         fixture.addFunctionExtension(kotlinFunction, LLVMAttributeReturnIndex, SIGN_EXTEND)
         fixture.addFunctionExtension(kotlinFunction, 1, ZERO_EXTEND)
 
-        assertEquals(
-            RustBoundaryAbiExpectation(
-                symbolName = "boundary",
-                callingConvention = LLVMGetFunctionCallConv(kotlinFunction),
-                returnExtension = RustBoundaryAbiExpectation.Extension.SIGN_EXTEND,
-                parameterExtensions = listOf(RustBoundaryAbiExpectation.Extension.ZERO_EXTEND),
-            ),
-            RustBoundaryAbiExpectation.capture("boundary", kotlinFunction),
-        )
+        val captured = assertNotNull(RustBoundaryAbiExpectation.capture("boundary", kotlinFunction))
+        assertEquals("boundary", captured.symbolName)
+        assertEquals(LLVMGetFunctionCallConv(kotlinFunction), captured.callingConvention)
+        assertEquals(RustBoundaryAbiExpectation.Extension.SIGN_EXTEND, captured.returnExtension)
+        assertEquals(listOf(RustBoundaryAbiExpectation.Extension.ZERO_EXTEND), captured.parameterExtensions)
+        assertNotNull(captured.shape)
 
         fixture.addFunctionExtension(kotlinFunction, LLVMAttributeReturnIndex, ZERO_EXTEND)
         assertNull(RustBoundaryAbiExpectation.capture("boundary", kotlinFunction))
@@ -258,10 +255,11 @@ class RustBoundaryAbiTest {
     @Test
     fun finalVerificationAllowsOnlyAbiNeutralEscapes() {
         withFixture { fixture ->
+            val kotlinFunction = fixture.function("kotlin_boundary")
+            val expectation = assertNotNull(RustBoundaryAbiExpectation.capture("boundary", kotlinFunction))
             val boundary = fixture.function("boundary")
             val global = LLVMAddGlobal(fixture.module, LLVMTypeOf(boundary), "initializer_slot")!!
             LLVMSetInitializer(global, boundary)
-            val expectation = fixture.expectation()
 
             assertEquals(
                 "boundary 'boundary' has an indirect or escaping use after linkage",
@@ -273,15 +271,15 @@ class RustBoundaryAbiTest {
             )
         }
         withFixture { fixture ->
+            val kotlinFunction = fixture.function("kotlin_boundary")
+            fixture.addFunctionExtension(kotlinFunction, LLVMAttributeReturnIndex, SIGN_EXTEND)
+            fixture.addFunctionExtension(kotlinFunction, 1, ZERO_EXTEND)
+            val expectation = assertNotNull(RustBoundaryAbiExpectation.capture("boundary", kotlinFunction))
             val boundary = fixture.function("boundary")
             fixture.addFunctionExtension(boundary, LLVMAttributeReturnIndex, SIGN_EXTEND)
             fixture.addFunctionExtension(boundary, 1, ZERO_EXTEND)
             val global = LLVMAddGlobal(fixture.module, LLVMTypeOf(boundary), "attributed_initializer_slot")!!
             LLVMSetInitializer(global, boundary)
-            val expectation = fixture.expectation(
-                returnExtension = RustBoundaryAbiExpectation.Extension.SIGN_EXTEND,
-                parameterExtension = RustBoundaryAbiExpectation.Extension.ZERO_EXTEND,
-            )
 
             assertEquals(
                 "boundary 'boundary' has an indirect or escaping use after linkage",
