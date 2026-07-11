@@ -94,20 +94,30 @@ internal class RustDirectInteropPlan private constructor(
     companion object {
         val EMPTY = RustDirectInteropPlan(emptyMap())
 
-        fun load(paths: List<String>, target: KonanTarget): RustDirectInteropPlan {
+        fun load(
+            paths: List<String>,
+            target: KonanTarget,
+            supportsKotlinExceptionBridge: Boolean = false,
+        ): RustDirectInteropPlan {
             if (paths.isEmpty()) return EMPTY
             val plans = paths.distinct().sorted().map { path ->
                 val planPath = Paths.get(path)
                 val contents = Files.readAllBytes(planPath).toString(StandardCharsets.UTF_8)
                 RustInteropBridgePlanParser.parse(contents, planPath.toString())
             }
-            return fromPlans(plans, target.presetName)
+            return fromPlans(plans, target.presetName, supportsKotlinExceptionBridge)
         }
 
-        internal fun fromPlans(plans: List<RustInteropBridgePlan>, targetName: String): RustDirectInteropPlan {
+        internal fun fromPlans(
+            plans: List<RustInteropBridgePlan>,
+            targetName: String,
+            supportsKotlinExceptionBridge: Boolean = false,
+        ): RustDirectInteropPlan {
             validateCrateCoordinates(plans)
             val bindings = plans.flatMap { plan ->
-                plan.operations.mapNotNull { operation -> plan.directBinding(operation, targetName) }
+                plan.operations.mapNotNull { operation ->
+                    plan.directBinding(operation, targetName, supportsKotlinExceptionBridge)
+                }
             }
             val duplicates = bindings.groupBy { it.kotlinName }.filterValues { it.size > 1 }.keys.sorted()
             require(duplicates.isEmpty()) {
@@ -128,6 +138,7 @@ internal class RustDirectInteropPlan private constructor(
         private fun RustInteropBridgePlan.directBinding(
             operation: RustInteropOperation,
             targetName: String,
+            supportsKotlinExceptionBridge: Boolean,
         ): Binding? {
             val targetPolicy = operation.targetPolicy
             if (targetPolicy.includedTargets.isNotEmpty() && targetName !in targetPolicy.includedTargets) return null
@@ -137,19 +148,7 @@ internal class RustDirectInteropPlan private constructor(
             if (operation.asyncPolicy != RustInteropAsyncPolicy.SYNCHRONOUS) return null
             val parameters = operation.parameters.map { (it.type as? RustInteropBridgeType.Primitive)?.kind ?: return null }
             val returnType = (operation.returnType as? RustInteropBridgeType.Primitive)?.kind ?: return null
-            val boundaryPolicy = when {
-                operation.errorPolicy.mode != RustInteropErrorMode.NONE -> RustDirectInteropBoundaryPolicy.Unsupported(
-                    "Rust direct interop operation '${operation.id}' requests error policy " +
-                            "'${operation.errorPolicy.mode.externalName}', but direct Rust calls cannot convert Rust errors " +
-                            "to Kotlin exceptions yet",
-                )
-                operation.panicPolicy.mode != RustInteropPanicMode.ABORT -> RustDirectInteropBoundaryPolicy.Unsupported(
-                    "Rust direct interop operation '${operation.id}' requests panic policy " +
-                            "'${operation.panicPolicy.mode.externalName}', but direct Rust calls currently require 'abort' " +
-                            "so a Rust panic cannot cross the Kotlin boundary",
-                )
-                else -> RustDirectInteropBoundaryPolicy.CatchRustPanicAndAbort
-            }
+            val boundaryPolicy = operation.directBoundaryPolicy(supportsKotlinExceptionBridge)
             return Binding(
                 kotlinName = "$kotlinPackage.${operation.kotlinName}",
                 rustPath = operation.rustPath,
@@ -163,8 +162,42 @@ internal class RustDirectInteropPlan private constructor(
     }
 }
 
+internal fun RustInteropOperation.directBoundaryPolicy(
+    supportsKotlinExceptionBridge: Boolean,
+): RustDirectInteropBoundaryPolicy {
+    val convertsResultError = errorPolicy.mode == RustInteropErrorMode.KOTLIN_EXCEPTION
+    val convertsRustPanic = panicPolicy.mode == RustInteropPanicMode.KOTLIN_EXCEPTION
+    val requestedExceptionNames = buildList {
+        if (convertsResultError) add(errorPolicy.kotlinException)
+        if (convertsRustPanic) add(panicPolicy.kotlinException)
+    }
+    return when {
+        panicPolicy.mode == RustInteropPanicMode.FATAL -> RustDirectInteropBoundaryPolicy.Unsupported(
+            "Rust direct interop operation '$id' requests panic policy '${panicPolicy.mode.externalName}', whose " +
+                    "fatal-reporting contract is not available to direct Rust calls",
+        )
+        requestedExceptionNames.any { it != KOTLIN_RUNTIME_EXCEPTION } -> RustDirectInteropBoundaryPolicy.Unsupported(
+            "Rust direct interop operation '$id' requests custom Kotlin exception " +
+                    "'${requestedExceptionNames.first { it != KOTLIN_RUNTIME_EXCEPTION }}'; direct Rust calls " +
+                    "currently support only '$KOTLIN_RUNTIME_EXCEPTION'",
+        )
+        (convertsResultError || convertsRustPanic) && !supportsKotlinExceptionBridge ->
+            RustDirectInteropBoundaryPolicy.Unsupported(
+                "Rust direct interop operation '$id' requires the Kotlin/Native runtime exception bridge, which is " +
+                        "unavailable to the standalone Rust program backend",
+            )
+        convertsResultError || convertsRustPanic -> RustDirectInteropBoundaryPolicy.ThrowKotlinRuntimeException(
+            onResultError = convertsResultError,
+            onRustPanic = convertsRustPanic,
+        )
+        else -> RustDirectInteropBoundaryPolicy.CatchRustPanicAndAbort
+    }
+}
+
 private val RustDirectInteropBoundaryPolicy.isSupported: Boolean
-    get() = this === RustDirectInteropBoundaryPolicy.CatchRustPanicAndAbort
+    get() = this !is RustDirectInteropBoundaryPolicy.Unsupported
+
+private const val KOTLIN_RUNTIME_EXCEPTION = "kotlin.RuntimeException"
 
 private fun IrSimpleFunction.callsBindingSymbol(bindingSymbol: String): Boolean {
     var found = false

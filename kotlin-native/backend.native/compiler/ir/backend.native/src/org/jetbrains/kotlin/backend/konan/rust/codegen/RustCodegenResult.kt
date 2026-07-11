@@ -60,6 +60,7 @@ internal data class RustCodegenResult(
     val generatedFunctions: List<RustGeneratedFunction>,
     val fallbackFunctions: List<RustGeneratedFunction>,
     val diagnostics: List<RustUnsupportedDiagnostic>,
+    val requiresKotlinExceptionBridge: Boolean,
 ) {
     val isFullySupported: Boolean
         get() = diagnostics.isEmpty()

@@ -19,6 +19,7 @@
 #include <stdint.h>
 
 #include <exception>
+#include <limits>
 #include <unistd.h>
 
 #include "KAssert.h"
@@ -40,6 +41,32 @@ void ThrowException(KRef exception) {
   RuntimeAssert(exception != nullptr && IsInstanceInternal(exception, theThrowableTypeInfo),
                 "Throwing something non-throwable");
   ExceptionObjHolder::Throw(exception);
+}
+
+namespace {
+
+RUNTIME_NORETURN void throwRustInteropRuntimeExceptionMessage(const char* message) {
+  ObjHolder messageHolder;
+  CreateStringFromCString(message, messageHolder.slot());
+  ThrowRuntimeException(messageHolder.obj());
+}
+
+} // namespace
+
+extern "C" void RUNTIME_NORETURN Kotlin_RustInterop_ThrowRuntimeException(
+    const char* data, size_t size) {
+  kotlin::AssertThreadState(kotlin::ThreadState::kRunnable);
+  if (data == nullptr && size != 0) {
+    throwRustInteropRuntimeExceptionMessage("Rust interop error text has a null pointer with a non-zero size");
+  }
+  if (size > std::numeric_limits<uint32_t>::max()) {
+    throwRustInteropRuntimeExceptionMessage("Rust interop error text is too large for a Kotlin String");
+  }
+
+  ObjHolder messageHolder;
+  const char* utf8 = data == nullptr ? "" : data;
+  CreateStringFromUtf8(utf8, static_cast<uint32_t>(size), messageHolder.slot());
+  ThrowRuntimeException(messageHolder.obj());
 }
 
 void RUNTIME_NORETURN HandleCurrentExceptionWhenLeavingKotlinCode() {

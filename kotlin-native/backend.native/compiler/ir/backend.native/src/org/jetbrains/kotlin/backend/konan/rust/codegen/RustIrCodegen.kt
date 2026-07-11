@@ -6,6 +6,8 @@
 package org.jetbrains.kotlin.backend.konan.rust.codegen
 
 import org.jetbrains.kotlin.backend.konan.ir.isUnbox
+import org.jetbrains.kotlin.backend.konan.rust.RUST_INTEROP_THROW_RUNTIME_EXCEPTION
+import org.jetbrains.kotlin.backend.konan.rust.rustExceptionInteropRuntimePrelude
 import org.jetbrains.kotlin.ir.IrElement
 import org.jetbrains.kotlin.ir.IrStatement
 import org.jetbrains.kotlin.ir.UNDEFINED_OFFSET
@@ -166,11 +168,13 @@ internal class RustIrCodegen(
         }
         val generated = finalizedBodies.keys.map { names.getValue(it) }
         val fallbacks = fallbackFunctions.sortedBy(::functionKey).map { names.getValue(it) }
+        val source = renderModule(finalizedBodies, fallbacks)
         return RustCodegenResult(
-            source = renderModule(finalizedBodies, fallbacks),
+            source = source,
             generatedFunctions = generated,
             fallbackFunctions = fallbacks,
             diagnostics = diagnostics.distinctBy { listOf(it.functionName, it.code, it.location.startOffset, it.message) },
+            requiresKotlinExceptionBridge = RUST_INTEROP_THROW_RUNTIME_EXCEPTION in source,
         )
     }
 
@@ -191,6 +195,10 @@ internal class RustIrCodegen(
         appendLine("    clippy::unused_unit,")
         appendLine(")]")
         appendLine()
+        if (generatedBodies.values.any { body -> RUST_INTEROP_THROW_RUNTIME_EXCEPTION in body }) {
+            appendLine(rustExceptionInteropRuntimePrelude())
+            appendLine()
+        }
         if (fallbacks.isNotEmpty()) {
             appendLine("extern \"C-unwind\" {")
             for (fallback in fallbacks) {
@@ -495,6 +503,8 @@ internal class RustIrCodegen(
                 return when (val boundaryPolicy = directCall.boundaryPolicy) {
                     RustDirectInteropBoundaryPolicy.CatchRustPanicAndAbort ->
                         renderPanicContainedDirectCall(directCall, arguments)
+                    is RustDirectInteropBoundaryPolicy.ThrowKotlinRuntimeException ->
+                        renderKotlinExceptionDirectCall(directCall, arguments, boundaryPolicy)
                     is RustDirectInteropBoundaryPolicy.Unsupported -> unsupported(
                         call,
                         RustUnsupportedCode.UNSUPPORTED_DIRECT_INTEROP_BOUNDARY,
@@ -538,6 +548,62 @@ internal class RustIrCodegen(
                 appendLine("    }")
                 append('}')
             }
+        }
+
+        /** The runtime trampoline is called only after `catch_unwind` has returned. Its Kotlin exception uses C-unwind. */
+        private fun renderKotlinExceptionDirectCall(
+            directCall: RustDirectInteropCall,
+            arguments: List<IrExpression>,
+            policy: RustDirectInteropBoundaryPolicy.ThrowKotlinRuntimeException,
+        ): String {
+            val callIndex = nextDirectInteropCallIndex++
+            val argumentNames = arguments.indices.map { index -> "__kn_direct_arg_${callIndex}_$index" }
+            fun messageName(kind: String) = "__kn_direct_${kind}_message_$callIndex"
+            return buildString {
+                appendLine("{")
+                arguments.forEachIndexed { index, argument ->
+                    append("    let ").append(argumentNames[index]).append(" = ").append(expression(argument)).appendLine(";")
+                }
+                append("    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ")
+                append(directCall.rustPath).append('(').append(argumentNames.joinToString()).append(')')
+                if (policy.onResultError) append(".map_err(|error| error.to_string())")
+                appendLine(")) {")
+                if (policy.onResultError) {
+                    appendLine("        Ok(Ok(value)) => value,")
+                    append("        Ok(Err(").append(messageName("error")).appendLine(")) => unsafe {")
+                    appendRuntimeExceptionThrow(messageName("error"), 12)
+                    appendLine("        },")
+                } else {
+                    appendLine("        Ok(value) => value,")
+                }
+                if (policy.onRustPanic) {
+                    val payloadName = "__kn_direct_panic_payload_$callIndex"
+                    append("        Err(").append(payloadName).appendLine(") => {")
+                    append("            let ").append(messageName("panic")).append(" = if let Some(value) = ")
+                        .append(payloadName).appendLine(".downcast_ref::<&str>() {")
+                    appendLine("                (*value).to_owned()")
+                    append("            } else if let Some(value) = ").append(payloadName)
+                        .appendLine(".downcast_ref::<String>() {")
+                    appendLine("                value.clone()")
+                    appendLine("            } else {")
+                    appendLine("                \"Rust panic\".to_owned()")
+                    appendLine("            };")
+                    appendLine("            unsafe {")
+                    appendRuntimeExceptionThrow(messageName("panic"), 16)
+                    appendLine("            }")
+                    appendLine("        },")
+                } else {
+                    appendLine("        Err(_) => std::process::abort(),")
+                }
+                appendLine("    }")
+                append('}')
+            }
+        }
+
+        private fun StringBuilder.appendRuntimeExceptionThrow(messageName: String, indentation: Int) {
+            append(" ".repeat(indentation))
+                .append(RUST_INTEROP_THROW_RUNTIME_EXCEPTION)
+                .append('(').append(messageName).append(".as_ptr(), ").append(messageName).appendLine(".len())")
         }
 
         private fun renderPrintln(callee: IrSimpleFunction, arguments: List<IrExpression>): String? {

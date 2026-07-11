@@ -46,6 +46,10 @@ void RUNTIME_NORETURN ThrowIllegalStateException();
 void RUNTIME_NORETURN ThrowIllegalStateExceptionWithMessage(KConstRef message);
 void RUNTIME_NORETURN ThrowFileFailedToInitializeException(KRef reason);
 void RUNTIME_NORETURN ThrowRuntimeException(KConstRef message);
+
+// Converts a caller-borrowed UTF-8 byte range to a Kotlin String and throws RuntimeException.
+// The byte range only needs to remain valid until this function starts unwinding.
+void RUNTIME_NORETURN Kotlin_RustInterop_ThrowRuntimeException(const char* data, size_t size);
 // Prints out message of Throwable.
 void PrintThrowable(KRef);
 

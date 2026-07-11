@@ -214,6 +214,32 @@ class RustInteropBridgeArtifactGeneratorTest {
     }
 
     @Test
+    fun generatesPrimitiveResultFunctionWithSeparateErrorAndPanicExceptions() {
+        val plan = primitiveFunctionPlan()
+        val operation = plan.operations.single().copy(
+            rustPath = "kn_direct_fixture::checked_add",
+            kotlinName = "checkedAdd",
+            errorPolicy = RustInteropErrorPolicy(RustInteropErrorMode.KOTLIN_EXCEPTION, "ResultException"),
+        )
+        val resultPlan = plan.copy(operations = listOf(operation))
+        val artifacts = RustInteropBridgeArtifactGenerator.generate(resultPlan)
+        val symbol = RustInteropBridgeSymbols.bindingSymbol(resultPlan, operation)
+        val kotlinFacade = artifacts.kotlinFacades.values.single()
+
+        assertContains(
+            artifacts.rustSource,
+            "*output = kn_direct_fixture::checked_add(left, right)" +
+                    ".map_err(|error| Failure { status: KNRI_ERROR, message: error.to_string() })?;",
+        )
+        assertContains(artifacts.rustSource, "Err(payload) => report_failure(error, Failure { status: KNRI_PANIC")
+        assertContains(kotlinFacade, "public class ResultException(message: String) : RuntimeException(message)")
+        assertContains(kotlinFacade, "public class FixtureException(message: String) : RuntimeException(message)")
+        assertContains(kotlinFacade, "val status = $symbol(left, right, output.ptr, error.ptr)")
+        assertContains(kotlinFacade, "if (status == KNRI_PANIC_STATUS) throw FixtureException(message)")
+        assertContains(kotlinFacade, "throw ResultException(message)")
+    }
+
+    @Test
     fun rejectsUnsupportedPrimitiveFreeFunctionShapesWithOperationContext() {
         val plan = primitiveFunctionPlan()
         val operation = plan.operations.single()
@@ -237,13 +263,6 @@ class RustInteropBridgeArtifactGeneratorTest {
                 "return",
                 operation.copy(returnType = RustInteropBridgeType.Unit),
                 "has unsupported return type 'unit'; only primitive returns are supported",
-            ),
-            Triple(
-                "error policy",
-                operation.copy(
-                    errorPolicy = RustInteropErrorPolicy(RustInteropErrorMode.KOTLIN_EXCEPTION, "FixtureException")
-                ),
-                "requires error policy 'none'",
             ),
         )
 

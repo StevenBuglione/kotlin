@@ -157,8 +157,8 @@ object RustInteropBridgeArtifactGenerator {
                         "only primitive returns are supported"
             )
         }
-        if (operation.errorPolicy.mode != RustInteropErrorMode.NONE) {
-            fail("$description requires error policy 'none'")
+        if (operation.errorPolicy.mode !in setOf(RustInteropErrorMode.NONE, RustInteropErrorMode.KOTLIN_EXCEPTION)) {
+            fail("$description has unsupported error policy '${operation.errorPolicy.mode.externalName}'")
         }
     }
 
@@ -322,7 +322,11 @@ object RustInteropBridgeArtifactGenerator {
                 append("        if output.is_null() { return Err(Failure { status: KNRI_INVALID_INPUT, message: \"null output pointer\".into() }); }\n")
                 append("        *output = ").append(operation.rustPath).append('(')
                 operation.parameters.joinTo(this) { it.name }
-                append(");\n")
+                append(')')
+                if (operation.errorPolicy.mode == RustInteropErrorMode.KOTLIN_EXCEPTION) {
+                    append(".map_err(|error| Failure { status: KNRI_ERROR, message: error.to_string() })?")
+                }
+                append(";\n")
             }
         }
         append("        Ok(())\n        }));\n        match result {\n            Ok(Ok(())) => KNRI_OK,\n            Ok(Err(failure)) => report_failure(error, failure),\n")
@@ -374,12 +378,20 @@ object RustInteropBridgeArtifactGenerator {
 
     private fun renderKotlinFacade(aggregate: Aggregate, plan: RustInteropBridgePlan): String = buildString {
         val kotlinPackage = plan.kotlinPackage
+        val needsDistinctPanicException = plan.operations.any { operation ->
+            operation.kind == RustInteropOperationKind.FUNCTION &&
+                    operation.errorPolicy.mode == RustInteropErrorMode.KOTLIN_EXCEPTION &&
+                    operation.panicPolicy.mode == RustInteropPanicMode.KOTLIN_EXCEPTION &&
+                    operation.errorPolicy.kotlinException != operation.panicPolicy.kotlinException
+        }
         append("@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class, kotlin.experimental.ExperimentalNativeApi::class)\n\n")
         append("package ").append(kotlinPackage).append("\n\n")
         if (plan.handles.isNotEmpty()) append("import kotlin.concurrent.AtomicLong\nimport kotlin.native.ref.createCleaner\n")
         append("import kotlinx.cinterop.*\n")
         append("import ").append(aggregate.cInteropPackage).append(".*\n\n")
-        append("private const val KNRI_OK_STATUS = 0\n\n")
+        append("private const val KNRI_OK_STATUS = 0\n")
+        if (needsDistinctPanicException) append("private const val KNRI_PANIC_STATUS = 2\n")
+        append('\n')
         append("private fun knriMessage(value: knri_utf8): String {\n")
         append("    val result = if (value.data == null || value.len.toLong() == 0L) \"\" else value.data!!.readBytes(value.len.toInt()).decodeToString()\n")
         append("    ").append(aggregate.prefix).append("_free_utf8(value.data, value.len)\n    return result\n}\n\n")
@@ -406,8 +418,26 @@ object RustInteropBridgeArtifactGenerator {
         append("    val status = ").append(RustInteropBridgeSymbols.bindingSymbol(plan, operation)).append('(')
         operation.parameters.forEach { parameter -> append(parameter.name).append(", ") }
         append("output.ptr, error.ptr)\n")
-        append("    if (status != KNRI_OK_STATUS) throw ").append(exceptionFor(operation)).append("(knriMessage(error))\n")
+        appendKotlinFailureCheck(operation, "    ")
         append("    output.value\n}\n\n")
+    }
+
+    private fun StringBuilder.appendKotlinFailureCheck(operation: RustInteropOperation, indent: String) {
+        val errorException = operation.errorPolicy.kotlinException
+        val panicException = operation.panicPolicy.kotlinException
+        if (
+            errorException != null && panicException != null && errorException != panicException &&
+            operation.panicPolicy.mode == RustInteropPanicMode.KOTLIN_EXCEPTION
+        ) {
+            append(indent).append("if (status != KNRI_OK_STATUS) {\n")
+            append(indent).append("    val message = knriMessage(error)\n")
+            append(indent).append("    if (status == KNRI_PANIC_STATUS) throw ").append(panicException).append("(message)\n")
+            append(indent).append("    throw ").append(errorException).append("(message)\n")
+            append(indent).append("}\n")
+        } else {
+            append(indent).append("if (status != KNRI_OK_STATUS) throw ").append(exceptionFor(operation))
+                .append("(knriMessage(error))\n")
+        }
     }
 
     private fun StringBuilder.appendKotlinHandle(aggregate: Aggregate, plan: RustInteropBridgePlan, handle: RustInteropHandle) {

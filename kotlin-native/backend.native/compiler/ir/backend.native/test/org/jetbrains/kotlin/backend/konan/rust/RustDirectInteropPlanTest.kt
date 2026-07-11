@@ -5,6 +5,7 @@
 
 package org.jetbrains.kotlin.backend.konan.rust
 
+import org.jetbrains.kotlin.backend.konan.rust.codegen.RustDirectInteropBoundaryPolicy
 import org.jetbrains.kotlin.native.interop.rust.RustInteropAsyncPolicy
 import org.jetbrains.kotlin.native.interop.rust.RustInteropBridgePlan
 import org.jetbrains.kotlin.native.interop.rust.RustInteropBridgeType
@@ -22,8 +23,10 @@ import org.jetbrains.kotlin.native.interop.rust.RustInteropReceiver
 import org.jetbrains.kotlin.native.interop.rust.RustInteropReceiverOwnership
 import org.jetbrains.kotlin.native.interop.rust.RustInteropTargetPolicy
 import kotlin.test.Test
+import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertIs
 
 class RustDirectInteropPlanTest {
     @Test
@@ -63,6 +66,65 @@ class RustDirectInteropPlanTest {
                 "linuxX64",
             )
         }
+    }
+
+    @Test
+    fun enablesOnlyExactRuntimeExceptionWhenNativeRuntimeBridgeIsAvailable() {
+        val resultError = operation(id = "result", kotlinName = "result").copy(
+            errorPolicy = RustInteropErrorPolicy(RustInteropErrorMode.KOTLIN_EXCEPTION, "kotlin.RuntimeException")
+        )
+        val panic = operation(id = "panic", kotlinName = "panic").copy(
+            panicPolicy = RustInteropPanicPolicy(RustInteropPanicMode.KOTLIN_EXCEPTION, "kotlin.RuntimeException")
+        )
+        val custom = operation(id = "custom", kotlinName = "custom").copy(
+            panicPolicy = RustInteropPanicPolicy(RustInteropPanicMode.KOTLIN_EXCEPTION, "FixtureException")
+        )
+
+        val hybrid = RustDirectInteropPlan.fromPlans(
+            listOf(plan(operations = listOf(resultError, panic, custom))),
+            targetName = "linuxX64",
+            supportsKotlinExceptionBridge = true,
+        )
+        val strict = RustDirectInteropPlan.fromPlans(
+            listOf(plan(operations = listOf(resultError, panic))),
+            targetName = "linuxX64",
+        )
+
+        assertEquals(2, hybrid.bindingCount)
+        assertEquals(1, hybrid.fallbackBindingCount)
+        assertEquals(0, strict.bindingCount)
+        assertEquals(2, strict.fallbackBindingCount)
+    }
+
+    @Test
+    fun reportsExactCustomAndFatalHybridFallbackReasons() {
+        val custom = operation(id = "custom", kotlinName = "custom").copy(
+            panicPolicy = RustInteropPanicPolicy(RustInteropPanicMode.KOTLIN_EXCEPTION, "FixtureException")
+        )
+        val fatal = operation(id = "fatal", kotlinName = "fatal").copy(
+            panicPolicy = RustInteropPanicPolicy(RustInteropPanicMode.FATAL, null)
+        )
+        val hybrid = RustDirectInteropPlan.fromPlans(
+            listOf(plan(operations = listOf(custom, fatal))),
+            targetName = "linuxX64",
+            supportsKotlinExceptionBridge = true,
+        )
+
+        val customPolicy = assertIs<RustDirectInteropBoundaryPolicy.Unsupported>(
+            custom.directBoundaryPolicy(supportsKotlinExceptionBridge = true)
+        )
+        val fatalPolicy = assertIs<RustDirectInteropBoundaryPolicy.Unsupported>(
+            fatal.directBoundaryPolicy(supportsKotlinExceptionBridge = true)
+        )
+
+        assertEquals(0, hybrid.bindingCount)
+        assertEquals(2, hybrid.fallbackBindingCount)
+        assertContains(customPolicy.reason, "operation 'custom'")
+        assertContains(customPolicy.reason, "custom Kotlin exception 'FixtureException'")
+        assertContains(customPolicy.reason, "only 'kotlin.RuntimeException'")
+        assertContains(fatalPolicy.reason, "operation 'fatal'")
+        assertContains(fatalPolicy.reason, "panic policy 'fatal'")
+        assertContains(fatalPolicy.reason, "fatal-reporting contract is not available")
     }
 
     private fun plan(

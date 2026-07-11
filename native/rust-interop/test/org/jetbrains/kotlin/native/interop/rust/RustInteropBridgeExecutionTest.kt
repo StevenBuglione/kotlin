@@ -23,6 +23,9 @@ class RustInteropBridgeExecutionTest {
         withTemporaryDirectory { workspace ->
             val plan = RustInteropTomlParser.parsePlan(BRIDGE_DEFINITION, "fixture.rustinterop.toml")
             val artifacts = RustInteropBridgeArtifactGenerator.generate(plan, setOf(FIXTURE_CRATE_NAME))
+            val kotlinFacade = artifacts.kotlinFacades.values.single()
+            assertContains(kotlinFacade, "if (status == KNRI_PANIC_STATUS) throw PanicException(message)")
+            assertContains(kotlinFacade, "throw ResultException(message)")
             write(workspace.resolve("Cargo.toml"), artifacts.cargoManifest)
             write(workspace.resolve("src/lib.rs"), artifacts.rustSource)
             write(workspace.resolve("local-crates/$FIXTURE_CRATE_NAME/Cargo.toml"), FIXTURE_MANIFEST)
@@ -45,6 +48,7 @@ class RustInteropBridgeExecutionTest {
                 patternSymbol = RustInteropBridgeSymbols.bindingSymbol(plan, operations.getValue("pattern")),
                 closeSymbol = RustInteropBridgeSymbols.bindingSymbol(plan, operations.getValue("close")),
                 dropCountSymbol = RustInteropBridgeSymbols.bindingSymbol(plan, operations.getValue("drop-count")),
+                checkedAddSymbol = RustInteropBridgeSymbols.bindingSymbol(plan, operations.getValue("checked-add")),
                 freeUtf8Symbol = Regex("""void (knri_[A-Za-z0-9_]+_free_utf8)\(""")
                     .find(artifacts.cHeader)?.groupValues?.get(1)
                     ?: error("Generated C header has no UTF-8 release symbol:\n${artifacts.cHeader}"),
@@ -72,12 +76,14 @@ class RustInteropBridgeExecutionTest {
         patternSymbol: String,
         closeSymbol: String,
         dropCountSymbol: String,
+        checkedAddSymbol: String,
         freeUtf8Symbol: String,
     ): String = """
         use std::ptr;
         use std::slice;
 
         const KNRI_OK: i32 = 0;
+        const KNRI_ERROR: i32 = 1;
         const KNRI_PANIC: i32 = 2;
         const KNRI_CLOSED_HANDLE: i32 = 4;
 
@@ -111,6 +117,7 @@ class RustInteropBridgeExecutionTest {
             fn $patternSymbol(handle: u64, output: *mut KnriUtf8, error: *mut KnriUtf8) -> i32;
             fn $closeSymbol(handle: u64, error: *mut KnriUtf8) -> i32;
             fn $dropCountSymbol(output: *mut u64, error: *mut KnriUtf8) -> i32;
+            fn $checkedAddSymbol(left: i32, right: i32, output: *mut i32, error: *mut KnriUtf8) -> i32;
             fn $freeUtf8Symbol(data: *mut u8, len: usize);
         }
 
@@ -156,6 +163,20 @@ class RustInteropBridgeExecutionTest {
                     KNRI_OK,
                 );
                 assert!(matched);
+
+                let mut sum = 0_i32;
+                error = KnriUtf8::empty();
+                assert_eq!($checkedAddSymbol(20, 22, &mut sum, &mut error), KNRI_OK);
+                assert_eq!(sum, 42);
+
+                error = KnriUtf8::empty();
+                assert_eq!($checkedAddSymbol(-1, 1, &mut sum, &mut error), KNRI_ERROR);
+                assert_eq!(String::from_utf8(take_utf8(error)).unwrap(), "fixture error");
+
+                error = KnriUtf8::empty();
+                assert_eq!($checkedAddSymbol(13, 1, &mut sum, &mut error), KNRI_PANIC);
+                let result_panic_message = String::from_utf8(take_utf8(error)).unwrap();
+                assert!(result_panic_message.contains("fixture result panic"), "{result_panic_message}");
 
                 let panic_input = b"panic";
                 error = KnriUtf8::empty();
@@ -313,6 +334,16 @@ class RustInteropBridgeExecutionTest {
             pub fn drop_count() -> u64 {
                 DROP_COUNT.load(Ordering::SeqCst)
             }
+
+            pub fn checked_add(left: i32, right: i32) -> Result<i32, FixtureError> {
+                if left == 13 {
+                    panic!("fixture result panic");
+                }
+                if left < 0 {
+                    return Err(FixtureError);
+                }
+                left.checked_add(right).ok_or(FixtureError)
+            }
         """.trimIndent() + "\n"
 
         val BRIDGE_DEFINITION = """
@@ -380,6 +411,19 @@ class RustInteropBridgeExecutionTest {
             return = "unit"
             error = "none"
             panic = "kotlin-exception:ProbeException"
+            threading = "caller"
+            async = false
+
+            [[operation]]
+            id = "checked-add"
+            kind = "function"
+            rust-path = "knri_fixture::checked_add"
+            kotlin-name = "checkedAdd"
+            receiver = "none"
+            parameters = ["left:i32", "right:i32"]
+            return = "i32"
+            error = "kotlin-exception:ResultException"
+            panic = "kotlin-exception:PanicException"
             threading = "caller"
             async = false
 

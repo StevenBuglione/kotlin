@@ -169,7 +169,11 @@ internal fun tryCompileRustHybridModule(
     val primitiveCandidates = bodyCandidates.filter { function ->
         function.hasPrimitiveRustAbi() && function !in managedDeclarations
     }
-    val directInteropPlan = RustDirectInteropPlan.load(config.configuration.rustInteropBridgePlanPaths, config.target)
+    val directInteropPlan = RustDirectInteropPlan.load(
+        config.configuration.rustInteropBridgePlanPaths,
+        config.target,
+        supportsKotlinExceptionBridge = true,
+    )
     val result = RustIrCodegen(
         symbolNamer,
         allowRustStandardIo = false,
@@ -250,7 +254,7 @@ internal fun tryCompileRustHybridModule(
             fallbackFunctions,
             preparedBitcode.abiExpectations,
             needsRustEhPersonality = managedResults.isNotEmpty() || managedFieldResults.isNotEmpty() ||
-                    primitiveFieldReadResults.isNotEmpty(),
+                    primitiveFieldReadResults.isNotEmpty() || result.requiresKotlinExceptionBridge,
             linkerFlags = listOfNotNull(artifact.staticLibrary?.toAbsolutePath()?.toString()) + artifact.nativeStaticLibraries,
         )
     } catch (failure: Exception) {

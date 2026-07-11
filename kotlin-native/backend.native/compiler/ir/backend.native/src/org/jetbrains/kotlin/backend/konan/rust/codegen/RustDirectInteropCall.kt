@@ -11,6 +11,16 @@ internal sealed interface RustDirectInteropBoundaryPolicy {
     /** Evaluate Kotlin arguments first, then catch a Rust panic from the crate call and abort. */
     data object CatchRustPanicAndAbort : RustDirectInteropBoundaryPolicy
 
+    /** Convert selected Rust `Result` errors and/or panics to `kotlin.RuntimeException`. */
+    data class ThrowKotlinRuntimeException(
+        val onResultError: Boolean,
+        val onRustPanic: Boolean,
+    ) : RustDirectInteropBoundaryPolicy {
+        init {
+            require(onResultError || onRustPanic) { "At least one Rust failure kind must be converted" }
+        }
+    }
+
     /** The bridge plan requests a conversion that this backend cannot represent safely yet. */
     data class Unsupported(val reason: String) : RustDirectInteropBoundaryPolicy {
         init {

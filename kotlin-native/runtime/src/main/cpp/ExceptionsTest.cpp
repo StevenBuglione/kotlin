@@ -5,6 +5,7 @@
 #include "Exceptions.h"
 
 #include <csignal>
+#include <limits>
 #include <memory>
 #include <future>
 
@@ -38,6 +39,26 @@ struct Payload {
 using Object = test_support::Object<Payload>;
 
 } // namespace
+
+TEST(RustInteropExceptionTrampolineTest, ThrowsForBorrowedUtf8Range) {
+    kotlin::RunInNewThread([]() {
+        const char message[] = {'R', 'u', 's', 't', 0, 'e', 'r', 'r', 'o', 'r'};
+        EXPECT_THROW(Kotlin_RustInterop_ThrowRuntimeException(message, sizeof(message)), std::runtime_error);
+    });
+}
+
+TEST(RustInteropExceptionTrampolineTest, RejectsInvalidUtf8RangeWithoutReadingIt) {
+    kotlin::RunInNewThread([]() {
+        EXPECT_THROW(Kotlin_RustInterop_ThrowRuntimeException(nullptr, 1), std::runtime_error);
+        if constexpr (sizeof(size_t) > sizeof(uint32_t)) {
+            const char byte = 0;
+            EXPECT_THROW(
+                    Kotlin_RustInterop_ThrowRuntimeException(
+                            &byte, static_cast<size_t>(std::numeric_limits<uint32_t>::max()) + 1),
+                    std::runtime_error);
+        }
+    });
+}
 
 TEST(ExceptionTest, ProcessUnhandledException_WithHook) {
     test_support::TypeInfoHolder typeHolder{test_support::TypeInfoHolder::ObjectBuilder<Payload>().setSuperType(theThrowableTypeInfo)};
