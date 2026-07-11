@@ -15,4 +15,7 @@ enum class MemoryModel {
 
     val usesTracingGC: Boolean
         get() = this == EXPERIMENTAL
+
+    val usesThreadState: Boolean
+        get() = usesSharedHeap
 }

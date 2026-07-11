@@ -817,6 +817,10 @@ private:
 } // namespace
 
 struct MemoryState {
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+  ThreadState threadState = ThreadState::kNative;
+#endif
+
 #if TRACE_MEMORY
   // Set of all containers.
   ContainerHeaderSet* containers;
@@ -4443,11 +4447,15 @@ void CheckGlobalsAccessible() {
 }
 
 CODEGEN_INLINE_POLICY RUNTIME_NOTHROW void Kotlin_mm_switchThreadStateNative() {
-    // no-op, used by the new MM only.
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+    kotlin::SwitchThreadState(::memoryState, kotlin::ThreadState::kNative);
+#endif
 }
 
 CODEGEN_INLINE_POLICY RUNTIME_NOTHROW void Kotlin_mm_switchThreadStateRunnable() {
-    // no-op, used by the new MM only.
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+    kotlin::SwitchThreadState(::memoryState, kotlin::ThreadState::kRunnable);
+#endif
 }
 
 CODEGEN_INLINE_POLICY RUNTIME_NOTHROW void Kotlin_mm_safePointFunctionPrologue() {
@@ -4492,16 +4500,39 @@ ALWAYS_INLINE ObjHeader* ExceptionObjHolder::GetExceptionObject() noexcept {
 #endif
 
 ALWAYS_INLINE kotlin::ThreadState kotlin::SwitchThreadState(MemoryState* thread, ThreadState newState, bool reentrant) noexcept {
-    // no-op, used by the new MM only.
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+    RuntimeAssert(thread != nullptr, "thread must not be nullptr");
+    ThreadState oldState = thread->threadState;
+    thread->threadState = newState;
+    RuntimeAssert(oldState != newState || reentrant,
+                  "Illegal ARC thread state switch. Old state: %d. New state: %d.",
+                  static_cast<int>(oldState), static_cast<int>(newState));
+    return oldState;
+#else
     return ThreadState::kRunnable;
+#endif
 }
 
 ALWAYS_INLINE void kotlin::AssertThreadState(MemoryState* thread, ThreadState expected) noexcept {
-    // no-op, used by the new MM only.
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+    if (compiler::runtimeAssertsMode() != compiler::RuntimeAssertsMode::kIgnore) {
+        RuntimeAssert(thread != nullptr, "thread must not be nullptr");
+        RuntimeAssert(thread->threadState == expected,
+                      "Unexpected ARC thread state. Expected: %d. Actual: %d.",
+                      static_cast<int>(expected), static_cast<int>(thread->threadState));
+    }
+#endif
 }
 
 ALWAYS_INLINE void kotlin::AssertThreadState(MemoryState* thread, std::initializer_list<ThreadState> expected) noexcept {
-    // no-op, used by the new MM only.
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+    if (compiler::runtimeAssertsMode() != compiler::RuntimeAssertsMode::kIgnore) {
+        RuntimeAssert(thread != nullptr, "thread must not be nullptr");
+        bool matches = false;
+        for (ThreadState state : expected) matches |= thread->threadState == state;
+        RuntimeAssert(matches, "Unexpected ARC thread state: %d.", static_cast<int>(thread->threadState));
+    }
+#endif
 }
 
 MemoryState* kotlin::mm::GetMemoryState() noexcept {
@@ -4513,12 +4544,25 @@ bool kotlin::mm::IsCurrentThreadRegistered() noexcept {
 }
 
 kotlin::ThreadState kotlin::GetThreadState(MemoryState* thread) noexcept {
-    // Assume that we are always in the Runnable thread state.
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+    RuntimeAssert(thread != nullptr, "thread must not be nullptr");
+    return thread->threadState;
+#else
     return ThreadState::kRunnable;
+#endif
 }
 
 ALWAYS_INLINE kotlin::CalledFromNativeGuard::CalledFromNativeGuard(bool reentrant) noexcept {
-    // no-op, used by the new MM only.
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+    Kotlin_initRuntimeIfNeeded();
+    thread_ = mm::GetMemoryState();
+    reentrant_ = reentrant;
+    oldState_ = SwitchThreadState(thread_, ThreadState::kRunnable, reentrant_);
+#else
+    thread_ = nullptr;
+    oldState_ = ThreadState::kRunnable;
+    reentrant_ = reentrant;
+#endif
 }
 
 const bool kotlin::kSupportsMultipleMutators = true;

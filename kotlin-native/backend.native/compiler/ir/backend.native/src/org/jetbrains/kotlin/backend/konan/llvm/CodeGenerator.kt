@@ -454,7 +454,7 @@ internal abstract class FunctionGenerationContext(
     private var setCurrentFrameIsCalled: Boolean = false
 
     private val switchToRunnable: Boolean =
-            context.memoryModel.usesTracingGC && switchToRunnable
+            context.memoryModel.usesThreadState && switchToRunnable
 
     val stackLocalsManager = StackLocalsManagerImpl(this, stackLocalsInitBb)
 
@@ -626,8 +626,8 @@ internal abstract class FunctionGenerationContext(
     //-------------------------------------------------------------------------//
 
     fun switchThreadState(state: ThreadState) {
-        check(context.memoryModel.usesTracingGC) {
-            "Thread state switching is allowed in the tracing-GC memory model only."
+        check(context.memoryModel.usesThreadState) {
+            "Thread state switching is allowed in shared-heap memory models only."
         }
         check(!forbidRuntime) {
             "Attempt to switch the thread state when runtime is forbidden"

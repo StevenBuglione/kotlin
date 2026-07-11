@@ -16,8 +16,26 @@ extern "C" void assertNativeThreadState() {
 extern "C" void runInNewThread(void(*callback)(void)) {
     std::thread t([callback]() {
         callback();
+        assertNativeThreadState();
     });
     t.join();
+}
+
+namespace {
+
+class NativeStateOnUnwind {
+public:
+    ~NativeStateOnUnwind() {
+        assertNativeThreadState();
+    }
+};
+
+} // namespace
+
+extern "C" void runCallbackWithNativeUnwindCheck(void(*callback)(void)) {
+    assertNativeThreadState();
+    NativeStateOnUnwind check;
+    callback();
 }
 
 extern "C" void runInForeignThread(void(*callback)(void)) {

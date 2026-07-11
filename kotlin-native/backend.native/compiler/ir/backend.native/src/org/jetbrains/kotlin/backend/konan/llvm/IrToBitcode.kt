@@ -2688,7 +2688,7 @@ internal class CodeGeneratorVisitor(
     private val IrFunction.needsNativeThreadState: Boolean
         get() {
             // We assume that call site thread state switching is required for interop calls only.
-            val result = context.memoryModel.usesTracingGC && origin == CBridgeOrigin.KOTLIN_TO_C_BRIDGE
+            val result = context.memoryModel.usesThreadState && origin == CBridgeOrigin.KOTLIN_TO_C_BRIDGE
             if (result) {
                 check(isExternal)
                 check(!annotations.hasAnnotation(KonanFqNames.gcUnsafeCall))

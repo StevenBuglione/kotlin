@@ -29,6 +29,53 @@ TEST(ArcMemoryModelTest, HasDedicatedRuntimeIdentity) {
     EXPECT_NE(CurrentMemoryModel, MemoryModel::kExperimental);
 }
 
+TEST(ArcThreadStateTest, TracksNativeAndRunnableTransitionsWithoutTracingGC) {
+    kotlin::RunInNewThread([](MemoryState* memoryState) {
+        EXPECT_EQ(kotlin::GetThreadState(memoryState), kotlin::ThreadState::kRunnable);
+        kotlin::AssertThreadState(memoryState, kotlin::ThreadState::kRunnable);
+
+        EXPECT_EQ(
+                kotlin::SwitchThreadState(memoryState, kotlin::ThreadState::kNative),
+                kotlin::ThreadState::kRunnable);
+        EXPECT_EQ(kotlin::GetThreadState(memoryState), kotlin::ThreadState::kNative);
+        kotlin::AssertThreadState(
+                memoryState,
+                {kotlin::ThreadState::kRunnable, kotlin::ThreadState::kNative});
+        EXPECT_EQ(
+                kotlin::SwitchThreadState(memoryState, kotlin::ThreadState::kNative, /* reentrant = */ true),
+                kotlin::ThreadState::kNative);
+
+        Kotlin_mm_switchThreadStateRunnable();
+        EXPECT_EQ(kotlin::GetThreadState(memoryState), kotlin::ThreadState::kRunnable);
+    });
+}
+
+TEST(ArcThreadStateTest, CalledFromNativeGuardRegistersDetachedThreadAndRestoresNativeState) {
+    kotlin::ScopedThread([] {
+        ASSERT_FALSE(kotlin::mm::IsCurrentThreadRegistered());
+        {
+            kotlin::CalledFromNativeGuard guard;
+            ASSERT_TRUE(kotlin::mm::IsCurrentThreadRegistered());
+            EXPECT_EQ(kotlin::GetThreadState(), kotlin::ThreadState::kRunnable);
+            {
+                kotlin::CalledFromNativeGuard nestedGuard(/* reentrant = */ true);
+                EXPECT_EQ(kotlin::GetThreadState(), kotlin::ThreadState::kRunnable);
+            }
+            EXPECT_EQ(kotlin::GetThreadState(), kotlin::ThreadState::kRunnable);
+        }
+        EXPECT_TRUE(kotlin::mm::IsCurrentThreadRegistered());
+        EXPECT_EQ(kotlin::GetThreadState(), kotlin::ThreadState::kNative);
+    });
+}
+
+TEST(ArcThreadStateDeathTest, RejectsNonReentrantSameStateTransition) {
+    EXPECT_DEATH(
+            kotlin::RunInNewThread([](MemoryState* memoryState) {
+                kotlin::SwitchThreadState(memoryState, kotlin::ThreadState::kRunnable);
+            }),
+            "Illegal ARC thread state switch");
+}
+
 TEST(ArcReferenceCountStateTest, FinalReleaseAtomicallyEntersPermanentDeallocatingState) {
     ContainerHeader header{};
     header.setRefCount(1);

@@ -31,7 +31,7 @@ fun throwException() {
 
 fun callbackWithException() {
     try {
-        runCallback(staticCFunction(::throwException))
+        runCallbackWithNativeUnwindCheck(staticCFunction(::throwException))
     } catch (e: CustomException) {
         assertRunnableThreadState()
         return
