@@ -296,6 +296,7 @@ internal fun CompilerConfiguration.setupCommonOptionsForCaches(konanConfig: Kona
     putIfNotNull(EXTERNAL_DEPENDENCIES, konanConfig.externalDependenciesFile?.absolutePath)
     put(BinaryOptions.memoryModel, konanConfig.memoryModel)
     put(BinaryOptions.arcLeakCheck, konanConfig.arcLeakCheck)
+    put(ARC_DIAGNOSTICS_REQUIRED, konanConfig.arcDiagnosticsRequiredByCode)
     put(PROPERTY_LAZY_INITIALIZATION, konanConfig.propertyLazyInitialization)
     put(BinaryOptions.stripDebugInfoFromNativeLibs, !konanConfig.useDebugInfoInNativeLibs)
     put(ALLOCATION_MODE, konanConfig.allocationMode)

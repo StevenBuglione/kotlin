@@ -28,7 +28,15 @@ import org.jetbrains.kotlin.konan.util.usingNativeMemoryAllocator
 /**
  * Dynamic driver does not "know" upfront which phases will be executed.
  */
-internal class DynamicCompilerDriver : CompilerDriver() {
+internal class DynamicCompilerDriver(
+        private val precomputedFrontendOutput: FrontendPhaseOutput.Full? = null,
+) : CompilerDriver() {
+
+    private fun frontend(
+            engine: PhaseEngine<PhaseContext>,
+            config: KonanConfig,
+            environment: KotlinCoreEnvironment,
+    ): FrontendPhaseOutput.Full? = precomputedFrontendOutput ?: engine.runFrontend(config, environment)
 
     override fun run(config: KonanConfig, environment: KotlinCoreEnvironment) {
         usingNativeMemoryAllocator {
@@ -58,7 +66,7 @@ internal class DynamicCompilerDriver : CompilerDriver() {
      * - Binary (if -Xomit-framework-binary is not passed).
      */
     private fun produceObjCFramework(engine: PhaseEngine<PhaseContext>, config: KonanConfig, environment: KotlinCoreEnvironment) {
-        val frontendOutput = engine.runFrontend(config, environment) ?: return
+        val frontendOutput = frontend(engine, config, environment) ?: return
         val objCExportedInterface = engine.runPhase(ProduceObjCExportInterfacePhase, frontendOutput)
         engine.runPhase(CreateObjCFrameworkPhase, CreateObjCFrameworkInput(frontendOutput.moduleDescriptor, objCExportedInterface))
         if (config.omitFrameworkBinary) {
@@ -76,7 +84,7 @@ internal class DynamicCompilerDriver : CompilerDriver() {
     }
 
     private fun produceCLibrary(engine: PhaseEngine<PhaseContext>, config: KonanConfig, environment: KotlinCoreEnvironment) {
-        val frontendOutput = engine.runFrontend(config, environment) ?: return
+        val frontendOutput = frontend(engine, config, environment) ?: return
         val (psiToIrOutput, cAdapterElements) = engine.runPsiToIr(frontendOutput, isProducingLibrary = false) {
             it.runPhase(BuildCExports, frontendOutput)
         }
@@ -114,6 +122,9 @@ internal class DynamicCompilerDriver : CompilerDriver() {
             environment: KotlinCoreEnvironment
     ): SerializerOutput? {
         val frontendOutput = engine.runFrontend(config, environment) ?: return null
+        if (frontendOutput.sourceCallsArcDetectCycles()) {
+            config.configuration.put(KonanConfigKeys.ARC_DIAGNOSTICS_REQUIRED, true)
+        }
         val psiToIrOutput = if (config.metadataKlib) {
             null
         } else {
@@ -126,7 +137,7 @@ internal class DynamicCompilerDriver : CompilerDriver() {
      * Produce a single binary artifact.
      */
     private fun produceBinary(engine: PhaseEngine<PhaseContext>, config: KonanConfig, environment: KotlinCoreEnvironment) {
-        val frontendOutput = engine.runFrontend(config, environment) ?: return
+        val frontendOutput = frontend(engine, config, environment) ?: return
         val psiToIrOutput = engine.runPsiToIr(frontendOutput, isProducingLibrary = false)
         require(psiToIrOutput is PsiToIrOutput.ForBackend)
         val backendContext = createBackendContext(config, frontendOutput, psiToIrOutput)

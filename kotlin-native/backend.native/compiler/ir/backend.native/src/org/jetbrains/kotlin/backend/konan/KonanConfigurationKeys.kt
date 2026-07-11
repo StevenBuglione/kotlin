@@ -39,6 +39,8 @@ class KonanConfigKeys {
                 = CompilerConfigurationKey.create<List<String>>("paths to the root directories from which dependencies are to be cached automatically")
         val AUTO_CACHE_DIR: CompilerConfigurationKey<String>
                 = CompilerConfigurationKey.create<String>("path to the directory where to put caches for auto-cacheable dependencies")
+        val ARC_DIAGNOSTICS_REQUIRED: CompilerConfigurationKey<Boolean>
+                = CompilerConfigurationKey.create("select the ARC diagnostic runtime automatically")
         val CACHED_LIBRARIES: CompilerConfigurationKey<Map<String, String>>
                 = CompilerConfigurationKey.create<Map<String, String>>("mapping from library paths to cache paths")
         val FILES_TO_CACHE: CompilerConfigurationKey<List<String>>
@@ -166,4 +168,3 @@ class KonanConfigKeys {
         val SAVE_LLVM_IR_DIRECTORY: CompilerConfigurationKey<String?> = CompilerConfigurationKey.create("directory to store LLVM IR from phases")
     }
 }
-

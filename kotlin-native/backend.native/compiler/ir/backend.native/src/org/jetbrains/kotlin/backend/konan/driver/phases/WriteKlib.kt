@@ -7,6 +7,7 @@ package org.jetbrains.kotlin.backend.konan.driver.phases
 
 import org.jetbrains.kotlin.backend.konan.KonanConfigKeys
 import org.jetbrains.kotlin.backend.konan.OutputFiles
+import org.jetbrains.kotlin.backend.konan.ARC_DIAGNOSTICS_KLIB_PROPERTY
 import org.jetbrains.kotlin.backend.konan.driver.PhaseContext
 import org.jetbrains.kotlin.backend.konan.driver.PhaseEngine
 import org.jetbrains.kotlin.config.KotlinCompilerVersion
@@ -14,6 +15,7 @@ import org.jetbrains.kotlin.konan.library.impl.buildLibrary
 import org.jetbrains.kotlin.library.KotlinAbiVersion
 import org.jetbrains.kotlin.library.KotlinLibraryVersioning
 import org.jetbrains.kotlin.library.metadata.KlibMetadataVersion
+import java.util.Properties
 
 internal val WriteKlibPhase = createSimpleNamedCompilerPhase<PhaseContext, SerializerOutput>(
         "WriteKlib", "Write klib output",
@@ -36,7 +38,11 @@ internal val WriteKlibPhase = createSimpleNamedCompilerPhase<PhaseContext, Seria
             metadataVersion = metadataVersion,
     )
     val target = config.target
-    val manifestProperties = config.manifestProperties
+    val manifestProperties = (config.manifestProperties ?: Properties()).apply {
+        if (config.arcDiagnosticsRequiredByCode) {
+            setProperty(ARC_DIAGNOSTICS_KLIB_PROPERTY, "true")
+        }
+    }
 
     if (!nopack) {
         val suffix = outputFiles.produce.suffix(target)

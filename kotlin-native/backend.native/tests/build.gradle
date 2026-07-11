@@ -3351,8 +3351,13 @@ standaloneTest("cycle_detector") {
 }
 
 standaloneTest("arc_debug_detect_cycles") {
-    flags = ['-tr', '-Xbinary=arcLeakCheck=report']
+    flags = ['-tr']
     source = "runtime/memory/arc_debug_detect_cycles.kt"
+}
+
+linkTest("arc_debug_detect_cycles_klib") {
+    source = "runtime/memory/arc_debug_klib/main.kt"
+    lib = "runtime/memory/arc_debug_klib/library.kt"
 }
 
 standaloneTest("arc_leak_check_report") {

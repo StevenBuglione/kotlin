@@ -248,6 +248,19 @@ class KonanConfig(val project: Project, val configuration: CompilerConfiguration
 
     val resolvedLibraries get() = resolve.resolvedLibraries
 
+    private val dependenciesRequireArcDiagnostics: Boolean by lazy {
+        resolvedLibraries.getFullList(TopologicalLibraryOrder).any {
+            it.manifestProperties.getProperty(ARC_DIAGNOSTICS_KLIB_PROPERTY) == "true"
+        }
+    }
+
+    internal val arcDiagnosticsRequiredByCode: Boolean
+        get() = configuration.getBoolean(KonanConfigKeys.ARC_DIAGNOSTICS_REQUIRED) ||
+                dependenciesRequireArcDiagnostics
+
+    internal val arcDiagnosticsEnabled: Boolean
+        get() = arcLeakCheck != ArcLeakCheck.DISABLED || arcDiagnosticsRequiredByCode
+
     internal val externalDependenciesFile = configuration.get(KonanConfigKeys.EXTERNAL_DEPENDENCIES)?.let(::File)
 
     internal val userVisibleIrModulesSupport = KonanUserVisibleIrModulesSupport(
@@ -344,10 +357,10 @@ class KonanConfig(val project: Project, val configuration: CompilerConfiguration
             }
             MemoryModel.ARC -> {
                 add("arc.bc")
-                add(if (arcLeakCheck == ArcLeakCheck.DISABLED) {
-                    "arc_memory_manager.bc"
-                } else {
+                add(if (arcDiagnosticsEnabled) {
                     "arc_diagnostic_memory_manager.bc"
+                } else {
+                    "arc_memory_manager.bc"
                 })
             }
         }
@@ -446,8 +459,13 @@ class KonanConfig(val project: Project, val configuration: CompilerConfiguration
             append("-mm$memoryModel")
         if (memoryModel == MemoryModel.ARC)
             append("-arc_refs_v1")
-        if (arcLeakCheck != ArcLeakCheck.DISABLED)
-            append("-arc_leak_${arcLeakCheck.name.lowercase()}_v1")
+        if (arcDiagnosticsEnabled) {
+            append(if (arcLeakCheck == ArcLeakCheck.DISABLED) {
+                "-arc_diagnostics_v1"
+            } else {
+                "-arc_leak_${arcLeakCheck.name.lowercase()}_v1"
+            })
+        }
         if (freezing != defaultFreezing)
             append("-freezing${freezing.name}")
         if (propertyLazyInitialization != defaultPropertyLazyInitialization)

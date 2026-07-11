@@ -9,6 +9,10 @@ import com.intellij.openapi.project.Project
 import org.jetbrains.kotlin.backend.common.serialization.codedInputStream
 import org.jetbrains.kotlin.backend.common.serialization.proto.IrFile
 import org.jetbrains.kotlin.backend.konan.driver.DynamicCompilerDriver
+import org.jetbrains.kotlin.backend.konan.driver.PhaseContext
+import org.jetbrains.kotlin.backend.konan.driver.PhaseEngine
+import org.jetbrains.kotlin.backend.konan.driver.phases.FrontendPhaseOutput
+import org.jetbrains.kotlin.backend.konan.driver.phases.runFrontend
 import org.jetbrains.kotlin.cli.common.messages.CompilerMessageSeverity
 import org.jetbrains.kotlin.cli.jvm.compiler.KotlinCoreEnvironment
 import org.jetbrains.kotlin.config.CompilerConfiguration
@@ -69,6 +73,24 @@ class KonanDriver(
 
         ensureModuleName(konanConfig)
 
+        var precomputedFrontendOutput: FrontendPhaseOutput.Full? = null
+        if (konanConfig.isFinalBinary &&
+                konanConfig.memoryModel == MemoryModel.ARC &&
+                !konanConfig.arcDiagnosticsEnabled &&
+                environment.getSourceFiles().isNotEmpty()) {
+            PhaseEngine.startTopLevel(konanConfig) { engine: PhaseEngine<PhaseContext> ->
+                precomputedFrontendOutput = engine.runFrontend(konanConfig, environment)
+            }
+            val frontendOutput = precomputedFrontendOutput ?: return
+            if (frontendOutput.sourceCallsArcDetectCycles()) {
+                configuration.put(KonanConfigKeys.ARC_DIAGNOSTICS_REQUIRED, true)
+                konanConfig = KonanConfig(project, configuration)
+                // Diagnostic selection changes the runtime and cache flavor. The first frontend
+                // was resolved against the ordinary cache topology, so it cannot be reused.
+                precomputedFrontendOutput = null
+            }
+        }
+
         val cacheBuilder = CacheBuilder(konanConfig, spawnCompilation)
         if (cacheBuilder.needToBuild()) {
             cacheBuilder.build()
@@ -77,7 +99,7 @@ class KonanDriver(
 
         konanConfig.cacheSupport.checkConsistency()
 
-        DynamicCompilerDriver().run(konanConfig, environment)
+        DynamicCompilerDriver(precomputedFrontendOutput).run(konanConfig, environment)
     }
 
     private fun ensureModuleName(config: KonanConfig) {

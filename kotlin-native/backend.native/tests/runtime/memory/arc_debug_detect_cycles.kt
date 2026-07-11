@@ -1,4 +1,4 @@
-@file:OptIn(kotlin.experimental.ExperimentalNativeApi::class, kotlin.native.runtime.NativeRuntimeApi::class)
+@file:OptIn(kotlin.experimental.ExperimentalNativeApi::class)
 
 import kotlin.native.MemoryModel
 import kotlin.native.Platform

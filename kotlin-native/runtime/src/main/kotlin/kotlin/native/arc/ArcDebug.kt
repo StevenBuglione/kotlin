@@ -20,8 +20,8 @@ public object ArcDebug {
      *
      * Detection temporarily retains snapshot objects for memory safety. It neither changes graph edges nor collects
      * cycles. Heap writes are quiesced only while adjacency is copied and resume before SCC analysis begins.
-     * Direct calls currently require `-Xbinary=arcLeakCheck=report` or `-Xbinary=arcLeakCheck=fail`; automatic
-     * reachability-based diagnostic runtime selection is not yet available.
+     * Calling this function automatically selects the diagnostic ARC runtime. `-Xbinary=arcLeakCheck=report`
+     * and `-Xbinary=arcLeakCheck=fail` additionally request an automatic scan during orderly process shutdown.
      */
     public fun detectCycles(): List<ArcCycleInfo> {
         check(Platform.memoryModel == MemoryModel.ARC) {
