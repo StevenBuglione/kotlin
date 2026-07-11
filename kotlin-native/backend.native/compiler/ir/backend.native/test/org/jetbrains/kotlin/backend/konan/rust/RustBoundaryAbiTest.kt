@@ -32,6 +32,8 @@ import llvm.LLVMGetParam
 import llvm.LLVMInt8TypeInContext
 import llvm.LLVMModuleCreateWithNameInContext
 import llvm.LLVMPositionBuilderAtEnd
+import llvm.LLVMRemoveCallSiteEnumAttribute
+import llvm.LLVMRemoveEnumAttributeAtIndex
 import llvm.LLVMSetFunctionCallConv
 import llvm.LLVMSetInitializer
 import llvm.LLVMSetInstructionCallConv
@@ -138,6 +140,157 @@ class RustBoundaryAbiTest {
             assertNull(LLVMGetCallSiteEnumAttribute(call, 1, extension.value))
             assertNull(LLVMGetCallSiteEnumAttribute(invoke, LLVMAttributeReturnIndex, extension.value))
             assertNull(LLVMGetCallSiteEnumAttribute(invoke, 1, extension.value))
+        }
+    }
+
+    @Test
+    fun verifiesBoundaryAbiAfterNormalization() = withFixture { fixture ->
+        val boundary = fixture.function("boundary")
+        fixture.directCall("call_user", boundary)
+        fixture.directInvoke("invoke_user", boundary)
+        val expectation = fixture.expectation(
+            returnExtension = RustBoundaryAbiExpectation.Extension.SIGN_EXTEND,
+            parameterExtension = RustBoundaryAbiExpectation.Extension.ZERO_EXTEND,
+        )
+
+        assertTrue(normalizeRustBoundaryAbi(fixture.module, listOf(expectation)).isSuccess)
+
+        assertEquals(
+            RustBoundaryAbiNormalizationResult.Success,
+            verifyRustBoundaryAbi(fixture.module, listOf(expectation)),
+        )
+    }
+
+    @Test
+    fun verificationDetectsDefinitionReturnAndParameterDrift() {
+        withFixture { fixture ->
+            val boundary = fixture.function("boundary")
+            val expectation = fixture.expectation(
+                returnExtension = RustBoundaryAbiExpectation.Extension.SIGN_EXTEND,
+                parameterExtension = RustBoundaryAbiExpectation.Extension.ZERO_EXTEND,
+            )
+            assertTrue(normalizeRustBoundaryAbi(fixture.module, listOf(expectation)).isSuccess)
+            LLVMRemoveEnumAttributeAtIndex(boundary, LLVMAttributeReturnIndex, SIGN_EXTEND.value)
+
+            assertEquals(
+                "boundary 'boundary' has a different return extension after linkage",
+                verifyRustBoundaryAbi(fixture.module, listOf(expectation)).failure,
+            )
+        }
+        withFixture { fixture ->
+            val boundary = fixture.function("boundary")
+            val expectation = fixture.expectation(
+                returnExtension = RustBoundaryAbiExpectation.Extension.SIGN_EXTEND,
+                parameterExtension = RustBoundaryAbiExpectation.Extension.ZERO_EXTEND,
+            )
+            assertTrue(normalizeRustBoundaryAbi(fixture.module, listOf(expectation)).isSuccess)
+            LLVMRemoveEnumAttributeAtIndex(boundary, 1, ZERO_EXTEND.value)
+
+            assertEquals(
+                "boundary 'boundary' has a different extension on parameter 0 after linkage",
+                verifyRustBoundaryAbi(fixture.module, listOf(expectation)).failure,
+            )
+        }
+    }
+
+    @Test
+    fun verificationDetectsCallAndInvokeAttributeDrift() {
+        withFixture { fixture ->
+            val boundary = fixture.function("boundary")
+            val call = fixture.directCall("call_user", boundary)
+            val expectation = fixture.expectation(
+                returnExtension = RustBoundaryAbiExpectation.Extension.SIGN_EXTEND,
+                parameterExtension = RustBoundaryAbiExpectation.Extension.ZERO_EXTEND,
+            )
+            assertTrue(normalizeRustBoundaryAbi(fixture.module, listOf(expectation)).isSuccess)
+            LLVMRemoveCallSiteEnumAttribute(call, 1, ZERO_EXTEND.value)
+
+            assertEquals(
+                "a direct call to boundary 'boundary' has a different ABI after linkage",
+                verifyRustBoundaryAbi(fixture.module, listOf(expectation)).failure,
+            )
+        }
+        withFixture { fixture ->
+            val boundary = fixture.function("boundary")
+            val invoke = fixture.directInvoke("invoke_user", boundary)
+            val expectation = fixture.expectation(
+                returnExtension = RustBoundaryAbiExpectation.Extension.SIGN_EXTEND,
+                parameterExtension = RustBoundaryAbiExpectation.Extension.ZERO_EXTEND,
+            )
+            assertTrue(normalizeRustBoundaryAbi(fixture.module, listOf(expectation)).isSuccess)
+            LLVMRemoveCallSiteEnumAttribute(invoke, LLVMAttributeReturnIndex, SIGN_EXTEND.value)
+
+            assertEquals(
+                "a direct call to boundary 'boundary' has a different ABI after linkage",
+                verifyRustBoundaryAbi(fixture.module, listOf(expectation)).failure,
+            )
+        }
+    }
+
+    @Test
+    fun verificationDetectsDefinitionAndCallSiteCallingConventionDrift() {
+        withFixture { fixture ->
+            val boundary = fixture.function("boundary")
+            fixture.directCall("call_user", boundary)
+            val expectation = fixture.expectation()
+            assertTrue(normalizeRustBoundaryAbi(fixture.module, listOf(expectation)).isSuccess)
+            LLVMSetFunctionCallConv(boundary, 8)
+
+            assertEquals(
+                "boundary 'boundary' has a different calling convention after linkage",
+                verifyRustBoundaryAbi(fixture.module, listOf(expectation)).failure,
+            )
+        }
+        withFixture { fixture ->
+            val boundary = fixture.function("boundary")
+            val call = fixture.directCall("call_user", boundary)
+            val expectation = fixture.expectation()
+            assertTrue(normalizeRustBoundaryAbi(fixture.module, listOf(expectation)).isSuccess)
+            LLVMSetInstructionCallConv(call, 8)
+
+            assertEquals(
+                "a direct call to boundary 'boundary' has a different ABI after linkage",
+                verifyRustBoundaryAbi(fixture.module, listOf(expectation)).failure,
+            )
+        }
+    }
+
+    @Test
+    fun finalVerificationAllowsOnlyAbiNeutralEscapes() {
+        withFixture { fixture ->
+            val boundary = fixture.function("boundary")
+            val global = LLVMAddGlobal(fixture.module, LLVMTypeOf(boundary), "initializer_slot")!!
+            LLVMSetInitializer(global, boundary)
+            val expectation = fixture.expectation()
+
+            assertEquals(
+                "boundary 'boundary' has an indirect or escaping use after linkage",
+                verifyRustBoundaryAbi(fixture.module, listOf(expectation)).failure,
+            )
+            assertEquals(
+                RustBoundaryAbiNormalizationResult.Success,
+                verifyRustBoundaryAbi(fixture.module, listOf(expectation), allowAbiNeutralEscapes = true),
+            )
+        }
+        withFixture { fixture ->
+            val boundary = fixture.function("boundary")
+            fixture.addFunctionExtension(boundary, LLVMAttributeReturnIndex, SIGN_EXTEND)
+            fixture.addFunctionExtension(boundary, 1, ZERO_EXTEND)
+            val global = LLVMAddGlobal(fixture.module, LLVMTypeOf(boundary), "attributed_initializer_slot")!!
+            LLVMSetInitializer(global, boundary)
+            val expectation = fixture.expectation(
+                returnExtension = RustBoundaryAbiExpectation.Extension.SIGN_EXTEND,
+                parameterExtension = RustBoundaryAbiExpectation.Extension.ZERO_EXTEND,
+            )
+
+            assertEquals(
+                "boundary 'boundary' has an indirect or escaping use after linkage",
+                verifyRustBoundaryAbi(
+                    fixture.module,
+                    listOf(expectation),
+                    allowAbiNeutralEscapes = true,
+                ).failure,
+            )
         }
     }
 

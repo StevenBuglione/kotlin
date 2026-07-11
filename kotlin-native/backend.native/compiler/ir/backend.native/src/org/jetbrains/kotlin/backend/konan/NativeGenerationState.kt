@@ -16,6 +16,7 @@ import org.jetbrains.kotlin.backend.konan.llvm.*
 import org.jetbrains.kotlin.backend.konan.llvm.runtime.RuntimeModule
 import org.jetbrains.kotlin.backend.konan.llvm.runtime.RuntimeModulesConfig
 import org.jetbrains.kotlin.backend.konan.objcexport.ObjCExport
+import org.jetbrains.kotlin.backend.konan.rust.RustBoundaryAbiExpectation
 import org.jetbrains.kotlin.backend.konan.serialization.CacheDeserializationStrategy
 import org.jetbrains.kotlin.backend.konan.serialization.SerializedClassFields
 import org.jetbrains.kotlin.backend.konan.serialization.SerializedEagerInitializedFile
@@ -100,6 +101,8 @@ internal class NativeGenerationState(
     val rustGeneratedFunctions = mutableSetOf<IrSimpleFunction>()
     /** Original linkage for Kotlin/Rust boundary symbols while separate LLVM modules are joined. */
     val rustBoundaryLinkages = mutableMapOf<String, LLVMLinkage>()
+    /** ABI captured from Kotlin declarations and normalized into the accepted Rust module. */
+    var rustBoundaryAbiExpectations: List<RustBoundaryAbiExpectation> = emptyList()
 
     val bindClassToObjCNameClassAdapters = mutableMapOf<String, ConstPointer>()
     val bindClassToObjCNameInterfaceAdapters = mutableMapOf<String, ConstPointer>()

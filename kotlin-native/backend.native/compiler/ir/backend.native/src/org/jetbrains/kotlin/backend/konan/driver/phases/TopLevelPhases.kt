@@ -22,6 +22,7 @@ import org.jetbrains.kotlin.backend.konan.ir.konanLibrary
 import org.jetbrains.kotlin.backend.konan.llvm.getGlobalAliases
 import org.jetbrains.kotlin.backend.konan.rust.installRustEhPersonality
 import org.jetbrains.kotlin.backend.konan.rust.tryCompileRustHybridModule
+import org.jetbrains.kotlin.backend.konan.rust.verifyRustBoundaryAbi
 import org.jetbrains.kotlin.backend.konan.serialization.CacheDeserializationStrategy
 import org.jetbrains.kotlin.backend.konan.serialization.PartialCacheInfo
 import org.jetbrains.kotlin.cli.common.config.kotlinSourceRoots
@@ -543,6 +544,17 @@ internal fun PhaseEngine<NativeGenerationState>.runBackendCodegen(module: IrModu
         LLVMSetLinkage(mergedValue, entry.value)
     }
     if (rustBitcodeFiles.isNotEmpty()) {
+        val rustAbiVerification = verifyRustBoundaryAbi(
+            llvmModule,
+            context.rustBoundaryAbiExpectations,
+            allowAbiNeutralEscapes = true,
+        )
+        if (!rustAbiVerification.isSuccess) {
+            error(
+                "Rust boundary ABI verification failed after final LLVM linkage: " +
+                        (rustAbiVerification.failure ?: "unknown boundary mismatch")
+            )
+        }
         runAndMeasurePhase(VerifyBitcodePhase, llvmModule)
     }
 }
@@ -598,6 +610,10 @@ private fun PhaseEngine<NativeGenerationState>.runCodegen(module: IrModuleFragme
         installRustEhPersonality(context)
     }
     rustArtifact?.let { artifact ->
+        check(context.rustBoundaryAbiExpectations.isEmpty()) {
+            "Rust boundary ABI expectations were already installed for this Native module"
+        }
+        context.rustBoundaryAbiExpectations = artifact.abiExpectations
         (artifact.generatedFunctions + artifact.fallbackFunctions).distinct().forEach { function ->
             val llvmFunction = context.llvmDeclarations.forFunction(function)
             val symbolName = llvmFunction.name

@@ -9,6 +9,7 @@ import kotlinx.cinterop.toKString
 import llvm.LLVMAddAttributeAtIndex
 import llvm.LLVMAddCallSiteAttribute
 import llvm.LLVMAttributeReturnIndex
+import llvm.LLVMCallConv
 import llvm.LLVMCountParams
 import llvm.LLVMGetBasicBlockParent
 import llvm.LLVMGetCalledValue
@@ -148,6 +149,7 @@ internal fun normalizeRustBoundaryAbi(
 internal fun verifyRustBoundaryAbi(
     module: LLVMModuleRef,
     expectations: Collection<RustBoundaryAbiExpectation>,
+    allowAbiNeutralEscapes: Boolean = false,
 ): RustBoundaryAbiNormalizationResult {
     val boundaries = expectations.map { expectation ->
         val boundaryValue = rustBoundaryValue(module, expectation.symbolName)
@@ -180,10 +182,11 @@ internal fun verifyRustBoundaryAbi(
     }
 
     for (boundary in boundaries) {
-        if (!hasOnlyDirectBoundaryUses(boundary.boundaryValue, boundary.function, mutableSetOf())) {
+        val mayEscape = allowAbiNeutralEscapes && boundary.expectation.canEscapeWithoutSlotAttributes()
+        if (!mayEscape && !hasOnlyDirectBoundaryUses(boundary.boundaryValue, boundary.function, mutableSetOf())) {
             return RustBoundaryAbiNormalizationResult.failure("boundary '${boundary.expectation.symbolName}' has an indirect or escaping use after linkage")
         }
-        if (boundary.boundaryValue != boundary.function &&
+        if (!mayEscape && boundary.boundaryValue != boundary.function &&
             !hasOnlyDirectBoundaryUses(boundary.function, boundary.function, mutableSetOf())) {
             return RustBoundaryAbiNormalizationResult.failure("boundary '${boundary.expectation.symbolName}' has an indirect or escaping function use after linkage")
         }
@@ -206,6 +209,11 @@ internal fun verifyRustBoundaryAbi(
     }
     return RustBoundaryAbiNormalizationResult.Success
 }
+
+private fun RustBoundaryAbiExpectation.canEscapeWithoutSlotAttributes(): Boolean =
+    callingConvention == LLVMCallConv.LLVMCCallConv.value &&
+            returnExtension == RustBoundaryAbiExpectation.Extension.NONE &&
+            parameterExtensions.all { it == RustBoundaryAbiExpectation.Extension.NONE }
 
 internal fun writeRustBoundaryBitcodeAtomically(module: LLVMModuleRef, output: Path): Boolean {
     val normalizedOutput = output.toAbsolutePath().normalize()

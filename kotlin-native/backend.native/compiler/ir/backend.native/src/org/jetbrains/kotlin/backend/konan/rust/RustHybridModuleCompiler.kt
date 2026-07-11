@@ -69,7 +69,13 @@ internal data class RustHybridModuleArtifact(
     val bitcodeFile: File,
     val generatedFunctions: List<IrSimpleFunction>,
     val fallbackFunctions: List<IrSimpleFunction>,
+    val abiExpectations: List<RustBoundaryAbiExpectation>,
     val needsRustEhPersonality: Boolean,
+)
+
+private data class PreparedRustBitcode(
+    val path: Path,
+    val abiExpectations: List<RustBoundaryAbiExpectation>,
 )
 
 /**
@@ -222,11 +228,12 @@ internal fun tryCompileRustHybridModule(
             fallbackSymbols,
             failureMarker.toPath(),
         ) ?: return null
-        Files.write(successMarker.toPath(), (preparedBitcode.fileName.toString() + "\n").toByteArray())
+        Files.write(successMarker.toPath(), (preparedBitcode.path.fileName.toString() + "\n").toByteArray())
         RustHybridModuleArtifact(
-            preparedBitcode.toFile(),
+            preparedBitcode.path.toFile(),
             generatedFunctions,
             fallbackFunctions,
+            preparedBitcode.abiExpectations,
             needsRustEhPersonality = managedResults.isNotEmpty() || managedFieldResults.isNotEmpty() ||
                     primitiveFieldReadResults.isNotEmpty(),
         )
@@ -271,7 +278,7 @@ private fun prepareRustBitcode(
     generatedSymbols: Map<IrSimpleFunction, String>,
     fallbackSymbols: Map<IrSimpleFunction, String>,
     failureMarker: Path,
-): Path? {
+): PreparedRustBitcode? {
     var rustModule: LLVMModuleRef? = null
     var rustModuleConsumed = false
     var clone: LLVMModuleRef? = null
@@ -334,7 +341,7 @@ private fun prepareRustBitcode(
         }
         prepared = true
         Files.deleteIfExists(failureMarker)
-        normalizedBitcode
+        PreparedRustBitcode(normalizedBitcode, abiExpectations.toList())
     } catch (failure: Throwable) {
         if (failure is VirtualMachineError || failure is ThreadDeath) throw failure
         val message = failure.message ?: failure::class.java.name
