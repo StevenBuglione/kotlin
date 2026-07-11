@@ -52,7 +52,10 @@ internal object ArcOwnershipVerifier {
     private data class PathState(
         val values: Map<ArcValue, ValueState>,
         val initializedStorage: Set<ArcStorage>,
-    )
+    ) {
+        /** Dead SSA values cannot affect any successor and must not poison otherwise compatible joins. */
+        fun forSuccessor(): PathState = copy(values = values.filterValues { it.live })
+    }
 
     fun verify(plan: ArcFunctionPlan): ArcOwnershipVerificationResult {
         val violations = mutableListOf<ArcOwnershipViolation>()
@@ -60,6 +63,27 @@ internal object ArcOwnershipVerifier {
         if (entryBlock == null) {
             violations += violation(plan, ArcOwnershipViolationCode.MISSING_ENTRY_BLOCK, null, null, null, "missing ${plan.entry}")
             return ArcOwnershipVerificationResult.Failure(violations)
+        }
+
+        // Definition uniqueness is a function-wide SSA invariant. Checking it independently of
+        // path traversal prevents disjoint branches (and unreachable blocks) from defining the
+        // same ArcValue and then appearing compatible after dead-state normalization.
+        val definedValues = plan.entryValues.keys.toMutableSet()
+        plan.blocks.values.forEach { block ->
+            block.operations.forEachIndexed { index, operation ->
+                operation.definedResult()?.let { result ->
+                    if (!definedValues.add(result)) {
+                        violations += violation(
+                            plan,
+                            ArcOwnershipViolationCode.VALUE_ALREADY_DEFINED,
+                            block.id,
+                            index,
+                            operation.location,
+                            "$result is defined more than once in the function",
+                        )
+                    }
+                }
+            }
         }
 
         val entryState = PathState(
@@ -91,6 +115,8 @@ internal object ArcOwnershipVerifier {
                 ArcTerminator.Unreachable -> emptyList()
             }
 
+            val outgoingState = state.forSuccessor()
+
             successors.forEach { successor ->
                 if (successor !in plan.blocks) {
                     violations += violation(
@@ -102,12 +128,12 @@ internal object ArcOwnershipVerifier {
                 val previous = incoming[successor]
                 when {
                     previous == null -> {
-                        incoming[successor] = state
+                        incoming[successor] = outgoingState
                         worklist += successor
                     }
-                    previous != state -> violations += violation(
+                    previous != outgoingState -> violations += violation(
                         plan, ArcOwnershipViolationCode.INCOMPATIBLE_PATH_STATES, successor, null, null,
-                        "incoming ownership states differ: $previous versus $state"
+                        "incoming ownership states differ: $previous versus $outgoingState"
                     )
                 }
             }
@@ -220,4 +246,12 @@ internal object ArcOwnershipVerifier {
         location: ArcPlanLocation?,
         detail: String,
     ) = ArcOwnershipViolation(code, plan.functionName, block, operationIndex, location, detail)
+}
+
+private fun ArcOperation.definedResult(): ArcValue? = when (this) {
+    is ArcOperation.Define -> result
+    is ArcOperation.Copy -> result
+    is ArcOperation.Borrow -> result
+    is ArcOperation.StrongLoad -> result
+    is ArcOperation.Destroy, is ArcOperation.StrongStore -> null
 }

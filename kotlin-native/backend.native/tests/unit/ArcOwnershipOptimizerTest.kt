@@ -260,6 +260,326 @@ class ArcOwnershipOptimizerTest {
         assertTrue(result.metrics.render().contains("20/20 reference-counting operations eliminated (100%)"))
     }
 
+    @Test
+    fun eliminatesBranchLocalContainedCopyAcrossDiamond() {
+        val source = ArcValue("source")
+        val copied = ArcValue("copied")
+        val field = ArcStorage("field")
+        val left = ArcBlockId("left")
+        val right = ArcBlockId("right")
+        val merge = ArcBlockId("merge")
+        val input = cfgPlan(
+            ArcBasicBlock(entry, emptyList(), ArcTerminator.Branch(left, right)),
+            ArcBasicBlock(left, emptyList(), ArcTerminator.Jump(merge)),
+            ArcBasicBlock(
+                right,
+                listOf(
+                    ArcOperation.Copy(source, copied),
+                    ArcOperation.StrongStore(field, copied),
+                    ArcOperation.Destroy(copied),
+                ),
+                ArcTerminator.Jump(merge),
+            ),
+            ArcBasicBlock(merge, listOf(ArcOperation.Destroy(source)), ArcTerminator.Return()),
+            entryValues = mapOf(source to ArcOwnership.Owned),
+            initializedStorage = setOf(field),
+        )
+
+        val result = ArcOwnershipOptimizer.optimizeVerified(input)
+
+        assertEquals(
+            listOf(ArcOperation.StrongStore(field, source)),
+            result.plan.blocks.getValue(right).operations,
+        )
+        assertEquals(listOf(ArcOperation.Destroy(source)), result.plan.blocks.getValue(merge).operations)
+        assertEquals(1, result.metrics.containedOwnedCopiesEliminated)
+        assertEquals(2, result.metrics.eliminatedReferenceCountingOperations)
+        assertEquals(4, result.metrics.referenceCountingOperationsBefore)
+        assertEquals(2, result.metrics.referenceCountingOperationsAfter)
+        assertSame(ArcOwnershipVerificationResult.Success, ArcOwnershipVerifier.verify(result.plan))
+    }
+
+    @Test
+    fun eliminatesOneCopyAndEachPathDestroyAcrossDiamond() {
+        val source = ArcValue("source")
+        val copied = ArcValue("copied")
+        val leftField = ArcStorage("leftField")
+        val rightField = ArcStorage("rightField")
+        val left = ArcBlockId("left")
+        val right = ArcBlockId("right")
+        val merge = ArcBlockId("merge")
+        val input = cfgPlan(
+            ArcBasicBlock(entry, listOf(ArcOperation.Copy(source, copied)), ArcTerminator.Branch(left, right)),
+            ArcBasicBlock(
+                left,
+                listOf(ArcOperation.StrongStore(leftField, copied), ArcOperation.Destroy(copied)),
+                ArcTerminator.Jump(merge),
+            ),
+            ArcBasicBlock(
+                right,
+                listOf(ArcOperation.StrongStore(rightField, copied), ArcOperation.Destroy(copied)),
+                ArcTerminator.Jump(merge),
+            ),
+            ArcBasicBlock(merge, listOf(ArcOperation.Destroy(source)), ArcTerminator.Return()),
+            entryValues = mapOf(source to ArcOwnership.Owned),
+            initializedStorage = setOf(leftField, rightField),
+        )
+
+        val result = ArcOwnershipOptimizer.optimizeVerified(input)
+
+        assertTrue(result.plan.blocks.getValue(entry).operations.isEmpty())
+        assertEquals(listOf(ArcOperation.StrongStore(leftField, source)), result.plan.blocks.getValue(left).operations)
+        assertEquals(listOf(ArcOperation.StrongStore(rightField, source)), result.plan.blocks.getValue(right).operations)
+        assertEquals(listOf(ArcOperation.Destroy(source)), result.plan.blocks.getValue(merge).operations)
+        assertEquals(1, result.metrics.containedOwnedCopiesEliminated)
+        assertEquals(3, result.metrics.eliminatedReferenceCountingOperations)
+        assertEquals(6, result.metrics.referenceCountingOperationsBefore)
+        assertEquals(3, result.metrics.referenceCountingOperationsAfter)
+        assertSame(ArcOwnershipVerificationResult.Success, ArcOwnershipVerifier.verify(result.plan))
+    }
+
+    @Test
+    fun keepsCfgCopyWhenSourceDiesBeforeCopiedValueOnOnePath() {
+        val source = ArcValue("source")
+        val copied = ArcValue("copied")
+        val field = ArcStorage("field")
+        val left = ArcBlockId("left")
+        val right = ArcBlockId("right")
+        val input = cfgPlan(
+            ArcBasicBlock(
+                entry,
+                listOf(ArcOperation.Copy(source, copied)),
+                ArcTerminator.Branch(left, right),
+            ),
+            ArcBasicBlock(
+                left,
+                listOf(
+                    ArcOperation.Destroy(source),
+                    ArcOperation.StrongStore(field, copied),
+                    ArcOperation.Destroy(copied),
+                ),
+                ArcTerminator.Return(),
+            ),
+            ArcBasicBlock(
+                right,
+                listOf(
+                    ArcOperation.StrongStore(field, copied),
+                    ArcOperation.Destroy(copied),
+                    ArcOperation.Destroy(source),
+                ),
+                ArcTerminator.Return(),
+            ),
+            entryValues = mapOf(source to ArcOwnership.Owned),
+            initializedStorage = setOf(field),
+        )
+
+        val result = ArcOwnershipOptimizer.optimizeVerified(input)
+
+        assertSame(input, result.plan)
+        assertEquals(0, result.metrics.containedOwnedCopiesEliminated)
+    }
+
+    @Test
+    fun keepsCfgCopyWhoseResultIsReturned() {
+        val source = ArcValue("source")
+        val copied = ArcValue("copied")
+        val exit = ArcBlockId("exit")
+        val input = cfgPlan(
+            ArcBasicBlock(
+                entry,
+                listOf(ArcOperation.Copy(source, copied), ArcOperation.Destroy(source)),
+                ArcTerminator.Jump(exit),
+            ),
+            ArcBasicBlock(exit, emptyList(), ArcTerminator.Return(copied)),
+            entryValues = mapOf(source to ArcOwnership.Owned),
+        )
+
+        assertSame(input, ArcOwnershipOptimizer.optimizeVerified(input).plan)
+    }
+
+    @Test
+    fun keepsCfgCopyThatFeedsAnotherOwnedCopy() {
+        val source = ArcValue("source")
+        val copied = ArcValue("copied")
+        val nested = ArcValue("nested")
+        val exit = ArcBlockId("exit")
+        val input = cfgPlan(
+            ArcBasicBlock(
+                entry,
+                listOf(
+                    ArcOperation.Copy(source, copied),
+                    ArcOperation.Copy(copied, nested),
+                    ArcOperation.Destroy(copied),
+                    ArcOperation.Destroy(source),
+                ),
+                ArcTerminator.Jump(exit),
+            ),
+            ArcBasicBlock(exit, emptyList(), ArcTerminator.Return(nested)),
+            entryValues = mapOf(source to ArcOwnership.Owned),
+        )
+
+        assertSame(input, ArcOwnershipOptimizer.optimizeVerified(input).plan)
+    }
+
+    @Test
+    fun keepsCfgCopyWithBorrowedResult() {
+        val source = ArcValue("source")
+        val copied = ArcValue("copied")
+        val borrowed = ArcValue("borrowed")
+        val field = ArcStorage("field")
+        val exit = ArcBlockId("exit")
+        val input = cfgPlan(
+            ArcBasicBlock(
+                entry,
+                listOf(
+                    ArcOperation.Copy(source, copied),
+                    ArcOperation.Borrow(copied, borrowed),
+                    ArcOperation.StrongStore(field, borrowed),
+                    ArcOperation.Destroy(copied),
+                    ArcOperation.Destroy(source),
+                ),
+                ArcTerminator.Jump(exit),
+            ),
+            ArcBasicBlock(exit, emptyList(), ArcTerminator.Return()),
+            entryValues = mapOf(source to ArcOwnership.Owned),
+            initializedStorage = setOf(field),
+        )
+
+        assertSame(input, ArcOwnershipOptimizer.optimizeVerified(input).plan)
+    }
+
+    @Test
+    fun keepsCfgCopyFromGuaranteedSource() {
+        val source = ArcValue("source")
+        val copied = ArcValue("copied")
+        val field = ArcStorage("field")
+        val exit = ArcBlockId("exit")
+        val input = cfgPlan(
+            ArcBasicBlock(
+                entry,
+                listOf(
+                    ArcOperation.Copy(source, copied),
+                    ArcOperation.StrongStore(field, copied),
+                    ArcOperation.Destroy(copied),
+                ),
+                ArcTerminator.Jump(exit),
+            ),
+            ArcBasicBlock(exit, emptyList(), ArcTerminator.Return()),
+            entryValues = mapOf(source to ArcOwnership.Guaranteed),
+            initializedStorage = setOf(field),
+        )
+
+        assertSame(input, ArcOwnershipOptimizer.optimizeVerified(input).plan)
+    }
+
+    @Test
+    fun cyclicCfgRemainsUnchanged() {
+        val source = ArcValue("source")
+        val copied = ArcValue("copied")
+        val field = ArcStorage("field")
+        val loop = ArcBlockId("loop")
+        val input = cfgPlan(
+            ArcBasicBlock(
+                entry,
+                listOf(
+                    ArcOperation.Copy(source, copied),
+                    ArcOperation.StrongStore(field, copied),
+                    ArcOperation.Destroy(copied),
+                    ArcOperation.Destroy(source),
+                ),
+                ArcTerminator.Jump(loop),
+            ),
+            ArcBasicBlock(loop, emptyList(), ArcTerminator.Jump(loop)),
+            entryValues = mapOf(source to ArcOwnership.Owned),
+            initializedStorage = setOf(field),
+        )
+
+        assertSame(input, ArcOwnershipOptimizer.optimizeVerified(input).plan)
+    }
+
+    @Test
+    fun cfgWithUnreachableTerminatorRemainsUnchanged() {
+        val source = ArcValue("source")
+        val copied = ArcValue("copied")
+        val field = ArcStorage("field")
+        val deadEnd = ArcBlockId("deadEnd")
+        val input = cfgPlan(
+            ArcBasicBlock(
+                entry,
+                listOf(
+                    ArcOperation.Copy(source, copied),
+                    ArcOperation.StrongStore(field, copied),
+                    ArcOperation.Destroy(copied),
+                    ArcOperation.Destroy(source),
+                ),
+                ArcTerminator.Jump(deadEnd),
+            ),
+            ArcBasicBlock(deadEnd, emptyList(), ArcTerminator.Unreachable),
+            entryValues = mapOf(source to ArcOwnership.Owned),
+            initializedStorage = setOf(field),
+        )
+
+        assertSame(input, ArcOwnershipOptimizer.optimizeVerified(input).plan)
+    }
+
+    @Test
+    fun cfgWithUnreachableBlockRemainsUnchanged() {
+        val source = ArcValue("source")
+        val copied = ArcValue("copied")
+        val field = ArcStorage("field")
+        val exit = ArcBlockId("exit")
+        val orphan = ArcBlockId("orphan")
+        val input = cfgPlan(
+            ArcBasicBlock(
+                entry,
+                listOf(
+                    ArcOperation.Copy(source, copied),
+                    ArcOperation.StrongStore(field, copied),
+                    ArcOperation.Destroy(copied),
+                    ArcOperation.Destroy(source),
+                ),
+                ArcTerminator.Jump(exit),
+            ),
+            ArcBasicBlock(exit, emptyList(), ArcTerminator.Return()),
+            ArcBasicBlock(orphan, emptyList(), ArcTerminator.Return()),
+            entryValues = mapOf(source to ArcOwnership.Owned),
+            initializedStorage = setOf(field),
+        )
+
+        assertSame(input, ArcOwnershipOptimizer.optimizeVerified(input).plan)
+    }
+
+    @Test
+    fun liveCopiedValueAtThrowFailsVerificationBeforeOptimization() {
+        val source = ArcValue("source")
+        val copied = ArcValue("copied")
+        val throwing = ArcBlockId("throwing")
+        val input = cfgPlan(
+            ArcBasicBlock(entry, listOf(ArcOperation.Copy(source, copied)), ArcTerminator.Jump(throwing)),
+            ArcBasicBlock(throwing, emptyList(), ArcTerminator.Throw),
+            entryValues = mapOf(source to ArcOwnership.Owned),
+        )
+
+        try {
+            ArcOwnershipOptimizer.optimizeVerified(input)
+            throw AssertionError("expected ownership verification to reject a live copied value at throw")
+        } catch (failure: ArcOwnershipVerificationException) {
+            assertTrue(failure.failure.violations.any { it.code === ArcOwnershipViolationCode.LEAKED_OWNED_VALUE })
+        }
+    }
+
+    private fun cfgPlan(
+        vararg blocks: ArcBasicBlock,
+        entryValues: Map<ArcValue, ArcOwnership> = emptyMap(),
+        initializedStorage: Set<ArcStorage> = emptySet(),
+    ): ArcFunctionPlan = ArcFunctionPlan(
+        "cfgOptimizerTest",
+        entry,
+        entryValues,
+        initializedStorage,
+        blocks.associateBy(ArcBasicBlock::id),
+    )
+
     private fun plan(
         operations: List<ArcOperation>,
         entryValues: Map<ArcValue, ArcOwnership> = emptyMap(),

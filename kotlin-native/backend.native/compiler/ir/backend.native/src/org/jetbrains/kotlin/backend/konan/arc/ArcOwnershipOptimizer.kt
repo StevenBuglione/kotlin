@@ -50,48 +50,54 @@ internal data class ArcOwnershipOptimizationResult(
 )
 
 /**
- * A deliberately bounded side-plan optimizer. It only rewrites a verified, single-block plan and therefore
- * cannot affect generated code. The resulting plan is verified again before being returned.
+ * A deliberately bounded side-plan optimizer. It rewrites verified straight-line plans and one conservative
+ * family of acyclic CFG plans; no result from this optimizer affects generated code. Every result is reverified.
  */
 internal object ArcOwnershipOptimizer {
     fun optimizeVerified(plan: ArcFunctionPlan): ArcOwnershipOptimizationResult {
         ArcOwnershipVerifier.verifyOrThrow(plan)
 
         val block = plan.blocks[plan.entry]
-        if (plan.blocks.size != 1 || block == null) return unchanged(plan)
-
-        val operationsBefore = block.operations
-        var operations = operationsBefore
         var forwardedOwnedResults = 0
         var copyDestroyPairsEliminated = 0
         var containedOwnedCopiesEliminated = 0
-
-        while (true) {
-            val rewritten = forwardOneOwnedResult(operations, block.terminator) ?: break
-            operations = rewritten
-            forwardedOwnedResults++
+        val optimizedPlan = if (plan.blocks.size == 1 && block != null) {
+            var operations = block.operations
+            while (true) {
+                val rewritten = forwardOneOwnedResult(operations, block.terminator) ?: break
+                operations = rewritten
+                forwardedOwnedResults++
+            }
+            while (true) {
+                val rewritten = eliminateOneContainedOwnedCopy(plan.entryValues, operations, block.terminator) ?: break
+                operations = rewritten
+                containedOwnedCopiesEliminated++
+            }
+            while (true) {
+                val rewritten = eliminateOneCopyDestroyPair(operations, block.terminator) ?: break
+                operations = rewritten
+                copyDestroyPairsEliminated++
+            }
+            if (operations == block.operations) plan else plan.copy(
+                blocks = plan.blocks + (block.id to block.copy(operations = operations))
+            )
+        } else {
+            val topologicalOrder = plan.conservativeTopologicalOrder() ?: return unchanged(plan)
+            var rewrittenPlan = plan
+            while (true) {
+                val rewritten = eliminateOneContainedOwnedCopyAcrossCfg(rewrittenPlan, topologicalOrder) ?: break
+                rewrittenPlan = rewritten
+                containedOwnedCopiesEliminated++
+            }
+            rewrittenPlan
         }
-        while (true) {
-            val rewritten = eliminateOneContainedOwnedCopy(plan.entryValues, operations, block.terminator) ?: break
-            operations = rewritten
-            containedOwnedCopiesEliminated++
-        }
-        while (true) {
-            val rewritten = eliminateOneCopyDestroyPair(operations, block.terminator) ?: break
-            operations = rewritten
-            copyDestroyPairsEliminated++
-        }
-
-        val optimizedPlan = if (operations == operationsBefore) plan else plan.copy(
-            blocks = plan.blocks + (block.id to block.copy(operations = operations))
-        )
         ArcOwnershipVerifier.verifyOrThrow(optimizedPlan)
 
         return ArcOwnershipOptimizationResult(
             optimizedPlan,
             metrics(
-                operationsBefore,
-                operations,
+                plan,
+                optimizedPlan,
                 forwardedOwnedResults,
                 copyDestroyPairsEliminated,
                 containedOwnedCopiesEliminated,
@@ -100,39 +106,30 @@ internal object ArcOwnershipOptimizer {
     }
 
     private fun unchanged(plan: ArcFunctionPlan): ArcOwnershipOptimizationResult {
-        val operations = plan.blocks.values.sumOf { it.operations.size }
-        val referenceCountingOperations = plan.blocks.values.sumOf { block ->
-            block.operations.count(ArcOperation::isReferenceCountingOperation)
-        }
-        return ArcOwnershipOptimizationResult(
-            plan,
-            ArcOwnershipOptimizationMetrics(
-                plansVisited = 1,
-                operationsBefore = operations,
-                operationsAfter = operations,
-                referenceCountingOperationsBefore = referenceCountingOperations,
-                referenceCountingOperationsAfter = referenceCountingOperations,
-            ),
-        )
+        return ArcOwnershipOptimizationResult(plan, metrics(plan, plan, 0, 0, 0))
     }
 
     private fun metrics(
-        before: List<ArcOperation>,
-        after: List<ArcOperation>,
+        before: ArcFunctionPlan,
+        after: ArcFunctionPlan,
         forwardedOwnedResults: Int,
         copyDestroyPairsEliminated: Int,
         containedOwnedCopiesEliminated: Int,
-    ) = ArcOwnershipOptimizationMetrics(
-        plansVisited = 1,
-        plansChanged = if (before == after) 0 else 1,
-        operationsBefore = before.size,
-        operationsAfter = after.size,
-        referenceCountingOperationsBefore = before.count(ArcOperation::isReferenceCountingOperation),
-        referenceCountingOperationsAfter = after.count(ArcOperation::isReferenceCountingOperation),
-        forwardedOwnedResults = forwardedOwnedResults,
-        copyDestroyPairsEliminated = copyDestroyPairsEliminated,
-        containedOwnedCopiesEliminated = containedOwnedCopiesEliminated,
-    )
+    ): ArcOwnershipOptimizationMetrics {
+        val beforeOperations = before.blocks.values.flatMap(ArcBasicBlock::operations)
+        val afterOperations = after.blocks.values.flatMap(ArcBasicBlock::operations)
+        return ArcOwnershipOptimizationMetrics(
+            plansVisited = 1,
+            plansChanged = if (before == after) 0 else 1,
+            operationsBefore = beforeOperations.size,
+            operationsAfter = afterOperations.size,
+            referenceCountingOperationsBefore = beforeOperations.count(ArcOperation::isReferenceCountingOperation),
+            referenceCountingOperationsAfter = afterOperations.count(ArcOperation::isReferenceCountingOperation),
+            forwardedOwnedResults = forwardedOwnedResults,
+            copyDestroyPairsEliminated = copyDestroyPairsEliminated,
+            containedOwnedCopiesEliminated = containedOwnedCopiesEliminated,
+        )
+    }
 
     /**
      * Forward a producer's plus-one result through its sole copy when the producer value is otherwise only destroyed.
@@ -257,6 +254,155 @@ internal object ArcOwnershipOptimizer {
         }
         return true
     }
+
+    /**
+     * Remove one copied lifetime that is contained by an independently owned source across an acyclic CFG.
+     *
+     * Only strong stores and destroys may use the copy. The source must remain live through every such use and
+     * destroy on every path. Source consumes are never moved, added, or removed, so the final deinitialization
+     * point is identical before and after the redundant retain/releases are removed.
+     */
+    private fun eliminateOneContainedOwnedCopyAcrossCfg(
+        plan: ArcFunctionPlan,
+        topologicalOrder: List<ArcBlockId>,
+    ): ArcFunctionPlan? {
+        val ownerships = plan.valueOwnerships(topologicalOrder)
+        topologicalOrder.forEach { blockId ->
+            val block = plan.blocks.getValue(blockId)
+            block.operations.forEachIndexed { operationIndex, operation ->
+                val copy = operation as? ArcOperation.Copy ?: return@forEachIndexed
+                if (ownerships[copy.source] != ArcOwnership.Owned) return@forEachIndexed
+                val candidate = CfgCopyCandidate(blockId, operationIndex, copy)
+                if (!plan.isSafelyContained(candidate, topologicalOrder)) return@forEachIndexed
+                return plan.rewriteContainedCopy(candidate)
+            }
+        }
+        return null
+    }
+}
+
+private data class CfgCopyCandidate(
+    val block: ArcBlockId,
+    val operationIndex: Int,
+    val copy: ArcOperation.Copy,
+)
+
+/**
+ * Return a deterministic topological order only for the deliberately supported CFG subset.
+ * Unreachable blocks, cycles, and `unreachable` terminators retain their original plans unchanged.
+ */
+private fun ArcFunctionPlan.conservativeTopologicalOrder(): List<ArcBlockId>? {
+    val colors = mutableMapOf<ArcBlockId, Int>()
+    val postorder = mutableListOf<ArcBlockId>()
+
+    fun visit(blockId: ArcBlockId): Boolean {
+        when (colors[blockId]) {
+            1 -> return false
+            2 -> return true
+        }
+        val block = blocks[blockId] ?: return false
+        if (block.terminator === ArcTerminator.Unreachable) return false
+        colors[blockId] = 1
+        for (successor in block.terminator.successors()) {
+            if (!visit(successor)) return false
+        }
+        colors[blockId] = 2
+        postorder += blockId
+        return true
+    }
+
+    if (!visit(entry) || colors.size != blocks.size) return null
+    return postorder.asReversed()
+}
+
+private fun ArcFunctionPlan.valueOwnerships(topologicalOrder: List<ArcBlockId>): Map<ArcValue, ArcOwnership> {
+    val result = entryValues.toMutableMap()
+    topologicalOrder.forEach { blockId ->
+        blocks.getValue(blockId).operations.forEach { operation ->
+            when (operation) {
+                is ArcOperation.Define -> result[operation.result] = operation.ownership
+                is ArcOperation.Copy -> result[operation.result] =
+                        if (result[operation.source] == ArcOwnership.Immortal) ArcOwnership.Immortal else ArcOwnership.Owned
+                is ArcOperation.Borrow -> result[operation.result] = ArcOwnership.Guaranteed
+                is ArcOperation.StrongLoad -> result[operation.result] = ArcOwnership.Owned
+                is ArcOperation.Destroy, is ArcOperation.StrongStore -> Unit
+            }
+        }
+    }
+    return result
+}
+
+/** Forward lifetime proof for a candidate. `true` means the copied +1 is still live. */
+private fun ArcFunctionPlan.isSafelyContained(
+    candidate: CfgCopyCandidate,
+    topologicalOrder: List<ArcBlockId>,
+): Boolean {
+    val source = candidate.copy.source
+    val copied = candidate.copy.result
+    var totalUses = 0
+    blocks.values.forEach { block ->
+        block.operations.forEach { operation ->
+            if (operation.uses(copied)) {
+                if (operation !is ArcOperation.StrongStore && operation !is ArcOperation.Destroy) return false
+                totalUses++
+            }
+        }
+        if (block.terminator.uses(copied)) return false
+    }
+    if (totalUses == 0) return false
+
+    val incoming = mutableMapOf(candidate.block to true)
+    var observedUses = 0
+    var destroys = 0
+    for (blockId in topologicalOrder) {
+        var copiedIsLive = incoming[blockId] ?: continue
+        val block = blocks.getValue(blockId)
+        val firstOperation = if (blockId == candidate.block) candidate.operationIndex + 1 else 0
+        for (index in firstOperation until block.operations.size) {
+            val operation = block.operations[index]
+            when {
+                operation is ArcOperation.StrongStore && operation.value == copied -> {
+                    if (!copiedIsLive) return false
+                    observedUses++
+                }
+                operation is ArcOperation.Destroy && operation.value == copied -> {
+                    if (!copiedIsLive) return false
+                    observedUses++
+                    destroys++
+                    copiedIsLive = false
+                }
+                operation.uses(copied) -> return false
+            }
+            if (copiedIsLive && operation is ArcOperation.Destroy && operation.value == source) return false
+        }
+
+        val terminator = block.terminator
+        if (terminator.uses(copied)) return false
+        if (copiedIsLive && terminator is ArcTerminator.Return && terminator.value == source) return false
+        if (copiedIsLive && (terminator is ArcTerminator.Return || terminator === ArcTerminator.Throw)) return false
+
+        for (successor in terminator.successors()) {
+            val previous = incoming[successor]
+            if (previous != null && previous != copiedIsLive) return false
+            incoming[successor] = copiedIsLive
+        }
+    }
+    return destroys > 0 && observedUses == totalUses
+}
+
+private fun ArcFunctionPlan.rewriteContainedCopy(candidate: CfgCopyCandidate): ArcFunctionPlan {
+    val source = candidate.copy.source
+    val copied = candidate.copy.result
+    return copy(blocks = blocks.mapValues { (blockId, block) ->
+        block.copy(operations = block.operations.mapIndexedNotNull { index, operation ->
+            when {
+                blockId == candidate.block && index == candidate.operationIndex -> null
+                operation is ArcOperation.Destroy && operation.value == copied -> null
+                operation is ArcOperation.StrongStore && operation.value == copied -> operation.copy(value = source)
+                else -> operation
+            }
+        })
+    })
 }
 
 private fun List<ArcOperation>.indexOfFirstAfter(startIndex: Int, predicate: (ArcOperation) -> Boolean): Int {
@@ -292,6 +438,12 @@ private fun ArcOperation.uses(value: ArcValue): Boolean = when (this) {
 }
 
 private fun ArcTerminator.uses(value: ArcValue): Boolean = this is ArcTerminator.Return && this.value == value
+
+private fun ArcTerminator.successors(): List<ArcBlockId> = when (this) {
+    is ArcTerminator.Jump -> listOf(target)
+    is ArcTerminator.Branch -> listOf(trueTarget, falseTarget)
+    is ArcTerminator.Return, ArcTerminator.Throw, ArcTerminator.Unreachable -> emptyList()
+}
 
 private fun ArcOperation.isReferenceCountingOperation(): Boolean = when (this) {
     is ArcOperation.Copy, is ArcOperation.Destroy, is ArcOperation.StrongStore, is ArcOperation.StrongLoad -> true
