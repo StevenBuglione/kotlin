@@ -41,6 +41,8 @@ import org.jetbrains.kotlin.ir.types.isFloat
 import org.jetbrains.kotlin.ir.types.isInt
 import org.jetbrains.kotlin.ir.types.isLong
 import org.jetbrains.kotlin.ir.types.isString
+import org.jetbrains.kotlin.ir.types.isUInt
+import org.jetbrains.kotlin.ir.types.isULong
 import org.jetbrains.kotlin.ir.types.isUnit
 import org.jetbrains.kotlin.ir.util.fqNameWhenAvailable
 import org.jetbrains.kotlin.ir.util.isTopLevel
@@ -497,7 +499,7 @@ internal class RustIrCodegen(
                 ) {
                     render(expression(lhs), expression(arguments[1]))
                 } else null
-            val integer = lhs.type.isInt() || lhs.type.isLong()
+            val integer = lhs.type.isInt() || lhs.type.isLong() || lhs.type.isUInt() || lhs.type.isULong()
             return when (name) {
                 "plus" -> binary { a, b -> if (integer) "($a).wrapping_add($b)" else "($a + $b)" }
                 "minus" -> binary { a, b -> if (integer) "($a).wrapping_sub($b)" else "($a - $b)" }
@@ -541,6 +543,8 @@ internal class RustIrCodegen(
                 "ushr" -> if (arguments.getOrNull(1)?.type?.isInt() != true) null
                     else if (lhs.type.isInt()) binary { a, b -> "(($a as u32).wrapping_shr($b as u32) as i32)" }
                     else if (lhs.type.isLong()) binary(requireSameType = false) { a, b -> "(($a as u64).wrapping_shr($b as u32) as i64)" }
+                    else if (lhs.type.isUInt()) binary(requireSameType = false) { a, b -> "($a).wrapping_shr($b as u32)" }
+                    else if (lhs.type.isULong()) binary(requireSameType = false) { a, b -> "($a).wrapping_shr($b as u32)" }
                     else null
                 "less" -> binary { a, b -> "($a < $b)" }
                 "lessOrEqual" -> binary { a, b -> "($a <= $b)" }
@@ -565,13 +569,19 @@ internal class RustIrCodegen(
 
         private fun renderConst(constant: IrConst): String = when (constant.kind) {
             IrConstKind.Boolean -> (constant.value as Boolean).toString()
-            IrConstKind.Int -> when (val value = constant.value as Int) {
-                Int.MIN_VALUE -> "i32::MIN"
-                else -> "${value}_i32"
+            IrConstKind.Int -> {
+                val value = constant.value as Int
+                if (constant.type.isUInt()) "${Integer.toUnsignedString(value)}_u32" else when (value) {
+                    Int.MIN_VALUE -> "i32::MIN"
+                    else -> "${value}_i32"
+                }
             }
-            IrConstKind.Long -> when (val value = constant.value as Long) {
-                Long.MIN_VALUE -> "i64::MIN"
-                else -> "${value}_i64"
+            IrConstKind.Long -> {
+                val value = constant.value as Long
+                if (constant.type.isULong()) "${toUnsignedString(value)}_u64" else when (value) {
+                    Long.MIN_VALUE -> "i64::MIN"
+                    else -> "${value}_i64"
+                }
             }
             IrConstKind.Float -> {
                 val bits = (constant.value as Float).toRawBits()
@@ -705,12 +715,14 @@ internal class RustIrCodegen(
                 type.isLong() -> "i64"
                 type.isFloat() -> "f32"
                 type.isDouble() -> "f64"
+                type.isUInt() -> "u32"
+                type.isULong() -> "u64"
                 else -> unsupported(element, RustUnsupportedCode.UNSUPPORTED_TYPE, "Unsupported Kotlin type $type")
             }
         }
 
         fun IrType.isSupportedPrimitive(): Boolean =
-            !isNullable() && (isBoolean() || isInt() || isLong() || isFloat() || isDouble())
+            !isNullable() && (isBoolean() || isInt() || isLong() || isFloat() || isDouble() || isUInt() || isULong())
 
         fun IrType.isSupportedPrintType(): Boolean =
             !isNullable() && (isBoolean() || isInt() || isLong() || isString())

@@ -52,6 +52,8 @@ import org.jetbrains.kotlin.ir.types.isDouble
 import org.jetbrains.kotlin.ir.types.isFloat
 import org.jetbrains.kotlin.ir.types.isInt
 import org.jetbrains.kotlin.ir.types.isLong
+import org.jetbrains.kotlin.ir.types.isUInt
+import org.jetbrains.kotlin.ir.types.isULong
 import org.jetbrains.kotlin.ir.types.isUnit
 import org.jetbrains.kotlin.ir.util.hasAnnotation
 import org.jetbrains.kotlin.ir.util.getPackageFragment
@@ -249,10 +251,10 @@ private fun IrSimpleFunction.hasPrimitiveRustAbi(): Boolean =
             returnType.isPrimitiveRustReturnType()
 
 private fun IrType.isPrimitiveRustParameterType(): Boolean =
-    !isNullable() && (isBoolean() || isInt() || isLong() || isFloat() || isDouble())
+    !isNullable() && (isBoolean() || isInt() || isLong() || isFloat() || isDouble() || isUInt() || isULong())
 
 private fun IrType.isPrimitiveRustReturnType(): Boolean =
-    !isNullable() && (isBoolean() || isInt() || isLong() || isFloat() || isDouble() || isUnit())
+    !isNullable() && (isBoolean() || isInt() || isLong() || isFloat() || isDouble() || isUInt() || isULong() || isUnit())
 
 private fun preflightRustBitcode(
     generationState: NativeGenerationState,
