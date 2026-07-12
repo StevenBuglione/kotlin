@@ -224,7 +224,7 @@ def report(raw_path: Path, compile_path: Path, static_path: Path, output: Path) 
     markdown = [
         "# Kotlin/Native ARC benchmark comparison",
         "",
-        f"Baseline: strict v1.9.10 `{static[BASELINE]['compilerCommit']}`  ",
+        f"Baseline: strict v1.9.10 `{static[BASELINE]['compilerCommit']}`",
         f"Candidate: ARC `{static[CANDIDATE]['compilerCommit']}`",
         "",
         "| Scenario | Baseline median (s) | ARC median (s) | Latency delta | Throughput | Peak RSS delta | Gate |",
