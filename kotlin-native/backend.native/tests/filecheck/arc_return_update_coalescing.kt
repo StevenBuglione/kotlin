@@ -30,12 +30,12 @@ private fun coroutineHotPath(value: Int): Int {
 // COALESCE-NOT: call fastcc void @UpdateReturnRefRelaxed(%struct.ObjHeader** nonnull %[[AFTER_SLOT]], %struct.ObjHeader* %[[AFTER_VALUE]])
 // COALESCE: ret void
 // COALESCE-LABEL: define internal %struct.ObjHeader* @"kfun:$coroutineHotPath$lambda$0$FUNCTION_REFERENCE$0.invoke#internal"
-// The same result reaches three return updates, but frame cleanup and lifetime boundaries separate
-// them. The adjacent-pair pass must keep all three rather than widening through those barriers.
+// SafeContinuation ownership forwarding removes the former inner update. Two updates remain around
+// distinct frame-cleanup/lifetime boundaries, and the adjacent-pair pass must not widen through them.
 // COALESCE: "kfun:coroutineHotPath$lambda$0#internal.exit":
-// COALESCE: call fastcc void @UpdateReturnRefRelaxed(%struct.ObjHeader** %[[RESULT_SLOT:[0-9]+]], %struct.ObjHeader* %[[RESULT:[0-9]+]])
+// COALESCE: %[[RESULT:[0-9]+]] = phi %struct.ObjHeader*
 // COALESCE: call void @llvm.lifetime.end
-// COALESCE: call fastcc void @UpdateReturnRefRelaxed(%struct.ObjHeader** %[[RESULT_SLOT]], %struct.ObjHeader* %[[RESULT]])
+// COALESCE: call fastcc void @UpdateReturnRefRelaxed(%struct.ObjHeader** %[[RESULT_SLOT:[0-9]+]], %struct.ObjHeader* %[[RESULT]])
 // COALESCE: call void @llvm.lifetime.end
 // COALESCE: call fastcc void @UpdateReturnRefRelaxed(%struct.ObjHeader** %[[RESULT_SLOT]], %struct.ObjHeader* %[[RESULT]])
 // COALESCE-NOT: call fastcc void @UpdateReturnRefRelaxed(%struct.ObjHeader** %[[RESULT_SLOT]], %struct.ObjHeader* %[[RESULT]])
