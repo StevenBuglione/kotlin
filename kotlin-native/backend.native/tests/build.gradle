@@ -3387,6 +3387,13 @@ standaloneTest("arc_borrowed_array_element") {
     source = "codegen/arc/borrowedArrayElement.kt"
 }
 
+standaloneTest("arc_borrowed_field_projection") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    flags = ["-opt"]
+    outputChecker = { it.contains("ARC_FIELD_PROJECTION_OK\n") }
+    source = "codegen/arc/borrowedFieldProjection.kt"
+}
+
 standaloneTest("arc_empty_frame_elision") {
     enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
     flags = ["-opt"]
@@ -6653,6 +6660,13 @@ fileCheckTest("filecheck_arc_borrowed_mutable_call_argument") {
 fileCheckTest("filecheck_arc_borrowed_array_element") {
     enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
     annotatedSource = project.file('filecheck/arc_borrowed_array_element.kt')
+    extraOpts = ["-opt"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_borrowed_field_projection") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('filecheck/arc_borrowed_field_projection.kt')
     extraOpts = ["-opt"]
     phaseToCheck = "Codegen"
 }

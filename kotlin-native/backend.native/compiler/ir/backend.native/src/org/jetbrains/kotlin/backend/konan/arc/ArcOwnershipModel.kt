@@ -32,6 +32,18 @@ internal data class ArcPlanLocation(
     val sourceOffset: Int? = null,
 )
 
+/**
+ * The provenance of a guaranteed value.
+ *
+ * [Identity] borrows the source value itself. [Projection] borrows a reference reached through
+ * source-owned storage, such as a strong field. Keeping these distinct prevents an optimizer from
+ * replacing a projected value with its owner while retaining the same lifetime dependency.
+ */
+internal enum class ArcBorrowKind {
+    Identity,
+    Projection,
+}
+
 /** Explicit reference-counting operations consumed by the path verifier and, later, codegen. */
 internal sealed class ArcOperation(open val location: ArcPlanLocation?) {
     data class Define(
@@ -54,6 +66,7 @@ internal sealed class ArcOperation(open val location: ArcPlanLocation?) {
     data class Borrow(
         val source: ArcValue,
         val result: ArcValue,
+        val kind: ArcBorrowKind = ArcBorrowKind.Identity,
         override val location: ArcPlanLocation? = null,
     ) : ArcOperation(location)
 
@@ -72,6 +85,19 @@ internal sealed class ArcOperation(open val location: ArcPlanLocation?) {
     data class StrongStore(
         val storage: ArcStorage,
         val value: ArcValue,
+        override val location: ArcPlanLocation? = null,
+    ) : ArcOperation(location)
+
+    /**
+     * Replaces initialized strong [storage] with a projected [newBorrow]. The replacement retains
+     * the new value before it consumes/releases [oldOwner], and atomically ends the projection
+     * borrow that depends on that exact old owner. This is the ownership operation implemented by
+     * retain-before-release self replacement such as `cursor = cursor.next`.
+     */
+    data class StrongReplace(
+        val storage: ArcStorage,
+        val oldOwner: ArcValue,
+        val newBorrow: ArcValue,
         override val location: ArcPlanLocation? = null,
     ) : ArcOperation(location)
 

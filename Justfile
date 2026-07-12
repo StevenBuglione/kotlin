@@ -96,6 +96,9 @@ ci2-full: ci2-snapshot
 ci2-arc-frame-elision-unit: ci2-snapshot
     {{python}} tools/arc/arc.py --machine ci2 run arc-frame-elision-unit
 
+ci2-arc-field-projection: ci2-snapshot
+    {{python}} tools/arc/arc.py --machine ci2 run arc-field-projection
+
 ci2-bench-doctor:
     {{python}} tools/arc/arc.py --machine ci2-bench doctor
 

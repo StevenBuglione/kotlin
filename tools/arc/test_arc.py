@@ -68,6 +68,22 @@ class ArcProfileTest(unittest.TestCase):
         self.assertGreaterEqual(script.count("acquire_shared_host_lock"), 3)
         self.assertIn("mv %q %q", script)
 
+    def test_remote_runner_allows_only_exact_managed_paths(self):
+        script = (Path(__file__).parent / "remote.sh").read_text()
+        self.assertIn('resolved_repo=$(readlink -m -- "$repo")', script)
+        self.assertIn('resolved_source=$(readlink -m -- "$source_repo")', script)
+        for path in (
+            "/home/olfa/codex-kotlin-arc",
+            "/home/olfa/codex-kotlin-arc-ci2",
+            "/home/olfa/codex-kotlin-arc-ci2-bench",
+        ):
+            self.assertIn(path, script)
+        self.assertIn(
+            '[[ "$resolved_source" == /home/olfa/codex-kotlin-rust ]]',
+            script,
+        )
+        self.assertLess(script.index("validate_managed_paths\n"), script.index('case "$action" in'))
+
     def test_distribution_includes_linux_platform_libraries(self):
         with patch.dict(os.environ, {}, clear=True):
             command = arc.profile_command("dist")
@@ -88,6 +104,20 @@ class ArcProfileTest(unittest.TestCase):
         self.assertIn('"$llvm/bin/clang++"', script)
         self.assertIn("-Wl,-l:libz.so.1", script)
         self.assertIn("ArcFrameElisionTest.cpp", script)
+
+    def test_field_projection_profile_runs_emitted_ir_and_machine_gates_on_ci2(self):
+        with patch.dict(os.environ, {}, clear=True):
+            command = arc.profile_command("arc-field-projection")
+        self.assertIn(":kotlin-native:backend.native:tests:test", command)
+        self.assertIn(":kotlin-native:backend.native:tests:arc_borrowed_field_projection", command)
+        self.assertIn(":kotlin-native:backend.native:tests:filecheck_arc_borrowed_field_projection", command)
+
+        justfile = (Path(__file__).parents[2] / "Justfile").read_text()
+        self.assertIn("ci2-arc-field-projection: ci2-snapshot", justfile)
+        recipe = justfile.split("ci2-arc-field-projection: ci2-snapshot", 1)[1].split(
+            "ci2-bench-doctor:", 1
+        )[0]
+        self.assertIn("--machine ci2 run arc-field-projection", recipe)
 
     def test_arc_fixture_tasks_remain_overrideable(self):
         with patch.dict(os.environ, {"ARC_STRESS_TASKS": ":custom:arcStress"}, clear=True):

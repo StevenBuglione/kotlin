@@ -1,0 +1,13 @@
+42a4e3: 48 8b 70 08           mov    0x8(%rax),%rsi
+42a4e7: 48 85 f6              test   %rsi,%rsi
+42a4ea: 0f 84 70 01 00 00     je     42a660
+42a4f0: 48 89 df              mov    %rbx,%rdi
+42a4f3: e8 88 48 00 00        call   42ed80 <UpdateStackRefRelaxed>
+42a4f8: 48 8b 84 24 e8 01 00  mov    0x1e8(%rsp),%rax
+42a4ff: 00
+42a500: 48 63 48 10           movslq 0x10(%rax),%rcx
+42a504: 49 01 cf              add    %rcx,%r15
+42a507: 83 c5 ff              add    $0xffffffff,%ebp
+42a50a: 75 d7                 jne    42a4e3
+
+Validated loop interval: exactly one UpdateStackRefRelaxed call and no other ownership call targets.

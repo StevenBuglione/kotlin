@@ -16,6 +16,10 @@ internal enum class ArcOwnershipViolationCode {
     OWNER_ENDED_WITH_LIVE_BORROW,
     LIVE_BORROW_AT_EXIT,
     LOAD_FROM_UNINITIALIZED_STORAGE,
+    STRONG_REPLACE_OF_UNINITIALIZED_STORAGE,
+    STRONG_REPLACE_REQUIRES_OWNED_OLD_OWNER,
+    STRONG_REPLACE_REQUIRES_PROJECTED_BORROW,
+    STRONG_REPLACE_BORROW_OWNER_MISMATCH,
     INCOMPATIBLE_PATH_STATES,
     LEAKED_OWNED_VALUE,
     RETURN_OF_NON_OWNED_VALUE,
@@ -54,6 +58,7 @@ internal object ArcOwnershipVerifier {
         val ownership: ArcOwnership,
         val live: Boolean,
         val borrowedFrom: ArcValue? = null,
+        val borrowKind: ArcBorrowKind? = null,
     )
 
     private data class PathState(
@@ -166,11 +171,21 @@ internal object ArcOwnershipVerifier {
         val values = state.values.toMutableMap()
         val storage = state.initializedStorage.toMutableSet()
 
-        fun define(value: ArcValue, ownership: ArcOwnership, borrowedFrom: ArcValue? = null) {
+        fun define(
+            value: ArcValue,
+            ownership: ArcOwnership,
+            borrowedFrom: ArcValue? = null,
+            borrowKind: ArcBorrowKind? = null,
+        ) {
             if (value in values) {
                 violations += violation(plan, ArcOwnershipViolationCode.VALUE_ALREADY_DEFINED, block, index, operation.location, "$value")
             } else {
-                values[value] = ValueState(ownership, live = true, borrowedFrom = borrowedFrom)
+                values[value] = ValueState(
+                    ownership,
+                    live = true,
+                    borrowedFrom = borrowedFrom,
+                    borrowKind = borrowKind,
+                )
             }
         }
 
@@ -210,7 +225,12 @@ internal object ArcOwnershipVerifier {
                 }
             }
             is ArcOperation.Borrow -> live(operation.source)?.let {
-                define(operation.result, ArcOwnership.Guaranteed, borrowedFrom = operation.source)
+                define(
+                    operation.result,
+                    ArcOwnership.Guaranteed,
+                    borrowedFrom = operation.source,
+                    borrowKind = operation.kind,
+                )
             }
             is ArcOperation.EndBorrow -> live(operation.value)?.let { value ->
                 if (value.borrowedFrom == null) {
@@ -234,6 +254,96 @@ internal object ArcOwnershipVerifier {
                 live(operation.value)
             }
             is ArcOperation.StrongStore -> live(operation.value)?.let { storage += operation.storage }
+            is ArcOperation.StrongReplace -> {
+                val oldOwner = live(operation.oldOwner)
+                val newBorrow = live(operation.newBorrow)
+                var valid = oldOwner != null && newBorrow != null
+
+                if (operation.storage !in storage) {
+                    violations += violation(
+                        plan,
+                        ArcOwnershipViolationCode.STRONG_REPLACE_OF_UNINITIALIZED_STORAGE,
+                        block,
+                        index,
+                        operation.location,
+                        "${operation.storage} has no dominating strong store or entry initialization",
+                    )
+                    valid = false
+                }
+                if (oldOwner != null && oldOwner.ownership != ArcOwnership.Owned) {
+                    violations += violation(
+                        plan,
+                        ArcOwnershipViolationCode.STRONG_REPLACE_REQUIRES_OWNED_OLD_OWNER,
+                        block,
+                        index,
+                        operation.location,
+                        "${operation.oldOwner} is ${oldOwner.ownership}, not an owned old value",
+                    )
+                    valid = false
+                }
+                if (newBorrow != null &&
+                    (newBorrow.ownership != ArcOwnership.Guaranteed ||
+                            newBorrow.borrowedFrom == null ||
+                            newBorrow.borrowKind != ArcBorrowKind.Projection)
+                ) {
+                    violations += violation(
+                        plan,
+                        ArcOwnershipViolationCode.STRONG_REPLACE_REQUIRES_PROJECTED_BORROW,
+                        block,
+                        index,
+                        operation.location,
+                        "${operation.newBorrow} is not a live projected guaranteed borrow",
+                    )
+                    valid = false
+                } else if (newBorrow != null && newBorrow.borrowedFrom != operation.oldOwner) {
+                    violations += violation(
+                        plan,
+                        ArcOwnershipViolationCode.STRONG_REPLACE_BORROW_OWNER_MISMATCH,
+                        block,
+                        index,
+                        operation.location,
+                        "${operation.newBorrow} depends on ${newBorrow.borrowedFrom}, not ${operation.oldOwner}",
+                    )
+                    valid = false
+                }
+
+                if (oldOwner != null && values.any { (value, candidate) ->
+                        value != operation.newBorrow && candidate.live &&
+                                candidate.borrowedFrom == operation.oldOwner
+                    }
+                ) {
+                    violations += violation(
+                        plan,
+                        ArcOwnershipViolationCode.OWNER_ENDED_WITH_LIVE_BORROW,
+                        block,
+                        index,
+                        operation.location,
+                        "${operation.oldOwner} has another live borrow during strong replacement",
+                    )
+                    valid = false
+                }
+                if (newBorrow != null && values.any { (_, candidate) ->
+                        candidate.live && candidate.borrowedFrom == operation.newBorrow
+                    }
+                ) {
+                    violations += violation(
+                        plan,
+                        ArcOwnershipViolationCode.OWNER_ENDED_WITH_LIVE_BORROW,
+                        block,
+                        index,
+                        operation.location,
+                        "${operation.newBorrow} has a nested live borrow during strong replacement",
+                    )
+                    valid = false
+                }
+
+                if (valid) {
+                    // StrongReplace is one atomic ownership event: retain/publish the projected
+                    // value first, then consume the old slot owner and end its projection borrow.
+                    values[operation.newBorrow] = newBorrow!!.copy(live = false)
+                    values[operation.oldOwner] = oldOwner!!.copy(live = false)
+                }
+            }
             is ArcOperation.StrongLoad -> {
                 if (operation.storage !in storage) {
                     violations += violation(
@@ -296,5 +406,6 @@ private fun ArcOperation.definedResult(): ArcValue? = when (this) {
     is ArcOperation.Copy -> result
     is ArcOperation.Borrow -> result
     is ArcOperation.StrongLoad -> result
-    is ArcOperation.Destroy, is ArcOperation.EndBorrow, is ArcOperation.Use, is ArcOperation.StrongStore -> null
+    is ArcOperation.Destroy, is ArcOperation.EndBorrow, is ArcOperation.Use,
+    is ArcOperation.StrongStore, is ArcOperation.StrongReplace -> null
 }

@@ -34,7 +34,9 @@ import org.jetbrains.kotlin.ir.expressions.IrGetValue
 import org.jetbrains.kotlin.ir.expressions.IrFunctionAccessExpression
 import org.jetbrains.kotlin.ir.expressions.IrReturn
 import org.jetbrains.kotlin.ir.expressions.IrSetField
+import org.jetbrains.kotlin.ir.expressions.IrSetValue
 import org.jetbrains.kotlin.ir.expressions.IrStatementOrigin
+import org.jetbrains.kotlin.ir.expressions.IrTry
 import org.jetbrains.kotlin.ir.expressions.IrTypeOperator
 import org.jetbrains.kotlin.ir.expressions.IrTypeOperatorCall
 import org.jetbrains.kotlin.ir.expressions.IrWhen
@@ -92,6 +94,9 @@ internal data class ArcCodegenOwnershipPlan(
     val ownedResultForwarding: Map<IrSimpleFunction, ArcOwnedResultForwarding>,
     val borrowedGuaranteedAliases: Set<IrVariable>,
     val borrowedMutableReads: Set<IrGetValue>,
+    val borrowedFieldReceivers: Set<IrGetValue>,
+    val borrowedStrongFieldLoads: Set<IrGetField>,
+    val borrowedStrongProjectionStores: Set<IrSetValue>,
     val borrowedArrayElementCalls: Set<IrCall>,
     val mutableConstructorInitializers: Set<IrVariable>,
     val scopedArcReferenceLoads: Map<IrCall, IrExpression>,
@@ -102,7 +107,9 @@ internal data class ArcCodegenOwnershipPlan(
         }
 
     companion object {
-        val Empty = ArcCodegenOwnershipPlan(emptyMap(), emptySet(), emptySet(), emptySet(), emptySet(), emptyMap())
+        val Empty = ArcCodegenOwnershipPlan(
+            emptyMap(), emptySet(), emptySet(), emptySet(), emptySet(), emptySet(), emptySet(), emptySet(), emptyMap()
+        )
     }
 }
 
@@ -110,6 +117,26 @@ internal data class ArcOwnedResultForwarding(
     val producer: IrVariable,
     val returned: IrVariable,
 )
+
+internal data class ArcSuspendLikeMarkers(
+    val sourceSuspend: Boolean,
+    val loweredSuspendOrigin: Boolean,
+    val coroutineImplFunctionOrigin: Boolean,
+    val coroutineImplParentOrigin: Boolean,
+    val continuationParameter: Boolean,
+)
+
+internal fun ArcSuspendLikeMarkers.isSuspendLike(): Boolean =
+    sourceSuspend || loweredSuspendOrigin || coroutineImplFunctionOrigin ||
+            coroutineImplParentOrigin || continuationParameter
+
+/** Fail closed on every stable marker left by continuation-stub and state-machine lowering. */
+private fun IrSimpleFunction.isArcSuspendLike(): Boolean {
+    if (isSuspend || origin == IrDeclarationOrigin.LOWERED_SUSPEND_FUNCTION ||
+        origin.name == "COROUTINE_IMPL" || (parent as? IrClass)?.origin?.name == "COROUTINE_IMPL"
+    ) return true
+    return valueParameters.any { it.origin == IrDeclarationOrigin.CONTINUATION }
+}
 
 /** Authorization for remembering that a direct object call initialized its exact ARC result slot. */
 internal data class ArcResultSlotForwardingEligibility(
@@ -153,6 +180,60 @@ internal fun ArcBorrowedMutableReadEligibility.isAuthorized(): Boolean =
             mutableLocalReference && notCaptured && strongStorage && sideEffectFreeArgumentWrapper &&
             ownerNotAssignedInSuffix && callFreeSuffix && nonSuspendingSuffix && nonThrowingSuffix &&
             linearControlFlowSuffix
+
+/** Authorization for borrowing a mutable local only while computing one direct field address/load. */
+internal data class ArcBorrowedFieldReceiverEligibility(
+    val arcEnabled: Boolean,
+    val optimizationsEnabled: Boolean,
+    val debugInfoDisabled: Boolean,
+    val nonSuspendFunction: Boolean,
+    val exactDirectInstanceFieldReceiver: Boolean,
+    val nonVolatileField: Boolean,
+    val strongFieldStorage: Boolean,
+    val mutableLocalReferenceOwner: Boolean,
+    val ownerNotCaptured: Boolean,
+    val strongOwnerStorage: Boolean,
+    val immediateAddressAndLoadOnly: Boolean,
+    val ownerLivesThroughLoad: Boolean,
+)
+
+internal fun ArcBorrowedFieldReceiverEligibility.isAuthorized(): Boolean =
+    arcEnabled && optimizationsEnabled && debugInfoDisabled && nonSuspendFunction &&
+            exactDirectInstanceFieldReceiver && nonVolatileField && strongFieldStorage &&
+            mutableLocalReferenceOwner && ownerNotCaptured && strongOwnerStorage &&
+            immediateAddressAndLoadOnly && ownerLivesThroughLoad
+
+/**
+ * Authorization for the exact loop-carried projection `owner = owner.field` (including the
+ * canonical lowering of `owner.field!!`). The owning mutable stack slot remains live until the
+ * final strong store has retained the projected value, so neither intermediate load needs to own.
+ */
+internal data class ArcBorrowedStrongFieldProjectionEligibility(
+    val arcEnabled: Boolean,
+    val optimizationsEnabled: Boolean,
+    val debugInfoDisabled: Boolean,
+    val nonSuspendFunction: Boolean,
+    val exactDirectInstanceFieldRead: Boolean,
+    val nonVolatileField: Boolean,
+    val referenceField: Boolean,
+    val strongFieldStorage: Boolean,
+    val mutableLocalReferenceOwner: Boolean,
+    val ownerNotCaptured: Boolean,
+    val strongOwnerStorage: Boolean,
+    val exactReceiverRead: Boolean,
+    val canonicalSelfReplacement: Boolean,
+    val ownerUnchangedUntilFinalStore: Boolean,
+    val noUnmodeledCallOrSuspension: Boolean,
+    val noTryReturnWriteOrEscape: Boolean,
+    val exactMutableStrongReplacementStore: Boolean,
+)
+
+internal fun ArcBorrowedStrongFieldProjectionEligibility.isAuthorized(): Boolean =
+    arcEnabled && optimizationsEnabled && debugInfoDisabled && nonSuspendFunction &&
+            exactDirectInstanceFieldRead && nonVolatileField && referenceField && strongFieldStorage &&
+            mutableLocalReferenceOwner && ownerNotCaptured && strongOwnerStorage && exactReceiverRead &&
+            canonicalSelfReplacement && ownerUnchangedUntilFinalStore && noUnmodeledCallOrSuspension &&
+            noTryReturnWriteOrEscape && exactMutableStrongReplacementStore
 
 /**
  * Authorization for replacing the owning Array.get ABI with the ARC-only borrowed projection ABI.
@@ -256,6 +337,9 @@ internal fun runArcOwnershipPlanning(
     val ownedResultForwarding = linkedMapOf<IrSimpleFunction, ArcOwnedResultForwarding>()
     val borrowedGuaranteedAliases = linkedSetOf<IrVariable>()
     val borrowedMutableReads = linkedSetOf<IrGetValue>()
+    val borrowedFieldReceivers = Collections.newSetFromMap(IdentityHashMap<IrGetValue, Boolean>())
+    val borrowedStrongFieldLoads = Collections.newSetFromMap(IdentityHashMap<IrGetField, Boolean>())
+    val borrowedStrongProjectionStores = Collections.newSetFromMap(IdentityHashMap<IrSetValue, Boolean>())
     val borrowedArrayElementCalls = linkedSetOf<IrCall>()
     val mutableConstructorInitializers = linkedSetOf<IrVariable>()
     val scopedArcReferenceLoads = linkedMapOf<IrCall, IrExpression>()
@@ -282,6 +366,11 @@ internal fun runArcOwnershipPlanning(
                     declaration,
                     guaranteedAliases,
                 )
+                borrowedFieldReceivers += selectVerifiedBorrowedFieldReceivers(generationState, declaration)
+                selectVerifiedBorrowedStrongFieldProjections(generationState, declaration).let { selection ->
+                    borrowedStrongFieldLoads += selection.fieldLoads
+                    borrowedStrongProjectionStores += selection.replacementStores
+                }
                 borrowedArrayElementCalls += selectVerifiedBorrowedArrayElementCalls(
                     generationState,
                     declaration,
@@ -338,6 +427,9 @@ internal fun runArcOwnershipPlanning(
             ownedResultForwarding,
             borrowedGuaranteedAliases,
             borrowedMutableReads,
+            borrowedFieldReceivers,
+            borrowedStrongFieldLoads,
+            borrowedStrongProjectionStores,
             borrowedArrayElementCalls,
             mutableConstructorInitializers,
             scopedArcReferenceLoads,
@@ -600,8 +692,9 @@ private fun selectVerifiedBorrowedGuaranteedAliases(
     generationState: NativeGenerationState,
     function: IrSimpleFunction,
 ): Set<IrVariable> {
+    val nonSuspendFunction = !function.isArcSuspendLike()
     if (generationState.context.memoryModel != MemoryModel.ARC ||
-        generationState.context.shouldContainDebugInfo() || function.isSuspend
+        generationState.context.shouldContainDebugInfo() || !nonSuspendFunction
     ) return emptySet()
     val body = function.body ?: return emptySet()
     val guaranteedParameters = function.allParameters
@@ -626,7 +719,7 @@ private fun selectVerifiedBorrowedGuaranteedAliases(
             val eligibility = ArcBorrowedGuaranteedAliasEligibility(
                 arcEnabled = generationState.context.memoryModel == MemoryModel.ARC,
                 debugInfoDisabled = !generationState.context.shouldContainDebugInfo(),
-                nonSuspendFunction = !function.isSuspend,
+                nonSuspendFunction = nonSuspendFunction,
                 mutableLocalReference = declaration.isVar && declaration.type.binaryTypeIsReference() &&
                         declaration.parent === function,
                 initializedFromGuaranteedParameter = initializer?.symbol in guaranteedParameters,
@@ -889,9 +982,10 @@ private fun selectVerifiedBorrowedArrayElementCalls(
     function: IrSimpleFunction,
     lifetimes: Map<IrElement, Lifetime>,
 ): Set<IrCall> {
+    val nonSuspendFunction = !function.isArcSuspendLike()
     if (generationState.context.memoryModel != MemoryModel.ARC ||
         !generationState.context.config.optimizationsEnabled ||
-        generationState.context.shouldContainDebugInfo() || function.isSuspend
+        generationState.context.shouldContainDebugInfo() || !nonSuspendFunction
     ) return emptySet()
     val body = function.body ?: return emptySet()
     val symbols = generationState.context.ir.symbols
@@ -1013,7 +1107,7 @@ private fun selectVerifiedBorrowedArrayElementCalls(
                 arcEnabled = generationState.context.memoryModel == MemoryModel.ARC,
                 optimizationsEnabled = generationState.context.config.optimizationsEnabled,
                 debugInfoDisabled = !generationState.context.shouldContainDebugInfo(),
-                nonSuspendFunction = !function.isSuspend,
+                nonSuspendFunction = nonSuspendFunction,
                 exactReferenceArrayGet = candidate.arrayGet.symbol == exactArrayGet &&
                         candidate.arrayGet.type.binaryTypeIsReference(),
                 immediateKotlinConsumer = candidate.consumer.isKotlinBorrowConsumer(generationState),
@@ -1080,7 +1174,7 @@ private fun IrFunctionAccessExpression.isKotlinBorrowConsumer(generationState: N
     is IrCall -> {
         val callee = symbol.owner
         callee.isReal && !callee.isExternal && !callee.isBuiltInOperator && !callee.isTypedIntrinsic &&
-                !callee.isObjCBridgeBased() && !callee.isSuspend &&
+                !callee.isObjCBridgeBased() && !callee.isArcSuspendLike() &&
                 symbol != generationState.context.ir.symbols.arcWeakReferenceLoad &&
                 symbol != generationState.context.ir.symbols.arcUnownedReferenceLoad
     }
@@ -1135,7 +1229,8 @@ private fun selectVerifiedBorrowedMutableReads(
     function: IrSimpleFunction,
     borrowedGuaranteedAliases: Set<IrVariable>,
 ): Set<IrGetValue> {
-    if (generationState.context.shouldContainDebugInfo() || function.isSuspend) return emptySet()
+    val nonSuspendFunction = !function.isArcSuspendLike()
+    if (generationState.context.shouldContainDebugInfo() || !nonSuspendFunction) return emptySet()
     val body = function.body ?: return emptySet()
     val selected = linkedSetOf<IrGetValue>()
     val capturedVariables = collectVariablesCapturedByNestedFunctions(function)
@@ -1173,7 +1268,7 @@ private fun selectVerifiedBorrowedMutableReads(
                 val eligibility = ArcBorrowedMutableReadEligibility(
                     arcEnabled = generationState.context.memoryModel == MemoryModel.ARC,
                     debugInfoDisabled = !generationState.context.shouldContainDebugInfo(),
-                    nonSuspendFunction = !function.isSuspend,
+                    nonSuspendFunction = nonSuspendFunction,
                     directKotlinCall = directCall,
                     mutableLocalReference = mutableReference,
                     notCaptured = notCaptured,
@@ -1197,6 +1292,269 @@ private fun selectVerifiedBorrowedMutableReads(
     return selected
 }
 
+/** Borrow any exact mutable-local receiver for only the immediate direct field address/load. */
+private fun selectVerifiedBorrowedFieldReceivers(
+    generationState: NativeGenerationState,
+    function: IrSimpleFunction,
+): Set<IrGetValue> {
+    val nonSuspendFunction = !function.isArcSuspendLike()
+    if (generationState.context.memoryModel != MemoryModel.ARC ||
+        !generationState.context.config.optimizationsEnabled ||
+        generationState.context.shouldContainDebugInfo() || !nonSuspendFunction
+    ) return emptySet()
+    val body = function.body ?: return emptySet()
+    val capturedVariables = collectVariablesCapturedByNestedFunctions(function)
+    val selected = Collections.newSetFromMap(IdentityHashMap<IrGetValue, Boolean>())
+
+    body.acceptVoid(object : IrElementVisitorVoid {
+        override fun visitElement(element: IrElement) {
+            element.acceptChildrenVoid(this)
+        }
+
+        override fun visitFunction(declaration: IrFunction) = Unit
+
+        override fun visitGetField(expression: IrGetField) {
+            val receiver = expression.receiver as? IrGetValue
+            val owner = receiver?.symbol?.owner as? IrVariable
+            val field = expression.symbol.owner
+            val eligibility = ArcBorrowedFieldReceiverEligibility(
+                arcEnabled = generationState.context.memoryModel == MemoryModel.ARC,
+                optimizationsEnabled = generationState.context.config.optimizationsEnabled,
+                debugInfoDisabled = !generationState.context.shouldContainDebugInfo(),
+                nonSuspendFunction = nonSuspendFunction,
+                exactDirectInstanceFieldReceiver = receiver != null && expression.receiver === receiver && !field.isStatic,
+                nonVolatileField = !field.hasAnnotation(KonanFqNames.volatile),
+                strongFieldStorage = !field.hasAnnotation(KonanFqNames.arcWeak) &&
+                        !field.hasAnnotation(KonanFqNames.arcUnowned),
+                mutableLocalReferenceOwner = owner != null && owner.isVar && owner.parent === function &&
+                        owner.type.binaryTypeIsReference(),
+                ownerNotCaptured = owner != null && owner !in capturedVariables,
+                strongOwnerStorage = owner != null &&
+                        !owner.hasAnnotation(KonanFqNames.arcWeak) &&
+                        !owner.hasAnnotation(KonanFqNames.arcUnowned) &&
+                        !owner.hasAnnotation(KonanFqNames.volatile),
+                immediateAddressAndLoadOnly = receiver != null && expression.receiver === receiver,
+                ownerLivesThroughLoad = owner != null,
+            )
+            if (receiver != null && owner != null && eligibility.isAuthorized() &&
+                verifyBorrowedFieldReceiverProof(function, owner, field.name.asString())
+            ) {
+                selected += receiver
+            }
+            expression.acceptChildrenVoid(this)
+        }
+    })
+    return selected
+}
+
+private fun verifyBorrowedFieldReceiverProof(
+    function: IrSimpleFunction,
+    ownerVariable: IrVariable,
+    fieldName: String,
+): Boolean {
+    val owner = ArcValue("field_receiver_${ownerVariable.name}")
+    val receiver = ArcValue("borrowed_receiver_${ownerVariable.name}")
+    val entry = ArcBlockId("entry")
+    val proof = ArcFunctionPlan(
+        functionName = "${function.fqNameForIrSerialization.asString()}#borrow-field-receiver-$fieldName",
+        entry = entry,
+        entryValues = emptyMap(),
+        entryInitializedStorage = emptySet(),
+        blocks = mapOf(
+            entry to ArcBasicBlock(
+                entry,
+                listOf(
+                    ArcOperation.Define(owner, ArcOwnership.Owned),
+                    ArcOperation.Borrow(owner, receiver, ArcBorrowKind.Identity),
+                    ArcOperation.Use(receiver, ArcPlanLocation("immediate field address/load")),
+                    ArcOperation.EndBorrow(receiver),
+                    ArcOperation.Destroy(owner),
+                ),
+                ArcTerminator.Return(),
+            )
+        ),
+    )
+    return ArcOwnershipVerifier.verify(proof) === ArcOwnershipVerificationResult.Success
+}
+
+/**
+ * Select only the structural replacement produced by `cursor = cursor.next` or
+ * `cursor = cursor.next!!`. No getter call, safe-call, cast, alternate owner, or expression with
+ * user-controlled evaluation can enter this first slice.
+ */
+private data class ArcBorrowedStrongFieldProjectionSelection(
+    val fieldLoads: Set<IrGetField>,
+    val replacementStores: Set<IrSetValue>,
+)
+
+private fun selectVerifiedBorrowedStrongFieldProjections(
+    generationState: NativeGenerationState,
+    function: IrSimpleFunction,
+): ArcBorrowedStrongFieldProjectionSelection {
+    fun emptySelection() = ArcBorrowedStrongFieldProjectionSelection(emptySet(), emptySet())
+    val nonSuspendFunction = !function.isArcSuspendLike()
+    if (generationState.context.memoryModel != MemoryModel.ARC ||
+        !generationState.context.config.optimizationsEnabled ||
+        generationState.context.shouldContainDebugInfo() || !nonSuspendFunction
+    ) return emptySelection()
+    val body = function.body ?: return emptySelection()
+    val capturedVariables = collectVariablesCapturedByNestedFunctions(function)
+    val selectedFields = Collections.newSetFromMap(IdentityHashMap<IrGetField, Boolean>())
+    val selectedStores = Collections.newSetFromMap(IdentityHashMap<IrSetValue, Boolean>())
+
+    body.acceptVoid(object : IrElementVisitorVoid {
+        var tryDepth = 0
+        var returnDepth = 0
+        var callDepth = 0
+        var fieldWriteDepth = 0
+        var nestedSetValueDepth = 0
+
+        override fun visitElement(element: IrElement) {
+            element.acceptChildrenVoid(this)
+        }
+
+        override fun visitFunction(declaration: IrFunction) = Unit
+
+        override fun visitTry(aTry: IrTry) {
+            tryDepth++
+            aTry.acceptChildrenVoid(this)
+            tryDepth--
+        }
+
+        override fun visitReturn(expression: IrReturn) {
+            returnDepth++
+            expression.acceptChildrenVoid(this)
+            returnDepth--
+        }
+
+        override fun visitFunctionAccess(expression: IrFunctionAccessExpression) {
+            callDepth++
+            expression.acceptChildrenVoid(this)
+            callDepth--
+        }
+
+        override fun visitSetField(expression: IrSetField) {
+            fieldWriteDepth++
+            expression.acceptChildrenVoid(this)
+            fieldWriteDepth--
+        }
+
+        override fun visitSetValue(expression: IrSetValue) {
+            val owner = expression.symbol.owner as? IrVariable
+            val field = expression.value.unwrapCanonicalStrongFieldProjection(generationState)
+            val receiver = field?.receiver as? IrGetValue
+            val fieldOwner = field?.symbol?.owner
+            val canonicalExpression = field != null &&
+                    (expression.value is IrGetField || expression.value is IrBlock)
+            val canonicalSelfReplacement = receiver?.symbol == expression.symbol
+            val outsideForbiddenAncestors = tryDepth == 0 && returnDepth == 0 && callDepth == 0 &&
+                    fieldWriteDepth == 0 && nestedSetValueDepth == 0
+            val strongOwnerStorage = owner?.let {
+                !it.hasAnnotation(KonanFqNames.arcWeak) &&
+                        !it.hasAnnotation(KonanFqNames.arcUnowned) &&
+                        !it.hasAnnotation(KonanFqNames.volatile)
+            } == true
+            val eligibility = ArcBorrowedStrongFieldProjectionEligibility(
+                arcEnabled = generationState.context.memoryModel == MemoryModel.ARC,
+                optimizationsEnabled = generationState.context.config.optimizationsEnabled,
+                debugInfoDisabled = !generationState.context.shouldContainDebugInfo(),
+                nonSuspendFunction = nonSuspendFunction,
+                exactDirectInstanceFieldRead = field != null && field.receiver === receiver &&
+                        fieldOwner?.isStatic == false,
+                nonVolatileField = fieldOwner?.hasAnnotation(KonanFqNames.volatile) == false,
+                referenceField = field?.type?.binaryTypeIsReference() == true,
+                strongFieldStorage = fieldOwner != null &&
+                        !fieldOwner.hasAnnotation(KonanFqNames.arcWeak) &&
+                        !fieldOwner.hasAnnotation(KonanFqNames.arcUnowned),
+                mutableLocalReferenceOwner = owner != null && owner.isVar && owner.parent === function &&
+                        owner.type.binaryTypeIsReference(),
+                ownerNotCaptured = owner != null && owner !in capturedVariables,
+                strongOwnerStorage = strongOwnerStorage,
+                exactReceiverRead = receiver != null && field.receiver === receiver,
+                canonicalSelfReplacement = canonicalSelfReplacement,
+                // Direct field projection and the exact compiler-generated `!!` block contain no
+                // evaluation point at which user code can replace or escape the owning slot.
+                ownerUnchangedUntilFinalStore = canonicalExpression && canonicalSelfReplacement,
+                noUnmodeledCallOrSuspension = canonicalExpression && callDepth == 0,
+                noTryReturnWriteOrEscape = canonicalExpression && outsideForbiddenAncestors,
+                exactMutableStrongReplacementStore = canonicalExpression && canonicalSelfReplacement &&
+                        owner != null && owner.isVar && owner.type.binaryTypeIsReference(),
+            )
+            if (owner != null && receiver != null && eligibility.isAuthorized() &&
+                verifyBorrowedStrongFieldProjectionProof(function, owner, field)
+            ) {
+                selectedFields += field
+                selectedStores += expression
+            }
+            nestedSetValueDepth++
+            expression.acceptChildrenVoid(this)
+            nestedSetValueDepth--
+        }
+    })
+    return ArcBorrowedStrongFieldProjectionSelection(selectedFields, selectedStores)
+}
+
+/**
+ * Causally attach codegen authorization to the mandatory path verifier. The normal edge retains
+ * the projected value into the cursor slot before ending the projection borrow and consuming the
+ * old owner. A failing `!!`/unwind edge ends the borrow and consumes only the old owner.
+ */
+private fun verifyBorrowedStrongFieldProjectionProof(
+    function: IrSimpleFunction,
+    ownerVariable: IrVariable,
+    field: IrGetField,
+): Boolean {
+    val owner = ArcValue("field_owner_${ownerVariable.name}")
+    val projected = ArcValue("field_projection_${ownerVariable.name}")
+    val cursorSlot = ArcStorage("local_${ownerVariable.name}")
+    val entry = ArcBlockId("entry")
+    val checked = ArcBlockId("checked")
+    val normal = ArcBlockId("normal")
+    val unwind = ArcBlockId("unwind")
+    val proof = ArcFunctionPlan(
+        functionName = "${function.fqNameForIrSerialization.asString()}#borrow-field-${field.symbol.owner.name}",
+        entry = entry,
+        entryValues = emptyMap(),
+        entryInitializedStorage = setOf(cursorSlot),
+        blocks = linkedMapOf(
+            entry to ArcBasicBlock(
+                entry,
+                listOf(
+                    ArcOperation.Define(owner, ArcOwnership.Owned),
+                    ArcOperation.Borrow(owner, projected, ArcBorrowKind.Projection),
+                ),
+                ArcTerminator.Jump(checked),
+            ),
+            checked to ArcBasicBlock(
+                checked,
+                listOf(ArcOperation.Use(projected, ArcPlanLocation("field projection/null check"))),
+                ArcTerminator.Branch(normal, unwind),
+            ),
+            normal to ArcBasicBlock(
+                normal,
+                listOf(
+                    ArcOperation.StrongReplace(cursorSlot, owner, projected),
+                ),
+                ArcTerminator.Return(),
+            ),
+            unwind to ArcBasicBlock(
+                unwind,
+                listOf(ArcOperation.EndBorrow(projected), ArcOperation.Destroy(owner)),
+                ArcTerminator.Throw,
+            ),
+        ),
+    )
+    return ArcOwnershipVerifier.verify(proof) === ArcOwnershipVerificationResult.Success
+}
+
+private fun IrExpression.unwrapCanonicalStrongFieldProjection(
+    generationState: NativeGenerationState,
+): IrGetField? = when (this) {
+    is IrGetField -> this
+    is IrBlock -> unwrapLoweredCheckNotNullInitializer(generationState) as? IrGetField
+    else -> null
+}
+
 private fun IrExpression.unwrapDirectMutableRead(): IrGetValue? = when (this) {
     is IrGetValue -> this
     is IrTypeOperatorCall -> if (operator == IrTypeOperator.IMPLICIT_CAST) argument.unwrapDirectMutableRead() else null
@@ -1212,10 +1570,14 @@ private fun IrExpression.unwrapBorrowedMutableRead(generationState: NativeGenera
  * No arbitrary block, user call, or additional statement is accepted.
  */
 private fun IrBlock.unwrapLoweredCheckNotNull(generationState: NativeGenerationState): IrGetValue? {
+    return unwrapLoweredCheckNotNullInitializer(generationState)?.unwrapDirectMutableRead()
+}
+
+private fun IrBlock.unwrapLoweredCheckNotNullInitializer(generationState: NativeGenerationState): IrExpression? {
     if (origin != null || statements.size != 3) return null
     val temporary = statements[0] as? IrVariable ?: return null
     if (temporary.origin != IrDeclarationOrigin.IR_TEMPORARY_VARIABLE || temporary.isVar) return null
-    val read = temporary.initializer?.unwrapDirectMutableRead() ?: return null
+    val initializer = temporary.initializer ?: return null
     val guard = statements[1] as? IrWhen ?: return null
     if (!guard.type.isUnit() || guard.branches.size != 1) return null
     val branch = guard.branches.single()
@@ -1226,7 +1588,7 @@ private fun IrBlock.unwrapLoweredCheckNotNull(generationState: NativeGenerationS
     if (!branch.condition.isGeneratedNullCheckOf(generationState, temporary)) return null
     val result = statements[2] as? IrGetValue ?: return null
     if (result.symbol != temporary.symbol) return null
-    return read
+    return initializer
 }
 
 private fun IrExpression.isGeneratedNullCheckOf(
@@ -1259,7 +1621,7 @@ private fun IrFunctionAccessExpression.isDirectKotlinCall(generationState: Nativ
     is IrConstructorCall -> !symbol.owner.isExternal && !symbol.owner.constructedClass.isExternal
     is IrCall -> {
         val callee = symbol.owner
-        !callee.isExternal && !callee.isBuiltInOperator && !callee.isSuspend &&
+        !callee.isExternal && !callee.isBuiltInOperator && !callee.isArcSuspendLike() &&
                 (!callee.isOverridable || superQualifierSymbol != null) &&
                 symbol != generationState.context.ir.symbols.arcWeakReferenceLoad &&
                 symbol != generationState.context.ir.symbols.arcUnownedReferenceLoad
@@ -1498,7 +1860,7 @@ private class CuratedArcOwnershipPlanBuilder(
     )
 
     fun build(): CuratedArcFunctionPlan? {
-        if (function.isSuspend || function.body !is org.jetbrains.kotlin.ir.expressions.IrBlockBody) return null
+        if (function.isArcSuspendLike() || function.body !is org.jetbrains.kotlin.ir.expressions.IrBlockBody) return null
 
         function.allParameters.forEach { parameter ->
             if (parameter.type.binaryTypeIsReference()) {

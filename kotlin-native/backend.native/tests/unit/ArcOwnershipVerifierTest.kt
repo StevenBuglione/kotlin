@@ -52,6 +52,155 @@ class ArcOwnershipVerifierTest {
     }
 
     @Test
+    fun projectedBorrowRetainsItsOwnersLifetimeDependency() {
+        val owner = ArcValue("owner")
+        val projected = ArcValue("projected")
+        val result = ArcOwnershipVerifier.verify(
+            plan(
+                ArcOperation.Define(owner, ArcOwnership.Owned),
+                ArcOperation.Borrow(owner, projected, ArcBorrowKind.Projection),
+                ArcOperation.Destroy(owner),
+            )
+        )
+
+        assertFailureCode(result, ArcOwnershipViolationCode.OWNER_ENDED_WITH_LIVE_BORROW)
+        assertFailureCode(result, ArcOwnershipViolationCode.LIVE_BORROW_AT_EXIT)
+    }
+
+    @Test
+    fun projectedBorrowMayEndBeforeItsOwner() {
+        val owner = ArcValue("owner")
+        val projected = ArcValue("projected")
+        val result = ArcOwnershipVerifier.verify(
+            plan(
+                ArcOperation.Define(owner, ArcOwnership.Owned),
+                ArcOperation.Borrow(owner, projected, ArcBorrowKind.Projection),
+                ArcOperation.Use(projected),
+                ArcOperation.EndBorrow(projected),
+                ArcOperation.Destroy(owner),
+            )
+        )
+
+        assertEquals(ArcOwnershipVerificationResult.Success, result)
+    }
+
+    @Test
+    fun strongReplaceAtomicallyTransfersProjectedBorrowAndConsumesOldOwner() {
+        val oldOwner = ArcValue("oldOwner")
+        val projected = ArcValue("projected")
+        val cursor = ArcStorage("cursor")
+        val result = ArcOwnershipVerifier.verify(
+            plan(
+                operations = listOf(
+                    ArcOperation.Define(oldOwner, ArcOwnership.Owned),
+                    ArcOperation.Borrow(oldOwner, projected, ArcBorrowKind.Projection),
+                    // The runtime values may have the same identity (a self edge); ownership is
+                    // still represented by distinct owner and projected SSA values.
+                    ArcOperation.StrongReplace(cursor, oldOwner, projected),
+                ),
+                initializedStorage = setOf(cursor),
+            )
+        )
+
+        assertEquals(ArcOwnershipVerificationResult.Success, result)
+    }
+
+    @Test
+    fun strongReplaceMakesOldOwnerAndProjectionUnavailableAfterTransfer() {
+        val oldOwner = ArcValue("oldOwner")
+        val projected = ArcValue("projected")
+        val cursor = ArcStorage("cursor")
+        val result = ArcOwnershipVerifier.verify(
+            plan(
+                operations = listOf(
+                    ArcOperation.Define(oldOwner, ArcOwnership.Owned),
+                    ArcOperation.Borrow(oldOwner, projected, ArcBorrowKind.Projection),
+                    ArcOperation.StrongReplace(cursor, oldOwner, projected),
+                    ArcOperation.Use(oldOwner),
+                    ArcOperation.Use(projected),
+                ),
+                initializedStorage = setOf(cursor),
+            )
+        )
+
+        assertFailureCode(result, ArcOwnershipViolationCode.USE_AFTER_DESTROY)
+    }
+
+    @Test
+    fun strongReplaceRejectsIdentityBorrow() {
+        val oldOwner = ArcValue("oldOwner")
+        val borrowed = ArcValue("borrowed")
+        val cursor = ArcStorage("cursor")
+        val result = ArcOwnershipVerifier.verify(
+            plan(
+                operations = listOf(
+                    ArcOperation.Define(oldOwner, ArcOwnership.Owned),
+                    ArcOperation.Borrow(oldOwner, borrowed, ArcBorrowKind.Identity),
+                    ArcOperation.StrongReplace(cursor, oldOwner, borrowed),
+                ),
+                initializedStorage = setOf(cursor),
+            )
+        )
+
+        assertFailureCode(result, ArcOwnershipViolationCode.STRONG_REPLACE_REQUIRES_PROJECTED_BORROW)
+    }
+
+    @Test
+    fun strongReplaceRejectsProjectionFromDifferentOwner() {
+        val oldOwner = ArcValue("oldOwner")
+        val otherOwner = ArcValue("otherOwner")
+        val projected = ArcValue("projected")
+        val cursor = ArcStorage("cursor")
+        val result = ArcOwnershipVerifier.verify(
+            plan(
+                operations = listOf(
+                    ArcOperation.Define(oldOwner, ArcOwnership.Owned),
+                    ArcOperation.Define(otherOwner, ArcOwnership.Owned),
+                    ArcOperation.Borrow(otherOwner, projected, ArcBorrowKind.Projection),
+                    ArcOperation.StrongReplace(cursor, oldOwner, projected),
+                ),
+                initializedStorage = setOf(cursor),
+            )
+        )
+
+        assertFailureCode(result, ArcOwnershipViolationCode.STRONG_REPLACE_BORROW_OWNER_MISMATCH)
+    }
+
+    @Test
+    fun strongReplaceRequiresInitializedStorage() {
+        val oldOwner = ArcValue("oldOwner")
+        val projected = ArcValue("projected")
+        val result = ArcOwnershipVerifier.verify(
+            plan(
+                ArcOperation.Define(oldOwner, ArcOwnership.Owned),
+                ArcOperation.Borrow(oldOwner, projected, ArcBorrowKind.Projection),
+                ArcOperation.StrongReplace(ArcStorage("cursor"), oldOwner, projected),
+            )
+        )
+
+        assertFailureCode(result, ArcOwnershipViolationCode.STRONG_REPLACE_OF_UNINITIALIZED_STORAGE)
+    }
+
+    @Test
+    fun strongReplaceRequiresOwnedOldOwner() {
+        val oldOwner = ArcValue("oldOwner")
+        val projected = ArcValue("projected")
+        val cursor = ArcStorage("cursor")
+        val result = ArcOwnershipVerifier.verify(
+            plan(
+                operations = listOf(
+                    ArcOperation.Borrow(oldOwner, projected, ArcBorrowKind.Projection),
+                    ArcOperation.StrongReplace(cursor, oldOwner, projected),
+                ),
+                entryValues = mapOf(oldOwner to ArcOwnership.Guaranteed),
+                initializedStorage = setOf(cursor),
+            )
+        )
+
+        assertFailureCode(result, ArcOwnershipViolationCode.STRONG_REPLACE_REQUIRES_OWNED_OLD_OWNER)
+    }
+
+    @Test
     fun borrowMustEndBeforeFunctionExit() {
         val owner = ArcValue("owner")
         val borrowed = ArcValue("borrowed")
@@ -279,14 +428,16 @@ class ArcOwnershipVerifierTest {
     private fun plan(
         vararg operations: ArcOperation,
         entryValues: Map<ArcValue, ArcOwnership> = emptyMap(),
-    ): ArcFunctionPlan = plan(operations.asList(), entryValues)
+        initializedStorage: Set<ArcStorage> = emptySet(),
+    ): ArcFunctionPlan = plan(operations.asList(), entryValues, initializedStorage)
 
     private fun plan(
         operations: List<ArcOperation>,
         entryValues: Map<ArcValue, ArcOwnership> = emptyMap(),
+        initializedStorage: Set<ArcStorage> = emptySet(),
     ): ArcFunctionPlan {
         val block = ArcBasicBlock(entry, operations, ArcTerminator.Return())
-        return ArcFunctionPlan("test", entry, entryValues, emptySet(), mapOf(entry to block))
+        return ArcFunctionPlan("test", entry, entryValues, initializedStorage, mapOf(entry to block))
     }
 
     private fun assertFailureCode(result: ArcOwnershipVerificationResult, code: ArcOwnershipViolationCode) {

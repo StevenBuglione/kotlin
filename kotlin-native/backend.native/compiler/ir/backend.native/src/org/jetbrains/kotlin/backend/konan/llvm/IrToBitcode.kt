@@ -1419,10 +1419,12 @@ internal class CodeGeneratorVisitor(
 
     private fun evaluateGetValue(value: IrGetValue, resultSlot: LLVMValueRef?): LLVMValueRef {
         context.log{"evaluateGetValue               : ${ir2string(value)}"}
-        if (resultSlot == null && value in arcOwnership.borrowedMutableReads) {
+        if (resultSlot == null &&
+            (value in arcOwnership.borrowedMutableReads || value in arcOwnership.borrowedFieldReceivers)
+        ) {
             val variable = value.symbol.owner as IrVariable
             val index = currentCodeContext.getDeclaredValue(variable)
-            require(index >= 0) { "ARC borrowed mutable read has no local slot: ${ir2string(value)}" }
+            require(index >= 0) { "ARC borrowed mutable/field receiver has no local slot: ${ir2string(value)}" }
             return functionGenerationContext.vars.loadBorrowedMutableReference(index)
         }
         return currentCodeContext.genGetValue(value.symbol.owner, resultSlot)
@@ -1440,9 +1442,38 @@ internal class CodeGeneratorVisitor(
          */
         val result = evaluateExpression(value.value)
         val variable = currentCodeContext.getDeclaredValue(value.symbol.owner)
-        functionGenerationContext.vars.store(result, variable)
+        if (value in arcOwnership.borrowedStrongProjectionStores) {
+            val selectedProjection = value.value.selectedBorrowedStrongFieldProjection()
+            require(context.memoryModel == MemoryModel.ARC && context.config.optimizationsEnabled &&
+                    !context.shouldContainDebugInfo() && selectedProjection != null) {
+                "ARC borrowed strong replacement escaped its verified projection boundary: ${ir2string(value)}"
+            }
+            require(selectedProjection in arcOwnership.borrowedStrongFieldLoads) {
+                "ARC borrowed strong replacement has no identity-selected field projection: ${ir2string(value)}"
+            }
+            functionGenerationContext.vars.storeBorrowedStrongProjection(result, variable)
+        } else {
+            functionGenerationContext.vars.store(result, variable)
+        }
         assert(value.type.isUnit())
         return codegen.theUnitInstanceRef.llvm
+    }
+
+    private fun IrExpression.selectedBorrowedStrongFieldProjection(): IrGetField? {
+        val selected = mutableListOf<IrGetField>()
+        acceptVoid(object : IrElementVisitorVoid {
+            override fun visitElement(element: IrElement) {
+                element.acceptChildrenVoid(this)
+            }
+
+            override fun visitFunction(declaration: IrFunction) = Unit
+
+            override fun visitGetField(expression: IrGetField) {
+                if (expression in arcOwnership.borrowedStrongFieldLoads) selected += expression
+                expression.acceptChildrenVoid(this)
+            }
+        })
+        return selected.singleOrNull()
     }
 
     //-------------------------------------------------------------------------//
@@ -1765,6 +1796,25 @@ internal class CodeGeneratorVisitor(
                 fieldAddress = staticFieldPtr(value.symbol.owner, functionGenerationContext)
                 alignment = generationState.llvmDeclarations.forStaticField(value.symbol.owner).alignment
             }
+        }
+        if (value in arcOwnership.borrowedStrongFieldLoads) {
+            require(context.memoryModel == MemoryModel.ARC && context.config.optimizationsEnabled &&
+                    !context.shouldContainDebugInfo()) {
+                "ARC borrowed strong field load escaped its optimization boundary: ${ir2string(value)}"
+            }
+            require(!value.symbol.owner.isStatic && order == null &&
+                    value.type.binaryTypeIsReference() && resultSlot == null &&
+                    !value.symbol.owner.hasAnnotation(KonanFqNames.arcWeak) &&
+                    !value.symbol.owner.hasAnnotation(KonanFqNames.arcUnowned)) {
+                "ARC borrowed strong field load requires a direct nonvolatile reference projection: ${ir2string(value)}"
+            }
+            // The selected receiver's mutable stack slot owns the field target through this raw
+            // projection. evaluateSetValue immediately retains it into that same slot before the
+            // old receiver is released, so an intermediate owning result slot is both redundant
+            // and substantially more expensive in tight traversal loops.
+            return functionGenerationContext.loadSlot(
+                    fieldAddress, false, null, alignment = alignment
+            )
         }
         if (context.memoryModel == MemoryModel.ARC &&
                 order != null && value.type.binaryTypeIsReference()) {

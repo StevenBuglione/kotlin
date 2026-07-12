@@ -154,6 +154,19 @@ internal class VariableManager(val functionGenerationContext: FunctionGeneration
     fun store(value: LLVMValueRef, index: Int) {
         variables[index].store(value)
     }
+
+    /**
+     * Performs the exact retain-before-release stack replacement authorized for a borrowed strong
+     * field projection. Keeping this separate from generic [store] makes both the mutable/reference
+     * slot precondition and the ownership-sensitive codegen path explicit.
+     */
+    fun storeBorrowedStrongProjection(value: LLVMValueRef, index: Int) {
+        val record = variables[index]
+        require(record is SlotRecord && record.isVar && record.refSlot) {
+            "Borrowed strong projection replacement requires a mutable reference slot, got $record"
+        }
+        functionGenerationContext.storeStackRef(value, record.address)
+    }
 }
 
 internal data class VariableDebugLocation(val localVariable: DILocalVariableRef, val location:DILocationRef?, val file:DIFileRef, val line:Int)

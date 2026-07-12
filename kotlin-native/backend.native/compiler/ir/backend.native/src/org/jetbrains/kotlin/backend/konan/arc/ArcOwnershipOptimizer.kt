@@ -143,6 +143,7 @@ internal object ArcOwnershipOptimizer {
                         when (use) {
                             is ArcOperation.Destroy -> destroys++
                             is ArcOperation.Borrow, is ArcOperation.Use, is ArcOperation.StrongStore -> Unit
+                            is ArcOperation.StrongReplace -> return@forEachIndexed
                             else -> return@forEachIndexed
                         }
                     }
@@ -397,7 +398,8 @@ private fun ArcFunctionPlan.valueOwnerships(topologicalOrder: List<ArcBlockId>):
                         if (result[operation.source] == ArcOwnership.Immortal) ArcOwnership.Immortal else ArcOwnership.Owned
                 is ArcOperation.Borrow -> result[operation.result] = ArcOwnership.Guaranteed
                 is ArcOperation.StrongLoad -> result[operation.result] = ArcOwnership.Owned
-                is ArcOperation.Destroy, is ArcOperation.EndBorrow, is ArcOperation.Use, is ArcOperation.StrongStore -> Unit
+                is ArcOperation.Destroy, is ArcOperation.EndBorrow, is ArcOperation.Use,
+                is ArcOperation.StrongStore, is ArcOperation.StrongReplace -> Unit
             }
         }
     }
@@ -490,13 +492,16 @@ private fun ArcOperation.definedValue(ownerships: Map<ArcValue, ArcOwnership>): 
     }
     is ArcOperation.StrongLoad -> result to ArcOwnership.Owned
     is ArcOperation.Borrow -> result to ArcOwnership.Guaranteed
-    is ArcOperation.Destroy, is ArcOperation.EndBorrow, is ArcOperation.Use, is ArcOperation.StrongStore -> null
+    is ArcOperation.Destroy, is ArcOperation.EndBorrow, is ArcOperation.Use,
+    is ArcOperation.StrongStore, is ArcOperation.StrongReplace -> null
 }
 
 private fun ArcOperation.replacingUse(from: ArcValue, to: ArcValue): ArcOperation = when (this) {
     is ArcOperation.Borrow -> if (source == from) copy(source = to) else this
     is ArcOperation.Use -> if (value == from) copy(value = to) else this
     is ArcOperation.StrongStore -> if (value == from) copy(value = to) else this
+    // StrongReplace's old owner/projection dependency is an indivisible verified relation.
+    is ArcOperation.StrongReplace -> this
     else -> this
 }
 
@@ -508,6 +513,7 @@ private fun ArcOperation.uses(value: ArcValue): Boolean = when (this) {
     is ArcOperation.EndBorrow -> this.value == value
     is ArcOperation.Use -> this.value == value
     is ArcOperation.StrongStore -> this.value == value
+    is ArcOperation.StrongReplace -> oldOwner == value || newBorrow == value
     is ArcOperation.StrongLoad -> false
 }
 
@@ -520,6 +526,7 @@ private fun ArcTerminator.successors(): List<ArcBlockId> = when (this) {
 }
 
 private fun ArcOperation.isReferenceCountingOperation(): Boolean = when (this) {
-    is ArcOperation.Copy, is ArcOperation.Destroy, is ArcOperation.StrongStore, is ArcOperation.StrongLoad -> true
+    is ArcOperation.Copy, is ArcOperation.Destroy, is ArcOperation.StrongStore,
+    is ArcOperation.StrongReplace, is ArcOperation.StrongLoad -> true
     is ArcOperation.Define, is ArcOperation.Borrow, is ArcOperation.EndBorrow, is ArcOperation.Use -> false
 }

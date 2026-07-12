@@ -47,6 +47,7 @@ EXCLUDED_PATHS = (
 PROFILES = (
     "dist", "runtime", "sanity", "full", "arc-smoke", "arc-stress", "arc-race", "arc-race-tsan",
     "arc-unowned-death", "arc-no-collector", "arc-frame-elision-unit",
+    "arc-field-projection",
     "arc-sanitize", "arc-sanitize-asan", "arc-sanitize-ubsan", "arc-sanitize-tsan",
     "arc-bench-candidate", "arc-bench-baseline", "arc-bench",
 )
@@ -235,6 +236,12 @@ def profile_command(profile: str) -> list[str]:
         return ["bash", "tools/arc/run_fixture.sh", "no-collector"]
     if profile == "arc-frame-elision-unit":
         return ["bash", "tools/arc/run_frame_elision_unit.sh"]
+    if profile == "arc-field-projection":
+        return gradle + [
+            ":kotlin-native:backend.native:tests:test",
+            ":kotlin-native:backend.native:tests:arc_borrowed_field_projection",
+            ":kotlin-native:backend.native:tests:filecheck_arc_borrowed_field_projection",
+        ]
     if profile == "arc-sanitize":
         return ["bash", "tools/arc/sanitizer_probe.sh", "all"]
     if profile.startswith("arc-sanitize-"):

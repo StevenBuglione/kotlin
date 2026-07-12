@@ -1,0 +1,2 @@
+scenario	baseline_median_seconds	candidate_median_seconds	latency_delta_percent	throughput_ratio_percent	baseline_peak_rss_kib	candidate_peak_rss_kib	rss_delta_percent	logical_allocations	passed
+bounded-cycles	0.196206154	0.493098295	151.316	39.790	2816	2560	-9.091	50000	False

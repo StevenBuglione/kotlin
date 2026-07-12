@@ -1,0 +1,28 @@
+{
+  "wave06": {
+    "candidateCommit": "bb5cbdbe4de2ac989440a6c153b4d20301c19ed9",
+    "candidateTree": "feef8a8cc715a13110d4f7f1fe1494285737f6e2",
+    "arcBoundedMedianSeconds": 2.378124080,
+    "boundedThroughputRatioPercent": 6.639,
+    "hotLoopOwnershipCallsPerTraversal": 4,
+    "fullMatrixThroughputGeomeanPercent": 83.503
+  },
+  "wave07": {
+    "candidateCommit": "354ffe9925f83b66677a8e3f593810ea51d721e6",
+    "candidateTree": "57f82e32b5020ceb1f1fd38002491d225e23e03a",
+    "arcBoundedMedianSeconds": 0.493098295,
+    "boundedThroughputRatioPercent": 39.7904750410869,
+    "hotLoopOwnershipCallsPerTraversal": 1,
+    "otherHotLoopOwnershipCallsPerTraversal": 0
+  },
+  "delta": {
+    "arcSpeedup": 4.822819515123247,
+    "arcLatencyReductionPercent": 79.265241071862,
+    "hotLoopOwnershipCallReductionPercent": 75.0,
+    "priorLikeForLikeProjectedFullGeomeanPercent": 94.527,
+    "finalResampledProjectedFullGeomeanPercent": 94.89654411460737,
+    "latencyGateLimitPercent": 5.0,
+    "fullGeomeanFloorPercent": 100.0,
+    "passed": false
+  }
+}

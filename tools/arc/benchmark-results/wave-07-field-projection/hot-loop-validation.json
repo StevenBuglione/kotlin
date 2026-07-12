@@ -1,0 +1,15 @@
+{
+  "candidateCommit": "354ffe9925f83b66677a8e3f593810ea51d721e6",
+  "candidateTree": "57f82e32b5020ceb1f1fd38002491d225e23e03a",
+  "disassembly": "candidate-arc.disassembly preserved in the remote evidence archive",
+  "loopAddressStart": "0x42a4e3",
+  "loopAddressEnd": "0x42a50a",
+  "ownershipCallsPerTraversal": {
+    "UpdateStackRefRelaxed": 1,
+    "otherOwnershipCalls": 0,
+    "totalOwnershipCalls": 1
+  },
+  "wave06OwnershipCallsPerTraversal": 4,
+  "reductionPercent": 75.0,
+  "passedStaticCallTarget": true
+}

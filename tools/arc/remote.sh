@@ -14,6 +14,27 @@ fail() {
     exit 1
 }
 
+validate_managed_paths() {
+    local resolved_repo resolved_source
+    resolved_repo=$(readlink -m -- "$repo")
+    resolved_source=$(readlink -m -- "$source_repo")
+    case "$resolved_repo" in
+        /home/olfa/codex-kotlin-arc|\
+        /home/olfa/codex-kotlin-arc-ci2|\
+        /home/olfa/codex-kotlin-arc-ci2-bench)
+            ;;
+        *)
+            fail "resolved checkout path $resolved_repo is not an approved ARC worktree"
+            ;;
+    esac
+    [[ "$resolved_source" == /home/olfa/codex-kotlin-rust ]] ||
+        fail "resolved source repository $resolved_source is not the approved shared object store"
+    [[ "$resolved_repo" != "$resolved_source" ]] ||
+        fail "managed checkout and shared source repository must be distinct"
+}
+
+validate_managed_paths
+
 check_java() {
     [[ -x "$java_home/bin/java" ]] || fail "JDK 17 not found at $java_home"
     local version

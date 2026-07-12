@@ -1,0 +1,222 @@
+{
+  "compilation": [
+    {
+      "compileMaxRssKiB": 553376,
+      "compileSeconds": 10.52,
+      "model": "baseline-strict",
+      "repetition": 1
+    },
+    {
+      "compileMaxRssKiB": 561552,
+      "compileSeconds": 9.72,
+      "model": "candidate-arc",
+      "repetition": 1
+    },
+    {
+      "compileMaxRssKiB": 571116,
+      "compileSeconds": 9.74,
+      "model": "candidate-arc",
+      "repetition": 2
+    },
+    {
+      "compileMaxRssKiB": 569168,
+      "compileSeconds": 10.33,
+      "model": "baseline-strict",
+      "repetition": 2
+    },
+    {
+      "compileMaxRssKiB": 545428,
+      "compileSeconds": 10.21,
+      "model": "baseline-strict",
+      "repetition": 3
+    },
+    {
+      "compileMaxRssKiB": 665348,
+      "compileSeconds": 9.52,
+      "model": "candidate-arc",
+      "repetition": 3
+    }
+  ],
+  "runtime": [
+    {
+      "elapsedSeconds": 0.170656193,
+      "logicalAllocations": 50000,
+      "maxRssKiB": 2816,
+      "model": "baseline-strict",
+      "operations": 256000000,
+      "repetition": 1,
+      "scenario": "bounded-cycles",
+      "throughputOpsPerSecond": 1500092059.360541
+    },
+    {
+      "elapsedSeconds": 0.494557355,
+      "logicalAllocations": 50000,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 256000000,
+      "repetition": 1,
+      "scenario": "bounded-cycles",
+      "throughputOpsPerSecond": 517634602.765133
+    },
+    {
+      "elapsedSeconds": 0.496341663,
+      "logicalAllocations": 50000,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 256000000,
+      "repetition": 2,
+      "scenario": "bounded-cycles",
+      "throughputOpsPerSecond": 515773748.374615
+    },
+    {
+      "elapsedSeconds": 0.2012458,
+      "logicalAllocations": 50000,
+      "maxRssKiB": 2816,
+      "model": "baseline-strict",
+      "operations": 256000000,
+      "repetition": 2,
+      "scenario": "bounded-cycles",
+      "throughputOpsPerSecond": 1272076237.118986
+    },
+    {
+      "elapsedSeconds": 0.207643163,
+      "logicalAllocations": 50000,
+      "maxRssKiB": 2816,
+      "model": "baseline-strict",
+      "operations": 256000000,
+      "repetition": 3,
+      "scenario": "bounded-cycles",
+      "throughputOpsPerSecond": 1232884320.876965
+    },
+    {
+      "elapsedSeconds": 0.493098295,
+      "logicalAllocations": 50000,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 256000000,
+      "repetition": 3,
+      "scenario": "bounded-cycles",
+      "throughputOpsPerSecond": 519166264.81136
+    },
+    {
+      "elapsedSeconds": 0.482244846,
+      "logicalAllocations": 50000,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 256000000,
+      "repetition": 4,
+      "scenario": "bounded-cycles",
+      "throughputOpsPerSecond": 530850670.822929
+    },
+    {
+      "elapsedSeconds": 0.191566216,
+      "logicalAllocations": 50000,
+      "maxRssKiB": 2816,
+      "model": "baseline-strict",
+      "operations": 256000000,
+      "repetition": 4,
+      "scenario": "bounded-cycles",
+      "throughputOpsPerSecond": 1336352543.498588
+    },
+    {
+      "elapsedSeconds": 0.196206154,
+      "logicalAllocations": 50000,
+      "maxRssKiB": 2816,
+      "model": "baseline-strict",
+      "operations": 256000000,
+      "repetition": 5,
+      "scenario": "bounded-cycles",
+      "throughputOpsPerSecond": 1304750104.831065
+    },
+    {
+      "elapsedSeconds": 0.4814004,
+      "logicalAllocations": 50000,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 256000000,
+      "repetition": 5,
+      "scenario": "bounded-cycles",
+      "throughputOpsPerSecond": 531781859.757491
+    },
+    {
+      "elapsedSeconds": 0.495246728,
+      "logicalAllocations": 50000,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 256000000,
+      "repetition": 6,
+      "scenario": "bounded-cycles",
+      "throughputOpsPerSecond": 516914066.315649
+    },
+    {
+      "elapsedSeconds": 0.143661534,
+      "logicalAllocations": 50000,
+      "maxRssKiB": 2816,
+      "model": "baseline-strict",
+      "operations": 256000000,
+      "repetition": 6,
+      "scenario": "bounded-cycles",
+      "throughputOpsPerSecond": 1781966215.11782
+    },
+    {
+      "elapsedSeconds": 0.203164589,
+      "logicalAllocations": 50000,
+      "maxRssKiB": 2816,
+      "model": "baseline-strict",
+      "operations": 256000000,
+      "repetition": 7,
+      "scenario": "bounded-cycles",
+      "throughputOpsPerSecond": 1260062106.590829
+    },
+    {
+      "elapsedSeconds": 0.479250297,
+      "logicalAllocations": 50000,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 256000000,
+      "repetition": 7,
+      "scenario": "bounded-cycles",
+      "throughputOpsPerSecond": 534167639.754222
+    },
+    {
+      "elapsedSeconds": 0.49320613,
+      "logicalAllocations": 50000,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 256000000,
+      "repetition": 8,
+      "scenario": "bounded-cycles",
+      "throughputOpsPerSecond": 519052753.865813
+    },
+    {
+      "elapsedSeconds": 0.19901434,
+      "logicalAllocations": 50000,
+      "maxRssKiB": 2816,
+      "model": "baseline-strict",
+      "operations": 256000000,
+      "repetition": 8,
+      "scenario": "bounded-cycles",
+      "throughputOpsPerSecond": 1286339466.794202
+    },
+    {
+      "elapsedSeconds": 0.193552997,
+      "logicalAllocations": 50000,
+      "maxRssKiB": 2816,
+      "model": "baseline-strict",
+      "operations": 256000000,
+      "repetition": 9,
+      "scenario": "bounded-cycles",
+      "throughputOpsPerSecond": 1322635164.362761
+    },
+    {
+      "elapsedSeconds": 0.492698467,
+      "logicalAllocations": 50000,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 256000000,
+      "repetition": 9,
+      "scenario": "bounded-cycles",
+      "throughputOpsPerSecond": 519587571.600867
+    }
+  ]
+}

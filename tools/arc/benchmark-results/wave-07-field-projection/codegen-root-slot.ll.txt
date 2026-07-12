@@ -1,0 +1,30 @@
+; Source tree: 57f82e32b5020ceb1f1fd38002491d225e23e03a
+; Focused compiler snapshot: 413a9a7fbc1db45f232d9ba51cc090787a46fd18
+; Extract: canonicalFieldTraversal, out.Codegen.ll
+
+prologue:
+  %2 = alloca %struct.ObjHeader*, i32 4, align 8
+  %3 = bitcast %struct.ObjHeader** %2 to i8*
+  call void @llvm.memset.p0i8.i32(i8* nocapture writeonly %3, i8 0, i32 32, i1 immarg false)
+
+locals_init:
+  %4 = phi %struct.ObjHeader** [ %2, %prologue ]
+  %cursor = getelementptr %struct.ObjHeader*, %struct.ObjHeader** %4, i32 3
+
+stack_locals_init:
+  call void @EnterFrame(%struct.ObjHeader** %4, i32 0, i32 4)
+
+do_while_loop:
+  %14 = load %struct.ObjHeader*, %struct.ObjHeader** %cursor, align 8
+  %15 = bitcast %struct.ObjHeader* %14 to %"kclassbody:ProjectionNode#internal"*
+  %16 = getelementptr inbounds %"kclassbody:ProjectionNode#internal", %"kclassbody:ProjectionNode#internal"* %15, i32 0, i32 1
+  %17 = load %struct.ObjHeader*, %struct.ObjHeader** %16, align 8
+  %18 = icmp eq %struct.ObjHeader* %17, null
+
+when_exit2:
+  call void @UpdateStackRef(%struct.ObjHeader** %cursor, %struct.ObjHeader* %17)
+
+; The owning frame allocation and address-taken cursor root are visible in Codegen LLVM.
+; The projected field value remains SSA (%17); there is no second anonymous owning root slot.
+; EnterFrame and UpdateStackRef both observe/address the root frame, preventing ordinary mem2reg
+; promotion of %cursor without a dedicated rooted-borrow/loop-phi representation.

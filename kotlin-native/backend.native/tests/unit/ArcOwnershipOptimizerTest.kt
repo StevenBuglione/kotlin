@@ -77,6 +77,88 @@ class ArcOwnershipOptimizerTest {
     }
 
     @Test
+    fun preservesStrongReplaceAndCountsItAsReferenceCounting() {
+        val oldOwner = ArcValue("oldOwner")
+        val projected = ArcValue("projected")
+        val cursor = ArcStorage("cursor")
+        val input = plan(
+            operations = listOf(
+                ArcOperation.Define(oldOwner, ArcOwnership.Owned),
+                ArcOperation.Borrow(oldOwner, projected, ArcBorrowKind.Projection),
+                ArcOperation.StrongReplace(cursor, oldOwner, projected),
+            ),
+            initializedStorage = setOf(cursor),
+        )
+
+        val result = ArcOwnershipOptimizer.optimizeVerified(input)
+
+        assertSame(input, result.plan)
+        assertEquals(1, result.metrics.referenceCountingOperationsBefore)
+        assertEquals(1, result.metrics.referenceCountingOperationsAfter)
+        assertSame(ArcOwnershipVerificationResult.Success, ArcOwnershipVerifier.verify(result.plan))
+    }
+
+    @Test
+    fun copyOptimizationCannotRewriteStrongReplaceDependency() {
+        val source = ArcValue("source")
+        val oldOwner = ArcValue("oldOwner")
+        val projected = ArcValue("projected")
+        val cursor = ArcStorage("cursor")
+        val input = plan(
+            operations = listOf(
+                ArcOperation.Copy(source, oldOwner),
+                ArcOperation.Borrow(oldOwner, projected, ArcBorrowKind.Projection),
+                ArcOperation.StrongReplace(cursor, oldOwner, projected),
+                ArcOperation.Destroy(source),
+            ),
+            entryValues = mapOf(source to ArcOwnership.Owned),
+            initializedStorage = setOf(cursor),
+        )
+
+        val result = ArcOwnershipOptimizer.optimizeVerified(input)
+
+        assertSame(input, result.plan)
+        assertEquals(0, result.metrics.containedOwnedCopiesEliminated)
+        assertSame(ArcOwnershipVerificationResult.Success, ArcOwnershipVerifier.verify(result.plan))
+    }
+
+    @Test
+    fun unrelatedOptimizationPreservesStrongReplaceExactly() {
+        val argument = ArcValue("argument")
+        val temporary = ArcValue("temporary")
+        val oldOwner = ArcValue("oldOwner")
+        val projected = ArcValue("projected")
+        val cursor = ArcStorage("cursor")
+        val replacement = ArcOperation.StrongReplace(cursor, oldOwner, projected)
+        val input = plan(
+            operations = listOf(
+                ArcOperation.Copy(argument, temporary),
+                ArcOperation.Destroy(temporary),
+                ArcOperation.Define(oldOwner, ArcOwnership.Owned),
+                ArcOperation.Borrow(oldOwner, projected, ArcBorrowKind.Projection),
+                replacement,
+            ),
+            entryValues = mapOf(argument to ArcOwnership.Guaranteed),
+            initializedStorage = setOf(cursor),
+        )
+
+        val result = ArcOwnershipOptimizer.optimizeVerified(input)
+
+        assertEquals(
+            listOf(
+                ArcOperation.Define(oldOwner, ArcOwnership.Owned),
+                ArcOperation.Borrow(oldOwner, projected, ArcBorrowKind.Projection),
+                replacement,
+            ),
+            result.plan.blocks.getValue(entry).operations,
+        )
+        assertEquals(3, result.metrics.referenceCountingOperationsBefore)
+        assertEquals(1, result.metrics.referenceCountingOperationsAfter)
+        assertEquals(2, result.metrics.eliminatedReferenceCountingOperations)
+        assertSame(ArcOwnershipVerificationResult.Success, ArcOwnershipVerifier.verify(result.plan))
+    }
+
+    @Test
     fun eliminatesGuaranteedEntryCopyThatFeedsStrongStorage() {
         val argument = ArcValue("argument")
         val temporary = ArcValue("temporary")
@@ -969,8 +1051,9 @@ class ArcOwnershipOptimizerTest {
         operations: List<ArcOperation>,
         entryValues: Map<ArcValue, ArcOwnership> = emptyMap(),
         terminator: ArcTerminator = ArcTerminator.Return(),
+        initializedStorage: Set<ArcStorage> = emptySet(),
     ): ArcFunctionPlan {
         val block = ArcBasicBlock(entry, operations, terminator)
-        return ArcFunctionPlan("optimizerTest", entry, entryValues, emptySet(), mapOf(entry to block))
+        return ArcFunctionPlan("optimizerTest", entry, entryValues, initializedStorage, mapOf(entry to block))
     }
 }
