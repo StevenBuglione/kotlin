@@ -79,6 +79,16 @@ class ArcProfileTest(unittest.TestCase):
             command = arc.profile_command("arc-smoke")
         self.assertEqual(["bash", "tools/arc/run_fixture.sh", "smoke"], command)
 
+    def test_frame_elision_unit_uses_remote_llvm_runner(self):
+        with patch.dict(os.environ, {}, clear=True):
+            command = arc.profile_command("arc-frame-elision-unit")
+        self.assertEqual(["bash", "tools/arc/run_frame_elision_unit.sh"], command)
+
+        script = (Path(__file__).parent / "run_frame_elision_unit.sh").read_text()
+        self.assertIn('"$llvm/bin/clang++"', script)
+        self.assertIn("-Wl,-l:libz.so.1", script)
+        self.assertIn("ArcFrameElisionTest.cpp", script)
+
     def test_arc_fixture_tasks_remain_overrideable(self):
         with patch.dict(os.environ, {"ARC_STRESS_TASKS": ":custom:arcStress"}, clear=True):
             command = arc.profile_command("arc-stress")
