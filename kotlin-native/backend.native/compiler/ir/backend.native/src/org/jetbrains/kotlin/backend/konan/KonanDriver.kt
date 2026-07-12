@@ -77,6 +77,7 @@ class KonanDriver(
         if (konanConfig.isFinalBinary &&
                 konanConfig.memoryModel == MemoryModel.ARC &&
                 !konanConfig.arcDiagnosticsEnabled &&
+                konanConfig.compileFromBitcode.isNullOrEmpty() &&
                 environment.getSourceFiles().isNotEmpty()) {
             PhaseEngine.startTopLevel(konanConfig) { engine: PhaseEngine<PhaseContext> ->
                 precomputedFrontendOutput = engine.runFrontend(konanConfig, environment)
