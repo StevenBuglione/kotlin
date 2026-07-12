@@ -13,6 +13,7 @@ internal data class ArcOwnershipOptimizationMetrics(
     val referenceCountingOperationsBefore: Int = 0,
     val referenceCountingOperationsAfter: Int = 0,
     val forwardedOwnedResults: Int = 0,
+    val guaranteedEntryCopiesEliminated: Int = 0,
     val copyDestroyPairsEliminated: Int = 0,
     val containedOwnedCopiesEliminated: Int = 0,
 ) {
@@ -31,6 +32,7 @@ internal data class ArcOwnershipOptimizationMetrics(
         referenceCountingOperationsBefore = referenceCountingOperationsBefore + other.referenceCountingOperationsBefore,
         referenceCountingOperationsAfter = referenceCountingOperationsAfter + other.referenceCountingOperationsAfter,
         forwardedOwnedResults = forwardedOwnedResults + other.forwardedOwnedResults,
+        guaranteedEntryCopiesEliminated = guaranteedEntryCopiesEliminated + other.guaranteedEntryCopiesEliminated,
         copyDestroyPairsEliminated = copyDestroyPairsEliminated + other.copyDestroyPairsEliminated,
         containedOwnedCopiesEliminated = containedOwnedCopiesEliminated + other.containedOwnedCopiesEliminated,
     )
@@ -40,6 +42,7 @@ internal data class ArcOwnershipOptimizationMetrics(
                 "$eliminatedReferenceCountingOperations/$referenceCountingOperationsBefore " +
                 "reference-counting operations eliminated ($eliminationPercentage%), " +
                 "$forwardedOwnedResults owned results forwarded, " +
+                "$guaranteedEntryCopiesEliminated guaranteed entry copies eliminated, " +
                 "$copyDestroyPairsEliminated copy/destroy pairs eliminated, " +
                 "$containedOwnedCopiesEliminated contained owned copies eliminated"
 }
@@ -57,11 +60,19 @@ internal object ArcOwnershipOptimizer {
     fun optimizeVerified(plan: ArcFunctionPlan): ArcOwnershipOptimizationResult {
         ArcOwnershipVerifier.verifyOrThrow(plan)
 
-        val block = plan.blocks[plan.entry]
         var forwardedOwnedResults = 0
+        var guaranteedEntryCopiesEliminated = 0
         var copyDestroyPairsEliminated = 0
         var containedOwnedCopiesEliminated = 0
-        val optimizedPlan = if (plan.blocks.size == 1 && block != null) {
+        var workingPlan = plan
+        while (true) {
+            val rewritten = eliminateOneGuaranteedEntryCopy(workingPlan) ?: break
+            workingPlan = rewritten
+            guaranteedEntryCopiesEliminated++
+        }
+
+        val block = workingPlan.blocks[workingPlan.entry]
+        val optimizedPlan = if (workingPlan.blocks.size == 1 && block != null) {
             var operations = block.operations
             while (true) {
                 val rewritten = forwardOneOwnedResult(operations, block.terminator) ?: break
@@ -69,7 +80,7 @@ internal object ArcOwnershipOptimizer {
                 forwardedOwnedResults++
             }
             while (true) {
-                val rewritten = eliminateOneContainedOwnedCopy(plan.entryValues, operations, block.terminator) ?: break
+                val rewritten = eliminateOneContainedOwnedCopy(workingPlan.entryValues, operations, block.terminator) ?: break
                 operations = rewritten
                 containedOwnedCopiesEliminated++
             }
@@ -78,18 +89,22 @@ internal object ArcOwnershipOptimizer {
                 operations = rewritten
                 copyDestroyPairsEliminated++
             }
-            if (operations == block.operations) plan else plan.copy(
-                blocks = plan.blocks + (block.id to block.copy(operations = operations))
+            if (operations == block.operations) workingPlan else workingPlan.copy(
+                blocks = workingPlan.blocks + (block.id to block.copy(operations = operations))
             )
         } else {
-            val topologicalOrder = plan.conservativeTopologicalOrder() ?: return unchanged(plan)
-            var rewrittenPlan = plan
-            while (true) {
-                val rewritten = eliminateOneContainedOwnedCopyAcrossCfg(rewrittenPlan, topologicalOrder) ?: break
-                rewrittenPlan = rewritten
-                containedOwnedCopiesEliminated++
+            var rewrittenPlan = workingPlan
+            val topologicalOrder = rewrittenPlan.conservativeTopologicalOrder()
+            if (topologicalOrder == null) {
+                rewrittenPlan
+            } else {
+                while (true) {
+                    val rewritten = eliminateOneContainedOwnedCopyAcrossCfg(rewrittenPlan, topologicalOrder) ?: break
+                    rewrittenPlan = rewritten
+                    containedOwnedCopiesEliminated++
+                }
+                rewrittenPlan
             }
-            rewrittenPlan
         }
         ArcOwnershipVerifier.verifyOrThrow(optimizedPlan)
 
@@ -99,20 +114,60 @@ internal object ArcOwnershipOptimizer {
                 plan,
                 optimizedPlan,
                 forwardedOwnedResults,
+                guaranteedEntryCopiesEliminated,
                 copyDestroyPairsEliminated,
                 containedOwnedCopiesEliminated,
             ),
         )
     }
 
-    private fun unchanged(plan: ArcFunctionPlan): ArcOwnershipOptimizationResult {
-        return ArcOwnershipOptimizationResult(plan, metrics(plan, plan, 0, 0, 0))
+    /**
+     * Eliminate a copied lifetime whose source is a guaranteed function entry value.
+     *
+     * Entry guarantees cover the complete function, so every non-consuming use can refer to the
+     * source directly across arbitrary CFG shapes. Reject any unknown or ownership-transferring
+     * consumer; the copied lifetime may end only through explicit destroys, all of which vanish
+     * together with the copy. This is the bounded analogue of Swift's guaranteed copy-value opt.
+     */
+    private fun eliminateOneGuaranteedEntryCopy(plan: ArcFunctionPlan): ArcFunctionPlan? {
+        plan.blocks.forEach { (candidateBlockId, candidateBlock) ->
+            candidateBlock.operations.forEachIndexed { candidateIndex, operation ->
+                val copy = operation as? ArcOperation.Copy ?: return@forEachIndexed
+                if (plan.entryValues[copy.source] != ArcOwnership.Guaranteed) return@forEachIndexed
+
+                var destroys = 0
+                for (block in plan.blocks.values) {
+                    if (block.terminator.uses(copy.result)) return@forEachIndexed
+                    for (use in block.operations) {
+                        if (!use.uses(copy.result)) continue
+                        when (use) {
+                            is ArcOperation.Destroy -> destroys++
+                            is ArcOperation.Borrow, is ArcOperation.Use, is ArcOperation.StrongStore -> Unit
+                            else -> return@forEachIndexed
+                        }
+                    }
+                }
+                if (destroys == 0) return@forEachIndexed
+
+                return plan.copy(blocks = plan.blocks.mapValues { (blockId, block) ->
+                    block.copy(operations = block.operations.mapIndexedNotNull { index, current ->
+                        when {
+                            blockId == candidateBlockId && index == candidateIndex -> null
+                            current is ArcOperation.Destroy && current.value == copy.result -> null
+                            else -> current.replacingUse(copy.result, copy.source)
+                        }
+                    })
+                })
+            }
+        }
+        return null
     }
 
     private fun metrics(
         before: ArcFunctionPlan,
         after: ArcFunctionPlan,
         forwardedOwnedResults: Int,
+        guaranteedEntryCopiesEliminated: Int,
         copyDestroyPairsEliminated: Int,
         containedOwnedCopiesEliminated: Int,
     ): ArcOwnershipOptimizationMetrics {
@@ -126,6 +181,7 @@ internal object ArcOwnershipOptimizer {
             referenceCountingOperationsBefore = beforeOperations.count(ArcOperation::isReferenceCountingOperation),
             referenceCountingOperationsAfter = afterOperations.count(ArcOperation::isReferenceCountingOperation),
             forwardedOwnedResults = forwardedOwnedResults,
+            guaranteedEntryCopiesEliminated = guaranteedEntryCopiesEliminated,
             copyDestroyPairsEliminated = copyDestroyPairsEliminated,
             containedOwnedCopiesEliminated = containedOwnedCopiesEliminated,
         )
@@ -424,6 +480,7 @@ private fun ArcOperation.definedValue(ownerships: Map<ArcValue, ArcOwnership>): 
 
 private fun ArcOperation.replacingUse(from: ArcValue, to: ArcValue): ArcOperation = when (this) {
     is ArcOperation.Borrow -> if (source == from) copy(source = to) else this
+    is ArcOperation.Use -> if (value == from) copy(value = to) else this
     is ArcOperation.StrongStore -> if (value == from) copy(value = to) else this
     else -> this
 }

@@ -210,7 +210,8 @@ internal fun runArcOwnershipPlanning(
                                         "blocks=${optimized.plan.blocks.size}, " +
                                         "changed=${optimized.metrics.plansChanged != 0}, " +
                                         "containedOwnedCopiesEliminated=${optimized.metrics.containedOwnedCopiesEliminated}, " +
-                                        "ownedResultForwarding=${forwarding != null}"
+                                        "ownedResultForwarding=${forwarding != null}, " +
+                                        "guaranteedEntryCopiesEliminated=${optimized.metrics.guaranteedEntryCopiesEliminated}"
                             }
                             forwarding?.let {
                                 ownedResultForwarding[declaration] = it
