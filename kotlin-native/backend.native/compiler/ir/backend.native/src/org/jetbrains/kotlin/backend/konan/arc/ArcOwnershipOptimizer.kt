@@ -314,9 +314,11 @@ internal object ArcOwnershipOptimizer {
     /**
      * Remove one copied lifetime that is contained by an independently owned source across an acyclic CFG.
      *
-     * Only strong stores and destroys may use the copy. The source must remain live through every such use and
-     * destroy on every path. Source consumes are never moved, added, or removed, so the final deinitialization
-     * point is identical before and after the redundant retain/releases are removed.
+     * Borrows, ordinary uses, and strong stores are non-consuming and may use the copy; destroys must end its
+     * lifetime on every path. Verified-plan semantics guarantee that every nested borrow scope ends before its
+     * owning copied value is destroyed. Requiring the source to remain live until each copied lifetime ends
+     * therefore also keeps it live through all of those borrow scopes. Source consumes are never moved, added,
+     * or removed, so the final deinitialization point is identical after the redundant retain/releases vanish.
      */
     private fun eliminateOneContainedOwnedCopyAcrossCfg(
         plan: ArcFunctionPlan,
@@ -342,6 +344,20 @@ private data class CfgCopyCandidate(
     val operationIndex: Int,
     val copy: ArcOperation.Copy,
 )
+
+/** The deliberately small set of copied-value uses understood by the acyclic CFG lifetime proof. */
+private enum class CfgContainedCopyUse {
+    NON_CONSUMING,
+    DESTROY,
+}
+
+private fun ArcOperation.cfgContainedCopyUse(value: ArcValue): CfgContainedCopyUse? = when {
+    this is ArcOperation.Borrow && source == value -> CfgContainedCopyUse.NON_CONSUMING
+    this is ArcOperation.Use && this.value == value -> CfgContainedCopyUse.NON_CONSUMING
+    this is ArcOperation.StrongStore && this.value == value -> CfgContainedCopyUse.NON_CONSUMING
+    this is ArcOperation.Destroy && this.value == value -> CfgContainedCopyUse.DESTROY
+    else -> null
+}
 
 /**
  * Return a deterministic topological order only for the deliberately supported CFG subset.
@@ -399,7 +415,7 @@ private fun ArcFunctionPlan.isSafelyContained(
     blocks.values.forEach { block ->
         block.operations.forEach { operation ->
             if (operation.uses(copied)) {
-                if (operation !is ArcOperation.StrongStore && operation !is ArcOperation.Destroy) return false
+                if (operation.cfgContainedCopyUse(copied) == null) return false
                 totalUses++
             }
         }
@@ -416,18 +432,18 @@ private fun ArcFunctionPlan.isSafelyContained(
         val firstOperation = if (blockId == candidate.block) candidate.operationIndex + 1 else 0
         for (index in firstOperation until block.operations.size) {
             val operation = block.operations[index]
-            when {
-                operation is ArcOperation.StrongStore && operation.value == copied -> {
+            when (operation.cfgContainedCopyUse(copied)) {
+                CfgContainedCopyUse.NON_CONSUMING -> {
                     if (!copiedIsLive) return false
                     observedUses++
                 }
-                operation is ArcOperation.Destroy && operation.value == copied -> {
+                CfgContainedCopyUse.DESTROY -> {
                     if (!copiedIsLive) return false
                     observedUses++
                     destroys++
                     copiedIsLive = false
                 }
-                operation.uses(copied) -> return false
+                null -> if (operation.uses(copied)) return false
             }
             if (copiedIsLive && operation is ArcOperation.Destroy && operation.value == source) return false
         }
@@ -454,8 +470,7 @@ private fun ArcFunctionPlan.rewriteContainedCopy(candidate: CfgCopyCandidate): A
             when {
                 blockId == candidate.block && index == candidate.operationIndex -> null
                 operation is ArcOperation.Destroy && operation.value == copied -> null
-                operation is ArcOperation.StrongStore && operation.value == copied -> operation.copy(value = source)
-                else -> operation
+                else -> operation.replacingUse(copied, source)
             }
         })
     })
