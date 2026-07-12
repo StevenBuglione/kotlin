@@ -16,6 +16,7 @@ import org.jetbrains.kotlin.backend.konan.arc.isAuthorized
 import org.jetbrains.kotlin.backend.konan.arc.isArcSuspendLike
 import org.jetbrains.kotlin.backend.konan.arc.ArcReturnedReceiverSlotReuseEligibility
 import org.jetbrains.kotlin.backend.konan.arc.ArcLockedReadCanonicalPlan
+import org.jetbrains.kotlin.backend.konan.arc.ArcDiscardedReturnedReceiverGroup
 import org.jetbrains.kotlin.backend.konan.arc.unwrapExactArcCoroutineSpillRead
 import org.jetbrains.kotlin.backend.konan.cexport.CAdapterCodegen
 import org.jetbrains.kotlin.backend.konan.cexport.CAdapterExportedElements
@@ -47,6 +48,7 @@ import org.jetbrains.kotlin.library.uniqueName
 import org.jetbrains.kotlin.name.Name
 import org.jetbrains.kotlin.resolve.descriptorUtil.classId
 import org.jetbrains.kotlin.resolve.descriptorUtil.fqNameUnsafe
+import java.util.IdentityHashMap
 
 internal enum class FieldStorageKind {
     GLOBAL, // In the old memory model these are only accessible from the "main" thread.
@@ -233,6 +235,8 @@ internal class CodeGeneratorVisitor(
     private var currentArcOwnedResultForwarding: org.jetbrains.kotlin.backend.konan.arc.ArcOwnedResultForwarding? = null
     private var currentArcPromotionSlots: MutableList<LLVMValueRef>? = null
     private var currentArcPromotionBoundary: IrExpression? = null
+    private var currentDiscardedReturnedReceiverSeedSlots:
+            MutableMap<ArcDiscardedReturnedReceiverGroup, LLVMValueRef>? = null
 
     private val intrinsicGeneratorEnvironment = object : IntrinsicGeneratorEnvironment {
         override val codegen: CodeGenerator
@@ -841,6 +845,8 @@ internal class CodeGeneratorVisitor(
             FileScope(it)
         }
         val previousArcOwnedResultForwarding = currentArcOwnedResultForwarding
+        val previousDiscardedReturnedReceiverSeedSlots = currentDiscardedReturnedReceiverSeedSlots
+        currentDiscardedReturnedReceiverSeedSlots = IdentityHashMap()
         currentArcOwnedResultForwarding = if (!context.shouldContainDebugInfo()) {
             (declaration as? IrSimpleFunction)?.let { arcOwnership.ownedResultForwarding[it] }
         } else {
@@ -886,6 +892,7 @@ internal class CodeGeneratorVisitor(
             }
         } finally {
             currentArcOwnedResultForwarding = previousArcOwnedResultForwarding
+            currentDiscardedReturnedReceiverSeedSlots = previousDiscardedReturnedReceiverSeedSlots
         }
 
 
@@ -2440,6 +2447,20 @@ internal class CodeGeneratorVisitor(
 
         val args = evaluateExplicitArgs(value)
         val returnedReceiverBorrow = value is IrCall && value in arcOwnership.returnedReceiverBorrowCalls
+        val discardedReturnedReceiverGroup = (value as? IrCall)?.let {
+            arcOwnership.discardedReturnedReceiverGroupsByCall[it]
+        }
+        val discardedReturnedReceiverSeedSlot = discardedReturnedReceiverGroup?.let { group ->
+            val receiver = value.dispatchReceiver as? IrGetValue
+            require(resultSlot == null && scopedPromotionSlot == null && effectiveResultSlot == null &&
+                    returnedReceiverBorrow && receiver?.symbol?.owner === group.receiver &&
+                    group.calls.any { it === value }) {
+                "ARC discarded returned-receiver group escaped its exact statement/receiver boundary"
+            }
+            requireNotNull(currentDiscardedReturnedReceiverSeedSlots) {
+                "ARC discarded returned-receiver call was generated outside its function"
+            }.getOrPut(group) { functionGenerationContext.vars.createAnonymousSlot() }
+        }
         val returnedReceiverSlot = if (returnedReceiverBorrow) {
             val receiverValue = args.firstOrNull()
             val slot = receiverValue?.let { functionGenerationContext.arcOwningSlotForValue(it) }
@@ -2461,11 +2482,13 @@ internal class CodeGeneratorVisitor(
         // Make the ABI's otherwise-implicit anonymous slot explicit so callDirect records its
         // normal-success ownership fact; later receiver-identical links can then reuse it. The
         // fresh frame slot is zero initialized, and ordinary frame cleanup owns every unwind edge.
-        val returnedReceiverSeedSlot = if (returnedReceiverBorrow && effectiveResultSlot == null &&
+        val returnedReceiverSeedSlot = if (discardedReturnedReceiverSeedSlot == null &&
+                returnedReceiverBorrow && effectiveResultSlot == null &&
                 returnedReceiverSlot == null) {
             functionGenerationContext.vars.createAnonymousSlot()
         } else null
-        val callResultSlot = returnedReceiverSlot ?: returnedReceiverSeedSlot ?: effectiveResultSlot
+        val callResultSlot = discardedReturnedReceiverSeedSlot ?: returnedReceiverSlot ?:
+                returnedReceiverSeedSlot ?: effectiveResultSlot
 
         updateBuilderDebugLocation(value)
         val result = when (value) {
@@ -2476,8 +2499,16 @@ internal class CodeGeneratorVisitor(
                     args,
                     resultLifetime(value),
                     callResultSlot,
-                    returnedReceiverBorrow && returnedReceiverSlot != null,
+                    returnedReceiverBorrow &&
+                            (returnedReceiverSlot != null || discardedReturnedReceiverSeedSlot != null),
             )
+        }
+        if (discardedReturnedReceiverSeedSlot != null) {
+            require(functionGenerationContext.arcResultIsAlreadyOwnedBySlot(
+                result, discardedReturnedReceiverSeedSlot
+            )) {
+                "ARC discarded returned-receiver seed did not own the exact normal result"
+            }
         }
         recordScopedPromotion()
         return result

@@ -3408,6 +3408,13 @@ standaloneTest("arc_coroutine_locked_read_spill") {
     source = "codegen/arc/coroutineLockedReadSpill.kt"
 }
 
+standaloneTest("arc_discarded_returned_receiver_groups") {
+    enabled = project.target.name == "linux_x64" && isArcMM
+    flags = ["-opt"]
+    useGoldenData = true
+    source = "codegen/arc/discardedReturnedReceiverGroups.kt"
+}
+
 standaloneTest("arc_return_update_coalescing") {
     enabled = project.target.name == "linux_x64" && isArcMM
     flags = ["-opt"]
@@ -6778,6 +6785,29 @@ fileCheckTest("filecheck_arc_coroutine_locked_read_spill_modern") {
 fileCheckTest("filecheck_arc_coroutine_locked_read_spill_strict") {
     enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
     annotatedSource = project.file('codegen/arc/coroutineLockedReadStrict.kt')
+    checkPrefix = "STRICT"
+    extraOpts = ["-opt", "-memory-model", "strict"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_discarded_returned_receiver_groups") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('codegen/arc/discardedReturnedReceiverGroups.kt')
+    extraOpts = ["-opt"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_discarded_returned_receiver_groups_debug") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('codegen/arc/discardedReturnedReceiverGroups.kt')
+    checkPrefix = "DEBUG"
+    extraOpts = ["-opt", "-g"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_discarded_returned_receiver_groups_strict") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('codegen/arc/discardedReturnedReceiverGroupsStrict.kt')
     checkPrefix = "STRICT"
     extraOpts = ["-opt", "-memory-model", "strict"]
     phaseToCheck = "Codegen"

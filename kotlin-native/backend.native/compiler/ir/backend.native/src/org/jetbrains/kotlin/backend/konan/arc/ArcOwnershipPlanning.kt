@@ -117,6 +117,7 @@ internal data class ArcCodegenOwnershipPlan(
     val coroutineResultSlotForwardingCalls: Set<IrCall>,
     val lockedReadResultSlotForwardingCalls: Map<IrCall, ArcLockedReadCanonicalPlan>,
     val returnedReceiverBorrowCalls: Set<IrCall>,
+    val discardedReturnedReceiverGroupsByCall: Map<IrCall, ArcDiscardedReturnedReceiverGroup>,
     val coroutineSpillMovesByVariable: Map<IrVariable, ArcCoroutineSpillMovePlan>,
     val coroutineSpillMovesByReturn: Map<IrReturn, ArcCoroutineSpillMovePlan>,
     val joinedReferenceSlots: Map<IrVariable, ArcJoinedReferenceSlotPlan>,
@@ -145,6 +146,7 @@ internal data class ArcCodegenOwnershipPlan(
             coroutineResultSlotForwardingCalls = emptySet(),
             lockedReadResultSlotForwardingCalls = emptyMap(),
             returnedReceiverBorrowCalls = emptySet(),
+            discardedReturnedReceiverGroupsByCall = emptyMap(),
             coroutineSpillMovesByVariable = emptyMap(),
             coroutineSpillMovesByReturn = emptyMap(),
             joinedReferenceSlots = emptyMap(),
@@ -536,6 +538,9 @@ internal fun runArcOwnershipPlanning(
         IdentityHashMap<IrCall, ArcLockedReadCanonicalPlan>()
     )
     val returnedReceiverBorrowCalls = Collections.newSetFromMap(IdentityHashMap<IrCall, Boolean>())
+    val discardedReturnedReceiverGroupsByCall = Collections.synchronizedMap(
+        IdentityHashMap<IrCall, ArcDiscardedReturnedReceiverGroup>()
+    )
     val coroutineSpillMovesByVariable = linkedMapOf<IrVariable, ArcCoroutineSpillMovePlan>()
     val coroutineSpillMovesByReturn = Collections.synchronizedMap(IdentityHashMap<IrReturn, ArcCoroutineSpillMovePlan>())
     val joinedReferenceSlots = linkedMapOf<IrVariable, ArcJoinedReferenceSlotPlan>()
@@ -579,6 +584,11 @@ internal fun runArcOwnershipPlanning(
 
             override fun visitSimpleFunction(declaration: IrSimpleFunction) {
                 returnedReceiverBorrowCalls += selectVerifiedReturnedReceiverBorrowCalls(generationState, declaration)
+                selectVerifiedDiscardedReturnedReceiverGroups(generationState, declaration).forEach { group ->
+                    group.calls.forEach { call ->
+                        discardedReturnedReceiverGroupsByCall[call] = group
+                    }
+                }
                 coroutineResultSlotForwardingCalls +=
                     selectVerifiedCoroutineResultSlotForwardingCalls(generationState, declaration)
                 borrowedCharArrayConsumerSymbols?.let { exactConsumers ->
@@ -678,6 +688,7 @@ internal fun runArcOwnershipPlanning(
             coroutineResultSlotForwardingCalls,
             lockedReadResultSlotForwardingCalls,
             returnedReceiverBorrowCalls,
+            discardedReturnedReceiverGroupsByCall,
             coroutineSpillMovesByVariable,
             coroutineSpillMovesByReturn,
             joinedReferenceSlots,

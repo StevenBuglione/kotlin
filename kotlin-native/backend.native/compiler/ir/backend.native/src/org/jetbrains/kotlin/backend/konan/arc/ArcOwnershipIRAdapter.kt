@@ -224,7 +224,13 @@ internal fun selectVerifiedDiscardedReturnedReceiverGroups(
     val groups = mutableListOf<ArcDiscardedReturnedReceiverGroup>()
 
     fun classify(expression: IrExpression): Pair<org.jetbrains.kotlin.ir.declarations.IrValueDeclaration, IrCall>? {
-        val call = expression as? IrCall ?: return null
+        val call = when (expression) {
+            is IrCall -> expression
+            is IrTypeOperatorCall -> expression.argument as? IrCall
+                ?: return null
+            else -> return null
+        }
+        if (expression is IrTypeOperatorCall && expression.operator != IrTypeOperator.IMPLICIT_COERCION_TO_UNIT) return null
         val receiverRead = call.dispatchReceiver as? IrGetValue ?: return null
         val receiver = receiverRead.symbol.owner
         val callee = call.symbol.owner as? IrSimpleFunction ?: return null
@@ -379,7 +385,7 @@ internal fun selectVerifiedReturnedReceiverBorrowCalls(
     return selected
 }
 
-/** Pair of (all normal returns are receiver, no try/nested-function ambiguity). */
+/** Pair of (all normal returns are receiver, no try/suspend/nested-function ambiguity). */
 private fun IrSimpleFunction.proveExactReturnedDispatchReceiver(): Pair<Boolean, Boolean> {
     val receiver = dispatchReceiverParameter ?: return false to false
     val body = body as? IrBlockBody ?: return false to false
@@ -398,10 +404,6 @@ private fun IrSimpleFunction.proveExactReturnedDispatchReceiver(): Pair<Boolean,
         }
 
         override fun visitTry(aTry: IrTry) {
-            ambiguity = true
-        }
-
-        override fun visitWhen(expression: IrWhen) {
             ambiguity = true
         }
 
