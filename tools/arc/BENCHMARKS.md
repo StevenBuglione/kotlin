@@ -85,10 +85,13 @@ conservative 16, including the four worker-local atomic objects.
 The C interop measurements are intentionally split so one compiler optimization cannot hide a
 different cost. `platform-c-interop` preserves the fixed ASCII Kotlin string case and measures
 static-CString lowering and folding. `platform-c-leaf` calls a no-inline C `strlen` pointer wrapper
-configured with cinterop's `noStringConversion`, using a
+configured with cinterop's `noStringConversion` and `noCallbackFunctions`, using a
 single pinned byte buffer whose NUL terminator moves at runtime; a process-specific phase only
 rotates eight equally frequent lengths, so its checksum remains deterministic while the call cannot
-be constant-folded. `platform-c-dynamic-cstring` passes a periodically replaced mutable Kotlin
+be constant-folded. This is the runtime benchmark for the optimized ARC no-callback path; the
+compiler FileCheck suite separately proves that its Native/Runnable transitions are absent while
+debug, diagnostics, strict, unmarked, and forged-marker calls retain their established behavior.
+`platform-c-dynamic-cstring` passes a periodically replaced mutable Kotlin
 String through a separate automatically converted no-inline wrapper and isolates repeated Kotlin
 String-to-CString conversion.
 

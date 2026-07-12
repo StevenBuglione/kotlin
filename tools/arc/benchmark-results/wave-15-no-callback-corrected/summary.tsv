@@ -1,0 +1,2 @@
+scenario	baseline_median_seconds	candidate_median_seconds	latency_delta_percent	throughput_ratio_percent	baseline_peak_rss_kib	candidate_peak_rss_kib	rss_delta_percent	logical_allocations	passed
+platform-c-leaf	0.149688373	0.149368603	-0.214	100.214	2944	2688	-8.696	1	True

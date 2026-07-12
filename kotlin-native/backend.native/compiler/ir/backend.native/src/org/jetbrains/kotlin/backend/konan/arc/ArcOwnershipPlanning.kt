@@ -14,6 +14,7 @@ import org.jetbrains.kotlin.backend.konan.ir.getSuperClassNotAny
 import org.jetbrains.kotlin.backend.konan.ir.KonanNameConventions
 import org.jetbrains.kotlin.backend.konan.ir.getAnnotationArgumentValue
 import org.jetbrains.kotlin.backend.konan.ir.konanLibrary
+import org.jetbrains.kotlin.backend.konan.lower.DECLARATION_ORIGIN_ENUM
 import org.jetbrains.kotlin.backend.konan.isObjCBridgeBased
 import org.jetbrains.kotlin.backend.konan.llvm.Lifetime
 import org.jetbrains.kotlin.backend.konan.llvm.IntrinsicType
@@ -22,6 +23,7 @@ import org.jetbrains.kotlin.backend.konan.NativeGenerationState
 import org.jetbrains.kotlin.backend.konan.reportCompilationError
 import org.jetbrains.kotlin.ir.IrElement
 import org.jetbrains.kotlin.ir.declarations.IrFile
+import org.jetbrains.kotlin.ir.declarations.IrField
 import org.jetbrains.kotlin.ir.declarations.IrClass
 import org.jetbrains.kotlin.ir.declarations.IrConstructor
 import org.jetbrains.kotlin.ir.declarations.IrDeclarationOrigin
@@ -59,14 +61,17 @@ import org.jetbrains.kotlin.ir.expressions.IrWhen
 import org.jetbrains.kotlin.ir.expressions.IrVararg
 import org.jetbrains.kotlin.ir.symbols.IrSimpleFunctionSymbol
 import org.jetbrains.kotlin.ir.types.getClass
+import org.jetbrains.kotlin.ir.types.IrSimpleType
 import org.jetbrains.kotlin.ir.types.isBoolean
 import org.jetbrains.kotlin.ir.types.isCharArray
 import org.jetbrains.kotlin.ir.types.isInt
 import org.jetbrains.kotlin.ir.types.isNothing
 import org.jetbrains.kotlin.ir.types.isUnit
+import org.jetbrains.kotlin.ir.types.typeOrNull
 import org.jetbrains.kotlin.ir.util.allParameters
 import org.jetbrains.kotlin.ir.util.constructedClass
 import org.jetbrains.kotlin.ir.util.fqNameForIrSerialization
+import org.jetbrains.kotlin.ir.util.functions
 import org.jetbrains.kotlin.ir.util.getArgumentsWithIr
 import org.jetbrains.kotlin.ir.util.hasAnnotation
 import org.jetbrains.kotlin.ir.util.IdSignature
@@ -74,6 +79,7 @@ import org.jetbrains.kotlin.ir.util.isElseBranch
 import org.jetbrains.kotlin.ir.util.isOverridable
 import org.jetbrains.kotlin.ir.util.isReal
 import org.jetbrains.kotlin.descriptors.DescriptorVisibilities
+import org.jetbrains.kotlin.descriptors.ClassKind
 import org.jetbrains.kotlin.ir.visitors.IrElementVisitorVoid
 import org.jetbrains.kotlin.ir.visitors.acceptChildrenVoid
 import org.jetbrains.kotlin.ir.visitors.acceptVoid
@@ -138,6 +144,7 @@ internal data class ArcCodegenOwnershipPlan(
     val borrowedArrayElementCalls: Set<IrCall>,
     val mutableConstructorInitializers: Set<IrVariable>,
     val scopedArcReferenceLoads: Map<IrCall, IrExpression>,
+    val rootedGlobalProjections: Map<IrCall, ArcRootedGlobalProjectionPlan>,
 ) {
     val scopedArcReferenceLoadBoundaries: Set<IrExpression> =
         Collections.newSetFromMap(IdentityHashMap<IrExpression, Boolean>()).apply {
@@ -170,9 +177,16 @@ internal data class ArcCodegenOwnershipPlan(
             borrowedArrayElementCalls = emptySet(),
             mutableConstructorInitializers = emptySet(),
             scopedArcReferenceLoads = emptyMap(),
+            rootedGlobalProjections = emptyMap(),
         )
     }
 }
+
+internal data class ArcRootedGlobalProjectionPlan(
+    val rootField: IrField,
+    val getter: IrSimpleFunction,
+    val getterId: Int,
+)
 
 internal data class ArcOwnedResultForwarding(
     val producer: IrVariable,
@@ -576,6 +590,7 @@ internal fun runArcOwnershipPlanning(
     val borrowedArrayElementCalls = linkedSetOf<IrCall>()
     val mutableConstructorInitializers = linkedSetOf<IrVariable>()
     val scopedArcReferenceLoads = linkedMapOf<IrCall, IrExpression>()
+    val rootedGlobalProjections = selectVerifiedRootedGlobalProjections(generationState, input.module)
     // ArcReferencesLowering removes the source annotation and may remove the property/accessor
     // association before this planner runs. Discover exact rewritten function symbols first so
     // call-site selection neither depends on declaration order nor guesses from lowered names.
@@ -735,6 +750,7 @@ internal fun runArcOwnershipPlanning(
             borrowedArrayElementCalls,
             mutableConstructorInitializers,
             scopedArcReferenceLoads,
+            rootedGlobalProjections,
         ),
     )
 }
@@ -2850,6 +2866,191 @@ private fun resolveCanonicalLockedReadPlans(
             ownerClass, getter, runtimeGetter, tailCall,
             getterSignature, runtimeSignature, ownerClassSignature, stdlibLibrary,
         )
+    }
+}
+
+/**
+ * Selects references whose lifetime is guaranteed by an immutable compiler-owned process root.
+ *
+ * Kotlin enum entries are ordinary heap objects, not permanent headers. The generated final
+ * `$VALUES` global nevertheless owns every entry until process teardown. A load from the exact
+ * generated getter can therefore stay +0 until a strong store independently acquires its +1.
+ *
+ * Keep this deliberately narrow. Any changed declaration, initializer, write set, getter body,
+ * enum index, library identity, debug mode, or ARC diagnostics request falls back to the ordinary
+ * owned-result ABI.
+ */
+private fun selectVerifiedRootedGlobalProjections(
+    generationState: NativeGenerationState,
+    module: org.jetbrains.kotlin.ir.declarations.IrModuleFragment,
+): Map<IrCall, ArcRootedGlobalProjectionPlan> {
+    val context = generationState.context
+    if (context.memoryModel != MemoryModel.ARC || !context.config.optimizationsEnabled ||
+        context.shouldContainDebugInfo() || context.config.arcDiagnosticsEnabled
+    ) return emptyMap()
+    val stdlib = context.stdlibModule.konanLibrary ?: return emptyMap()
+    val classes = mutableListOf<IrClass>()
+    val allFieldWrites = Collections.synchronizedMap(IdentityHashMap<IrField, MutableSet<IrSetField>>())
+    module.files.forEach { file ->
+        file.acceptChildrenVoid(object : IrElementVisitorVoid {
+            override fun visitElement(element: IrElement) {
+                element.acceptChildrenVoid(this)
+            }
+
+            override fun visitClass(declaration: IrClass) {
+                if (declaration.konanLibrary === stdlib) classes += declaration
+                declaration.acceptChildrenVoid(this)
+            }
+
+            override fun visitSetField(expression: IrSetField) {
+                allFieldWrites.getOrPut(expression.symbol.owner) {
+                    Collections.newSetFromMap(IdentityHashMap<IrSetField, Boolean>())
+                } += expression
+                expression.acceptChildrenVoid(this)
+            }
+        })
+    }
+
+    val enumClass = classes.singleOrNull {
+        it.fqNameForIrSerialization.asString() == "kotlin.coroutines.intrinsics.CoroutineSingletons" &&
+                it.kind == ClassKind.ENUM_CLASS && it.symbol.signature != null
+    }
+    val enumGetterPlan = enumClass?.let { owner ->
+        val getter = owner.declarations.filterIsInstance<IrSimpleFunction>().singleOrNull {
+            it.origin == DECLARATION_ORIGIN_ENUM && it.name.asString() == "\$getEnumAt" &&
+                    it.dispatchReceiverParameter == null && it.extensionReceiverParameter == null &&
+                    it.valueParameters.singleOrNull()?.type?.isInt() == true &&
+                    it.returnType.getClass()?.symbol == owner.symbol && !it.isOverridable
+        } ?: return@let null
+        val returned = (getter.body as? IrBlockBody)?.statements?.singleOrNull() as? IrReturn
+            ?: return@let null
+        if (returned.returnTargetSymbol != getter.symbol) return@let null
+        val arrayGet = returned.value as? IrCall ?: return@let null
+        val exactArrayGet = context.ir.symbols.array.owner.functions.singleOrNull {
+            it.name == KonanNameConventions.getWithoutBoundCheck && it.valueParameters.size == 1 &&
+                    it.dispatchReceiverParameter?.type?.getClass()?.symbol == context.ir.symbols.array
+        } ?: return@let null
+        if (arrayGet.symbol.owner !== exactArrayGet ||
+            arrayGet.type.getClass()?.symbol != owner.symbol || arrayGet.extensionReceiver != null ||
+            (arrayGet.getValueArgument(0) as? IrGetValue)?.symbol != getter.valueParameters.single().symbol
+        ) return@let null
+        val rootRead = arrayGet.dispatchReceiver as? IrGetField ?: return@let null
+        val root = rootRead.symbol.owner
+        if (!root.isStatic || !root.isFinal || root.visibility != DescriptorVisibilities.PRIVATE ||
+            root.parent !== owner || root.origin != DECLARATION_ORIGIN_ENUM ||
+            root.name.asString() != "\$VALUES" || !root.hasAnnotation(KonanFqNames.sharedImmutable) ||
+            root.initializer == null || root.type.getClass()?.symbol != context.ir.symbols.array ||
+            (root.type as? IrSimpleType)?.arguments?.singleOrNull()?.typeOrNull?.getClass()?.symbol != owner.symbol
+        ) return@let null
+        val initializerWrites = Collections.newSetFromMap(IdentityHashMap<IrSetField, Boolean>())
+        root.initializer!!.acceptChildrenVoid(object : IrElementVisitorVoid {
+            override fun visitElement(element: IrElement) {
+                element.acceptChildrenVoid(this)
+            }
+
+            override fun visitSetField(expression: IrSetField) {
+                if (expression.symbol.owner === root) initializerWrites += expression
+                expression.acceptChildrenVoid(this)
+            }
+        })
+        // Enum lowering pre-publishes the freshly allocated array once before constructors run.
+        // The enclosing global initializer stores that same array again; there must be no IR write
+        // to the root outside this exact initializer and no second pre-publication write.
+        if (initializerWrites.size != 1 || allFieldWrites[root].orEmpty() != initializerWrites) return@let null
+        if (!hasOnlyVerifiedEnumRootUses(module, root, rootRead, exactArrayGet, context)) return@let null
+        Triple(getter, root, owner)
+    }
+
+    if (enumGetterPlan == null) return emptyMap()
+    val selected = Collections.synchronizedMap(
+        IdentityHashMap<IrCall, ArcRootedGlobalProjectionPlan>()
+    )
+    module.files.forEach { file ->
+        file.acceptChildrenVoid(object : IrElementVisitorVoid {
+            override fun visitElement(element: IrElement) {
+                element.acceptChildrenVoid(this)
+            }
+
+            override fun visitCall(expression: IrCall) {
+                enumGetterPlan.let { (getter, root, _) ->
+                    if (expression.symbol.owner === getter && expression.dispatchReceiver == null &&
+                        expression.extensionReceiver == null && expression.valueArgumentsCount == 1
+                    ) {
+                        val getterId = (expression.getValueArgument(0) as? IrConst<*>)?.value as? Int
+                        // Getter ids are alphabetical: RESUMED=1 and UNDECIDED=2. The suspended
+                        // marker remains on the ordinary ABI until its separate getter is proven.
+                        if (getterId == 1 || getterId == 2) {
+                            selected[expression] = ArcRootedGlobalProjectionPlan(root, getter, getterId)
+                        }
+                    }
+                }
+                expression.acceptChildrenVoid(this)
+            }
+        })
+    }
+    context.log { "ARC rooted global projections: ${selected.size}" }
+    return selected
+}
+
+private fun hasOnlyVerifiedEnumRootUses(
+    module: org.jetbrains.kotlin.ir.declarations.IrModuleFragment,
+    root: IrField,
+    getterRootRead: IrGetField,
+    exactArrayGet: IrSimpleFunction,
+    context: org.jetbrains.kotlin.backend.konan.Context,
+): Boolean {
+    val parents = IdentityHashMap<IrElement, IrElement?>()
+    val rootReads = Collections.newSetFromMap(IdentityHashMap<IrGetField, Boolean>())
+    val valueReads = Collections.synchronizedMap(IdentityHashMap<IrVariable, MutableSet<IrGetValue>>())
+    var parent: IrElement? = null
+    module.files.forEach { file ->
+        file.acceptChildrenVoid(object : IrElementVisitorVoid {
+            override fun visitElement(element: IrElement) {
+                parents[element] = parent
+                val previous = parent
+                parent = element
+                element.acceptChildrenVoid(this)
+                parent = previous
+            }
+
+            override fun visitGetField(expression: IrGetField) {
+                if (expression.symbol.owner === root) rootReads += expression
+                visitElement(expression)
+            }
+
+            override fun visitGetValue(expression: IrGetValue) {
+                (expression.symbol.owner as? IrVariable)?.let { variable ->
+                    valueReads.getOrPut(variable) {
+                        Collections.newSetFromMap(IdentityHashMap<IrGetValue, Boolean>())
+                    } += expression
+                }
+                visitElement(expression)
+            }
+        })
+    }
+
+    fun IrGetValue.isExactArrayGetReceiver(): Boolean {
+        val call = parents[this] as? IrCall ?: return false
+        return call.symbol.owner === exactArrayGet && call.dispatchReceiver === this &&
+                call.extensionReceiver == null && call.valueArgumentsCount == 1
+    }
+
+    return rootReads.all { read ->
+        if (read === getterRootRead) return@all true
+        when (val use = parents[read]) {
+            is IrCall -> when {
+                use.symbol.owner === exactArrayGet && use.dispatchReceiver === read -> true
+                use.symbol == context.ir.symbols.valuesForEnum &&
+                        use.getValueArgument(0) === read -> true
+                use.symbol == context.ir.symbols.valueOfForEnum &&
+                        use.getValueArgument(1) === read -> true
+                else -> false
+            }
+            is IrVariable -> !use.isVar && use.initializer === read &&
+                    valueReads[use].orEmpty().isNotEmpty() &&
+                    valueReads[use].orEmpty().all { it.isExactArrayGetReceiver() }
+            else -> false
+        }
     }
 }
 

@@ -229,11 +229,14 @@ private fun platformCLeafWork(): BenchResult {
     var previousTerminator = 31
     var checksum = 0L
     buffer.usePinned { pinned ->
+        // Resolve the stable pinned address once. Repeating addressOf in the hot loop calls
+        // Kotlin_initRuntimeIfNeeded and measures runtime setup rather than the C boundary.
+        val address = pinned.addressOf(0)
         repeat(count) { index ->
             buffer[previousTerminator] = 'x'.code.toByte()
             val terminator = 8 + ((index + phase) and 7)
             buffer[terminator] = 0
-            checksum += arc_benchmark_strlen_ptr(pinned.addressOf(0)).toLong()
+            checksum += arc_benchmark_strlen_ptr(address).toLong()
             previousTerminator = terminator
         }
     }

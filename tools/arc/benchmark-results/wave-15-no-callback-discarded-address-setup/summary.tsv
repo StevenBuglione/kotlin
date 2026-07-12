@@ -1,0 +1,4 @@
+scenario	baseline_median_seconds	candidate_median_seconds	latency_delta_percent	throughput_ratio_percent	baseline_peak_rss_kib	candidate_peak_rss_kib	rss_delta_percent	logical_allocations	passed
+platform-c-dynamic-cstring	0.298309731	0.313451859	5.076	95.169	3456	2688	-22.222	3601758	False
+platform-c-interop	0.288033189	0.001870922	-99.350	15395.254	3200	2560	-20.000	0	True
+platform-c-leaf	0.15784654	0.406766567	157.697	38.805	2944	2688	-8.696	1	False

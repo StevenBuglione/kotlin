@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "symbol": "kfun:$coroutinesWork$lambda$1$FUNCTION_REFERENCE$1.invoke#internal",
+  "operation": "UpdateReturnRefRelaxed",
+  "method": "Locate the exact objdump symbol, stop at the next top-level symbol, and count direct call instructions whose target is UpdateReturnRefRelaxed.",
+  "before": {
+    "wave": "wave-14-safe-continuation",
+    "host": "olfa@10.10.10.12",
+    "candidateCommit": "9ddd54dcbe8c7c3289f605232ffe168e8e0b660b",
+    "candidateTree": "1c612ce71cc16929afd50efd4f8d505e5534f9a1",
+    "disassemblySha256": "3552b8de735e8301e3969ca68380a5a00c4078521a82d0733cd89b84255b1bf2",
+    "callCount": 8,
+    "calls": [
+      { "address": "0x42c5b0", "target": "0x4300e0" },
+      { "address": "0x42c61f", "target": "0x4300e0" },
+      { "address": "0x42c7ec", "target": "0x4300e0" },
+      { "address": "0x42c889", "target": "0x4300e0" },
+      { "address": "0x42c8b7", "target": "0x4300e0" },
+      { "address": "0x42c9e8", "target": "0x4300e0" },
+      { "address": "0x42cadb", "target": "0x4300e0" },
+      { "address": "0x42cb96", "target": "0x4300e0" }
+    ]
+  },
+  "after": {
+    "wave": "wave-15-rooted-enum",
+    "host": "olfa@10.10.10.8",
+    "candidateCommit": "de6d755bfa72ea2b289a14cb2a0d858d9c9c7572",
+    "candidateTree": "dfdac4d3cb90ee55ae08f6762c1c808a4d50d874",
+    "candidateParent": "9c0acdec8eb7749583c8b3a94b8392123b60cc6b",
+    "disassemblySha256": "7f3bfceca65f354ea8d9759b1d22215f9fa9a444e95fe1b0c20a70a6235918b2",
+    "binarySha256": "bd091b58771de25607aa005203b982ac82a650c744be8f53c26cf6f338dede18",
+    "callCount": 4,
+    "calls": [
+      { "address": "0x42c57d", "target": "0x42fec0" },
+      { "address": "0x42c6ec", "target": "0x42fec0" },
+      { "address": "0x42c9ab", "target": "0x42fec0" },
+      { "address": "0x42ca63", "target": "0x42fec0" }
+    ]
+  },
+  "reduction": {
+    "absoluteCalls": 4,
+    "percent": 50.0,
+    "verified": true
+  }
+}

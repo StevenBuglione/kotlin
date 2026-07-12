@@ -51,16 +51,18 @@ private fun IrDeclaration.hasCCallAnnotation(): Boolean =
  */
 internal fun IrSimpleFunction.isAuthenticatedNoCallbackCFunction(
         isInteropStubsCompilation: Boolean
-): Boolean =
-        isExternal &&
-                parent is IrFile &&
-                dispatchReceiverParameter == null &&
-                extensionReceiverParameter == null &&
-                (isFromInteropLibrary() ||
-                        (isInteropStubsCompilation &&
-                                (parent as IrFile).annotations.hasAnnotation(InteropFqNames.interopStubs))) &&
-                hasCCallAnnotation() &&
-                hasCCallAnnotation("NoCallback")
+): Boolean {
+    val packageParent = parent as? IrPackageFragment ?: return false
+    val hasInteropProvenance = isFromInteropLibrary() ||
+            (isInteropStubsCompilation && packageParent is IrFile &&
+                    packageParent.annotations.hasAnnotation(InteropFqNames.interopStubs))
+    return isExternal &&
+            dispatchReceiverParameter == null &&
+            extensionReceiverParameter == null &&
+            hasInteropProvenance &&
+            hasCCallAnnotation() &&
+            hasCCallAnnotation("NoCallback")
+}
 
 internal fun IrValueParameter.isWCStringParameter() = hasCCallAnnotation("WCString")
 

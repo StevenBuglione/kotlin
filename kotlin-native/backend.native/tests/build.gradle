@@ -6875,6 +6875,61 @@ fileCheckTest("filecheck_arc_return_update_coalescing_before") {
     phaseToCheck = "RemoveEmptyArcFrames"
 }
 
+createInterop("filecheck_arc_no_callback_interop_input") {
+    it.defFile 'filecheck/arc_no_callback_interop.def'
+}
+
+fileCheckTest("filecheck_arc_no_callback_interop") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('filecheck/arc_no_callback_interop.kt')
+    interop = "filecheck_arc_no_callback_interop_input"
+    checkPrefix = "ARC"
+    extraOpts = ["-opt"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_no_callback_interop_debug") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('filecheck/arc_no_callback_interop.kt')
+    interop = "filecheck_arc_no_callback_interop_input"
+    checkPrefix = "CONSERVATIVE"
+    extraOpts = ["-opt", "-g"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_no_callback_interop_noopt") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('filecheck/arc_no_callback_interop.kt')
+    interop = "filecheck_arc_no_callback_interop_input"
+    checkPrefix = "CONSERVATIVE"
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_no_callback_interop_diagnostics") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('filecheck/arc_no_callback_interop_diagnostics.kt')
+    interop = "filecheck_arc_no_callback_interop_input"
+    extraOpts = ["-opt"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_no_callback_interop_strict") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('filecheck/arc_no_callback_interop.kt')
+    interop = "filecheck_arc_no_callback_interop_input"
+    checkPrefix = "STRICT"
+    extraOpts = ["-opt", "-memory-model", "strict"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_no_callback_provenance") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('filecheck/arc_no_callback_provenance.kt')
+    interop = "filecheck_arc_no_callback_interop_input"
+    extraOpts = ["-opt"]
+    phaseToCheck = "Codegen"
+}
+
 fileCheckTest("filecheck_arc_borrowed_mutable_call_argument") {
     enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
     annotatedSource = project.file('filecheck/arc_borrowed_mutable_call_argument.kt')

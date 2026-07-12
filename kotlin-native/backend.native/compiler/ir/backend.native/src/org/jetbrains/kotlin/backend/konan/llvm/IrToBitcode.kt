@@ -17,6 +17,7 @@ import org.jetbrains.kotlin.backend.konan.arc.isArcSuspendLike
 import org.jetbrains.kotlin.backend.konan.arc.ArcReturnedReceiverSlotReuseEligibility
 import org.jetbrains.kotlin.backend.konan.arc.ArcLockedReadCanonicalPlan
 import org.jetbrains.kotlin.backend.konan.arc.ArcDiscardedReturnedReceiverGroup
+import org.jetbrains.kotlin.backend.konan.arc.ArcRootedGlobalProjectionPlan
 import org.jetbrains.kotlin.backend.konan.arc.unwrapExactArcCoroutineSpillRead
 import org.jetbrains.kotlin.backend.konan.cexport.CAdapterCodegen
 import org.jetbrains.kotlin.backend.konan.cexport.CAdapterExportedElements
@@ -43,6 +44,7 @@ import org.jetbrains.kotlin.ir.visitors.acceptVoid
 import org.jetbrains.kotlin.konan.ForeignExceptionMode
 import org.jetbrains.kotlin.konan.target.CompilerOutputKind
 import org.jetbrains.kotlin.konan.target.Family
+import org.jetbrains.kotlin.konan.target.KonanTarget
 import org.jetbrains.kotlin.library.KotlinLibrary
 import org.jetbrains.kotlin.library.uniqueName
 import org.jetbrains.kotlin.name.Name
@@ -2452,6 +2454,12 @@ internal class CodeGeneratorVisitor(
     private fun evaluateCall(value: IrFunctionAccessExpression, resultSlot: LLVMValueRef?): LLVMValueRef {
         context.log{"evaluateCall                   : ${ir2string(value)}"}
 
+        if (value is IrCall && resultSlot == null) {
+            arcOwnership.rootedGlobalProjections[value]?.let { plan ->
+                return evaluateRootedGlobalProjection(value, plan)
+            }
+        }
+
         if (value is IrCall && value in arcOwnership.borrowedArrayElementCalls) {
             require(resultSlot == null) { "Borrowed Array.get cannot initialize an owning result slot" }
             return evaluateBorrowedArrayElement(value)
@@ -2549,6 +2557,50 @@ internal class CodeGeneratorVisitor(
         }
         recordScopedPromotion()
         return result
+    }
+
+    /**
+     * Emits a +0 reference whose process lifetime is guaranteed by a verified compiler-owned
+     * global. The ordinary object-result ABI is intentionally bypassed: creating an anonymous
+     * result slot here would immediately retain the root and defeat the ownership proof.
+     */
+    private fun evaluateRootedGlobalProjection(
+        value: IrCall,
+        plan: ArcRootedGlobalProjectionPlan,
+    ): LLVMValueRef {
+        require(context.memoryModel == MemoryModel.ARC && context.config.optimizationsEnabled &&
+                !context.shouldContainDebugInfo() && !context.config.arcDiagnosticsEnabled) {
+            "ARC rooted global projection escaped its verified compilation mode"
+        }
+        require(value.symbol.owner === plan.getter) {
+            "ARC rooted global projection changed declaration identity"
+        }
+        val root = plan.rootField
+        require(root.isStatic && root.isFinal && root.type.binaryTypeIsReference()) {
+            "ARC rooted global projection lost its immutable reference root"
+        }
+        if (context.config.threadsAreAllowed && root.isGlobalNonPrimitive(context)) {
+            functionGenerationContext.checkGlobalsAccessible(currentCodeContext.exceptionHandler)
+        }
+        val rootAddress = staticFieldPtr(root, functionGenerationContext)
+        val rootValue = functionGenerationContext.loadSlot(
+            rootAddress,
+            false,
+            null,
+            alignment = generationState.llvmDeclarations.forStaticField(root).alignment,
+        )
+        require((value.getValueArgument(0) as? IrConst<*>)?.value == plan.getterId)
+        val borrowedGetter = llvm.externalNativeRuntimeFunction(
+            "Kotlin_Array_get_borrowed",
+            LlvmRetType(codegen.kObjHeaderPtr),
+            listOf(LlvmParamType(codegen.kObjHeaderPtr), LlvmParamType(llvm.int32Type)),
+        )
+        return functionGenerationContext.call(
+            borrowedGetter,
+            listOf(rootValue, llvm.int32(plan.getterId)),
+            exceptionHandler = currentCodeContext.exceptionHandler,
+            verbatim = true,
+        )
     }
 
     /**
@@ -3192,13 +3244,21 @@ internal class CodeGeneratorVisitor(
     private val IrFunction.needsNativeThreadState: Boolean
         get() {
             // We assume that call site thread state switching is required for interop calls only.
-            val result = context.memoryModel.usesThreadState && origin == CBridgeOrigin.KOTLIN_TO_C_BRIDGE
-            if (result) {
+            val kotlinToCBridge = context.memoryModel.usesThreadState &&
+                    origin == CBridgeOrigin.KOTLIN_TO_C_BRIDGE
+            if (kotlinToCBridge) {
                 check(isExternal)
                 check(!annotations.hasAnnotation(KonanFqNames.gcUnsafeCall))
                 check(annotations.hasAnnotation(RuntimeNames.filterExceptions))
             }
-            return result
+            val canElideForNoCallbackArcBridge = kotlinToCBridge &&
+                    annotations.hasAnnotation(RuntimeNames.cCallNoCallback) &&
+                    context.memoryModel == MemoryModel.ARC &&
+                    context.config.target == KonanTarget.LINUX_X64 &&
+                    context.config.optimizationsEnabled &&
+                    !context.shouldContainDebugInfo() &&
+                    !context.config.arcDiagnosticsEnabled
+            return kotlinToCBridge && !canElideForNoCallbackArcBridge
         }
 
     private fun call(function: IrFunction, llvmCallable: LlvmCallable, args: List<LLVMValueRef>,

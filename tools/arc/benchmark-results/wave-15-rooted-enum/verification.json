@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "importSource": "/home/olfa/codex-kotlin-arc-primary-bench/.arc-runs/manual-coroutines/artifacts/wave",
+  "importHost": "olfa@10.10.10.8",
+  "artifactCopyVerified": true,
+  "importedArtifactSha256": {
+    "baseline-provenance.json": "59f1d3e7d7515e081436f896384e8baca079aacc4b665c5f654abdec70df4fb1",
+    "candidate-provenance.json": "9f45f60f8e112d629182e4c443941a5ba199c8cc712f0105327341ff5dc4e074",
+    "comparison.md": "1ea004ca1e77e4eea4ba7b93a4850bbc3cb848ed3cc1f28a6f7889c3fe9e014f",
+    "compile-raw.tsv": "ece2702c6e4f30ccebec90abb4a4e1748304fc3f5fa60cccdfb1f52ffbe051e2",
+    "hardware.json": "5b96f17f675c5a9055fbda30de7fcb06a16d51b0ab4188192b3f32fe143adeef",
+    "inputs.json": "65f4532b330e555bab553c03554c60c01793251077011b48f87ea6c219bda5ea",
+    "raw.json": "43dfb5a7ca1e58ec4a574e39f0763090e2e64223f6fefa29698c13b107f1a759",
+    "raw.tsv": "da2178afa912aa917545e9124588068a7e2262338b00ca7790a00f5e6142817d",
+    "static.tsv": "230bfb14f9f92ea577b5cd61f0eec284e62401814a0a49f84904f2f44dfddd69",
+    "summary.json": "ddaa05941adececdab6a3bcd076d17950de485035ca3e9bb24e35271be385050",
+    "summary.tsv": "4e730ca43b3ad8bc5edb76bc873b089743e4d40b0166fae186a93f8bc951c235"
+  },
+  "fixtureVerification": {
+    "tools/arc/fixtures/benchmark.kt": {
+      "expectedSha256": "6c18d78e9e6ca244e17537efe736cf0d627aba617c95107da289b991ce4f8e0f",
+      "actualSha256": "6c18d78e9e6ca244e17537efe736cf0d627aba617c95107da289b991ce4f8e0f",
+      "verified": true
+    },
+    "tools/arc/fixtures/benchmark_cinterop.def": {
+      "expectedSha256": "c4c22cf92da5031c0d050f5a930528f89840de57c764ab10a439aa245eb96384",
+      "actualSha256": "c4c22cf92da5031c0d050f5a930528f89840de57c764ab10a439aa245eb96384",
+      "verified": true
+    },
+    "tools/arc/fixtures/benchmark_cinterop.h": {
+      "expectedSha256": "3b7556fa9c4deab30cabb252aa1abf392d5c15d9fdc86e298edfccd8fb4e5eb2",
+      "actualSha256": "3b7556fa9c4deab30cabb252aa1abf392d5c15d9fdc86e298edfccd8fb4e5eb2",
+      "verified": true
+    }
+  },
+  "provenanceVerification": {
+    "candidate": {
+      "commit": "de6d755bfa72ea2b289a14cb2a0d858d9c9c7572",
+      "tree": "dfdac4d3cb90ee55ae08f6762c1c808a4d50d874",
+      "parent": "9c0acdec8eb7749583c8b3a94b8392123b60cc6b",
+      "gitObjectVerified": true,
+      "pushed": false
+    },
+    "baseline": {
+      "commit": "3db61efe5e892bf27115f1ebcab957d903067ed4",
+      "tree": "c1771ad840cc5e08506c522bf7ff8160d3537f39",
+      "cacheHit": true
+    }
+  }
+}

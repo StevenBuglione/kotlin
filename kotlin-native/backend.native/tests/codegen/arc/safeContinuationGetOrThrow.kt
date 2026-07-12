@@ -99,6 +99,10 @@ private fun raceResultStress(): Long {
 // OPT-NOT: call void @UpdateStackRef{{.*}}[[RESULT_SLOT]]
 // OPT: {{call|invoke}} %struct.ObjHeader* @"kfun:kotlin.native.concurrent.FreezableAtomicReference#<get-value>(){}1:0"({{.*}}%struct.ObjHeader** [[RESULT_SLOT]]
 // OPT-NOT: call void @UpdateStackRef{{.*}}[[RESULT_SLOT]]
+// The enum discriminators are ordinary heap objects whose lifetime is guaranteed by the
+// compiler-owned immutable $VALUES root. Their exact projections stay borrowed.
+// OPT-NOT: {{call|invoke}} %struct.ObjHeader* @"kfun:kotlin.coroutines.intrinsics.CoroutineSingletons.\$getEnumAt
+// OPT: {{call|invoke}} %struct.ObjHeader* @Kotlin_Array_get_borrowed
 // The ordinary payload result is moved to the ABI return slot. Singleton and
 // exception arms still perform their normal cleanup before this successful arm.
 // OPT: call void @MoveReferenceIntoReturnSlotArc(%struct.ObjHeader** [[RETURN_SLOT]], %struct.ObjHeader*
@@ -110,16 +114,19 @@ private fun raceResultStress(): Long {
 // OPT: ret %struct.ObjHeader*
 
 // DEBUG-LABEL: define %struct.ObjHeader* @"kfun:kotlin.coroutines.SafeContinuation#getOrThrow
+// DEBUG-NOT: @Kotlin_Array_get_borrowed
 // DEBUG-NOT: call void @MoveReferenceIntoReturnSlotArc
 // DEBUG: call void @UpdateReturnRef
 // DEBUG: ret %struct.ObjHeader*
 
 // DIAGNOSTIC-LABEL: define %struct.ObjHeader* @"kfun:kotlin.coroutines.SafeContinuation#getOrThrow
+// DIAGNOSTIC-NOT: @Kotlin_Array_get_borrowed
 // DIAGNOSTIC-NOT: call void @MoveReferenceIntoReturnSlotArc
 // DIAGNOSTIC: call void @UpdateReturnRef
 // DIAGNOSTIC: ret %struct.ObjHeader*
 
 // STRICT-LABEL: define %struct.ObjHeader* @"kfun:kotlin.coroutines.SafeContinuation#getOrThrow
+// STRICT-NOT: @Kotlin_Array_get_borrowed
 // STRICT-NOT: call void @MoveReferenceIntoReturnSlotArc
 // STRICT: ret %struct.ObjHeader*
 

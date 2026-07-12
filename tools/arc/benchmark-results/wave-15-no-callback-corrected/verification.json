@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "scenario": "platform-c-leaf",
+  "baseline": {
+    "role": "baseline-strict",
+    "tag": "v1.9.10",
+    "commit": "3db61efe5e892bf27115f1ebcab957d903067ed4",
+    "tree": "c1771ad840cc5e08506c522bf7ff8160d3537f39",
+    "memoryModel": "strict"
+  },
+  "candidate": {
+    "role": "candidate",
+    "commit": "176bd56a31a46bf34740fc51f3e815a4c459123f",
+    "tree": "1ff4a8a4203a65b7952072bce9e0b3818843d38d",
+    "memoryModel": "arc"
+  },
+  "fixture": {
+    "path": "tools/arc/fixtures/benchmark.kt",
+    "sha256": "e69a89cda9684c695a7dedd90808ab20375fe32c1e589fbe1d2ebf028142e35b",
+    "compilerTreeUnchangedByFixtureOverlay": true,
+    "addressResolvedOutsideHotLoop": true
+  },
+  "execution": {
+    "repetitionsPerModel": 9,
+    "rawRows": 18,
+    "warmupsPerModel": 1,
+    "compileRepetitionsPerModel": 3,
+    "cpuAffinity": [0]
+  },
+  "observableOutput": {
+    "line": "ARC_BENCH_OK scenario=platform-c-leaf checksum=230000000 operations=20000000 allocations=1",
+    "sha256": "28c52c3f1f9536cbf1c3ee2e26271caaef028fb6eed97ab67dff72ee7182fa7f",
+    "checksum": 230000000,
+    "operations": 20000000,
+    "logicalAllocations": 1,
+    "baselineAndCandidateMatched": true
+  },
+  "result": {
+    "baselineMedianSeconds": 0.149688373,
+    "candidateMedianSeconds": 0.149368603,
+    "latencyDeltaPercent": -0.214,
+    "throughputRatioPercent": 100.214,
+    "baselinePeakRssKiB": 2944,
+    "candidatePeakRssKiB": 2688,
+    "rssDeltaPercent": -8.696,
+    "passed": true
+  },
+  "validatedEvidence": [
+    "baseline-provenance.json",
+    "candidate-provenance.json",
+    "inputs.json",
+    "raw.tsv",
+    "static.tsv",
+    "summary.tsv",
+    "comparison.md"
+  ]
+}

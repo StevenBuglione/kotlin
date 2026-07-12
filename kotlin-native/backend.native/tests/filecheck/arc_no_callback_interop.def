@@ -1,0 +1,14 @@
+package = arc_no_callback_interop
+noCallbackFunctions = arc_no_callback_leaf
+---
+static __attribute__((noinline)) int arc_no_callback_leaf(int value) {
+    return value + 1;
+}
+
+static __attribute__((noinline)) int arc_callback_capable_control(int value) {
+    return value + 2;
+}
+
+__attribute__((noinline)) int arc_forged_no_callback(void) {
+    return 42;
+}
