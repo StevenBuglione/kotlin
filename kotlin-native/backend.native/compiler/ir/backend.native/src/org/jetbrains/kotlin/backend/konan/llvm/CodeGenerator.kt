@@ -677,9 +677,10 @@ internal abstract class FunctionGenerationContext(
         value: LLVMValueRef,
         spillSlot: LLVMValueRef,
         resultSlot: LLVMValueRef,
+        verifiedPhysicalSlotOwnership: Boolean = false,
     ) {
         require(context.memoryModel == MemoryModel.ARC && spillSlot != resultSlot &&
-                arcSlotOwnsProducedResult(spillSlot)) {
+                (verifiedPhysicalSlotOwnership || arcSlotOwnsProducedResult(spillSlot))) {
             "ARC coroutine spill move requires one exact current-block owning spill fact"
         }
         val mover = llvm.externalNativeRuntimeFunction(

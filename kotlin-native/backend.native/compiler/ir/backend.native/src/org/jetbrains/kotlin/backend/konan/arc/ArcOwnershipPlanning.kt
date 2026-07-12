@@ -23,6 +23,7 @@ import org.jetbrains.kotlin.backend.konan.reportCompilationError
 import org.jetbrains.kotlin.ir.IrElement
 import org.jetbrains.kotlin.ir.declarations.IrFile
 import org.jetbrains.kotlin.ir.declarations.IrClass
+import org.jetbrains.kotlin.ir.declarations.IrConstructor
 import org.jetbrains.kotlin.ir.declarations.IrDeclarationOrigin
 import org.jetbrains.kotlin.ir.declarations.IrFunction
 import org.jetbrains.kotlin.ir.declarations.IrSimpleFunction
@@ -120,6 +121,9 @@ internal data class ArcCodegenOwnershipPlan(
     val discardedReturnedReceiverGroupsByCall: Map<IrCall, ArcDiscardedReturnedReceiverGroup>,
     val coroutineSpillMovesByVariable: Map<IrVariable, ArcCoroutineSpillMovePlan>,
     val coroutineSpillMovesByReturn: Map<IrReturn, ArcCoroutineSpillMovePlan>,
+    val safeContinuationOwnedResultVariables: Set<IrVariable>,
+    val safeContinuationOwnedResultAssignments: Set<IrSetValue>,
+    val safeContinuationMovedResultReads: Set<IrGetValue>,
     val joinedReferenceSlots: Map<IrVariable, ArcJoinedReferenceSlotPlan>,
     val borrowedGuaranteedAliases: Set<IrVariable>,
     val borrowedMutableReads: Set<IrGetValue>,
@@ -149,6 +153,9 @@ internal data class ArcCodegenOwnershipPlan(
             discardedReturnedReceiverGroupsByCall = emptyMap(),
             coroutineSpillMovesByVariable = emptyMap(),
             coroutineSpillMovesByReturn = emptyMap(),
+            safeContinuationOwnedResultVariables = emptySet(),
+            safeContinuationOwnedResultAssignments = emptySet(),
+            safeContinuationMovedResultReads = emptySet(),
             joinedReferenceSlots = emptyMap(),
             borrowedGuaranteedAliases = emptySet(),
             borrowedMutableReads = emptySet(),
@@ -189,6 +196,15 @@ internal data class ArcLockedReadCanonicalPlan(
     val runtimeGetterSignature: IdSignature,
     val ownerClassSignature: IdSignature,
     val stdlibLibrary: KotlinLibrary,
+)
+
+private data class ArcSafeContinuationGetOrThrowPlan(
+    val function: IrSimpleFunction,
+    val resultVariable: IrVariable,
+    val resultAssignments: Set<IrSetValue>,
+    val borrowedResultReads: Set<IrGetValue>,
+    val movedResultRead: IrGetValue,
+    val borrowedResultRefLoads: Set<IrGetField>,
 )
 
 internal data class ArcSuspendLikeMarkers(
@@ -543,6 +559,9 @@ internal fun runArcOwnershipPlanning(
     )
     val coroutineSpillMovesByVariable = linkedMapOf<IrVariable, ArcCoroutineSpillMovePlan>()
     val coroutineSpillMovesByReturn = Collections.synchronizedMap(IdentityHashMap<IrReturn, ArcCoroutineSpillMovePlan>())
+    val safeContinuationOwnedResultVariables = Collections.newSetFromMap(IdentityHashMap<IrVariable, Boolean>())
+    val safeContinuationOwnedResultAssignments = Collections.newSetFromMap(IdentityHashMap<IrSetValue, Boolean>())
+    val safeContinuationMovedResultReads = Collections.newSetFromMap(IdentityHashMap<IrGetValue, Boolean>())
     val joinedReferenceSlots = linkedMapOf<IrVariable, ArcJoinedReferenceSlotPlan>()
     val borrowedGuaranteedAliases = linkedSetOf<IrVariable>()
     val borrowedMutableReads = linkedSetOf<IrGetValue>()
@@ -570,8 +589,16 @@ internal fun runArcOwnershipPlanning(
                             it.owner.attributeOwnerId as? IrSimpleFunction ?: it.owner
                         }
     val borrowedCharArrayConsumerSymbols = resolveBorrowedCharArrayConsumerSymbols(generationState)
-    resolveCanonicalLockedReadPlans(generationState, input.module).forEach { plan ->
+    val canonicalLockedReadPlans = resolveCanonicalLockedReadPlans(generationState, input.module)
+    canonicalLockedReadPlans.forEach { plan ->
         lockedReadResultSlotForwardingCalls[plan.tailCall] = plan
+    }
+    selectCanonicalSafeContinuationGetOrThrow(generationState, input.module, canonicalLockedReadPlans)?.let { plan ->
+        safeContinuationOwnedResultVariables += plan.resultVariable
+        safeContinuationOwnedResultAssignments += plan.resultAssignments
+        safeContinuationMovedResultReads += plan.movedResultRead
+        borrowedMutableReads += plan.borrowedResultReads.filterNot { it === plan.movedResultRead }
+        borrowedStrongFieldLoads += plan.borrowedResultRefLoads
     }
     // The historical curated-plan visitor below intentionally analyzes top-level functions only.
     // This selector targets an exact class-member pattern, so give it an independent recursive
@@ -691,6 +718,9 @@ internal fun runArcOwnershipPlanning(
             discardedReturnedReceiverGroupsByCall,
             coroutineSpillMovesByVariable,
             coroutineSpillMovesByReturn,
+            safeContinuationOwnedResultVariables,
+            safeContinuationOwnedResultAssignments,
+            safeContinuationMovedResultReads,
             joinedReferenceSlots,
             borrowedGuaranteedAliases,
             borrowedMutableReads,
@@ -2821,6 +2851,263 @@ private fun resolveCanonicalLockedReadPlans(
             getterSignature, runtimeSignature, ownerClassSignature, stdlibLibrary,
         )
     }
+}
+
+/**
+ * Select the exact stdlib `SafeContinuation.getOrThrow` ownership web. Both atomic reads produce
+ * +1 into the mutable `result` slot. All other reads are bounded borrows of that slot, while the
+ * `resultRef` field is rooted by the guaranteed dispatch receiver for the complete call.
+ *
+ * This deliberately keys on stdlib declaration identities and the complete two-read/one-reload
+ * body shape. A changed stdlib implementation falls back to ordinary ARC barriers.
+ */
+private fun selectCanonicalSafeContinuationGetOrThrow(
+    generationState: NativeGenerationState,
+    module: org.jetbrains.kotlin.ir.declarations.IrModuleFragment,
+    lockedReads: List<ArcLockedReadCanonicalPlan>,
+): ArcSafeContinuationGetOrThrowPlan? {
+    if (generationState.context.memoryModel != MemoryModel.ARC ||
+        !generationState.context.config.optimizationsEnabled ||
+        generationState.context.shouldContainDebugInfo() ||
+        generationState.context.config.arcDiagnosticsEnabled
+    ) return null
+    val stdlib = generationState.context.stdlibModule.konanLibrary ?: return null
+    val atomic = lockedReads.singleOrNull {
+        it.ownerClass.fqNameForIrSerialization.asString() ==
+                "kotlin.native.concurrent.FreezableAtomicReference" &&
+                !it.getter.isOverridable && !it.runtimeGetter.isOverridable
+    } ?: return null
+    val safeClass = buildList<IrClass> {
+        module.files.forEach { file ->
+            file.acceptChildrenVoid(object : IrElementVisitorVoid {
+                override fun visitElement(element: IrElement) = element.acceptChildrenVoid(this)
+                override fun visitClass(declaration: IrClass) {
+                    if (declaration.konanLibrary === stdlib &&
+                        declaration.fqNameForIrSerialization.asString() == "kotlin.coroutines.SafeContinuation"
+                    ) add(declaration)
+                    declaration.acceptChildrenVoid(this)
+                }
+            })
+        }
+    }.singleOrNull() ?: return null
+    if (safeClass.symbol.signature == null) return null
+    val function = safeClass.declarations.filterIsInstance<IrSimpleFunction>().singleOrNull {
+        it.konanLibrary === stdlib && it.name.asString() == "getOrThrow" && it.isReal &&
+                !it.isExternal && !it.isOverridable && !it.isArcSuspendLike() && it.valueParameters.isEmpty() &&
+                it.dispatchReceiverParameter != null && it.extensionReceiverParameter == null &&
+                it.visibility == DescriptorVisibilities.INTERNAL &&
+                (it.symbol.signature ?: it.symbol.privateSignature) != null &&
+                it.returnType.binaryTypeIsReference()
+    } ?: return null
+    val body = function.body as? IrBlockBody ?: return null
+    val atomicCalls = mutableListOf<IrCall>()
+    val variables = mutableListOf<IrVariable>()
+    var unsupportedBoundary = false
+    body.acceptVoid(object : IrElementVisitorVoid {
+        override fun visitElement(element: IrElement) = element.acceptChildrenVoid(this)
+        override fun visitFunction(declaration: IrFunction) { unsupportedBoundary = true }
+        override fun visitSuspendableExpression(expression: IrSuspendableExpression) { unsupportedBoundary = true }
+        override fun visitSuspensionPoint(expression: IrSuspensionPoint) { unsupportedBoundary = true }
+        override fun visitVariable(declaration: IrVariable) {
+            variables += declaration
+            declaration.acceptChildrenVoid(this)
+        }
+        override fun visitCall(expression: IrCall) {
+            if (expression.symbol == atomic.getter.symbol) atomicCalls += expression
+            expression.acceptChildrenVoid(this)
+        }
+    })
+    if (unsupportedBoundary || atomicCalls.size != 2) return null
+    val result = variables.singleOrNull {
+        it.parent === function && it.name.asString() == "result" && it.isVar &&
+                it.type.binaryTypeIsReference() &&
+                it.initializer.unwrapExactSafeContinuationLockedRead()?.symbol == atomic.getter.symbol &&
+                !it.hasAnnotation(KonanFqNames.arcWeak) && !it.hasAnnotation(KonanFqNames.arcUnowned) &&
+                !it.hasAnnotation(KonanFqNames.volatile)
+    } ?: return null
+    val assignments = Collections.newSetFromMap(IdentityHashMap<IrSetValue, Boolean>())
+    val reads = Collections.newSetFromMap(IdentityHashMap<IrGetValue, Boolean>())
+    val resultRefLoads = Collections.newSetFromMap(IdentityHashMap<IrGetField, Boolean>())
+    var invalid = false
+    body.acceptVoid(object : IrElementVisitorVoid {
+        override fun visitElement(element: IrElement) = element.acceptChildrenVoid(this)
+        override fun visitFunction(declaration: IrFunction) { invalid = true }
+        override fun visitSetValue(expression: IrSetValue) {
+            if (expression.symbol == result.symbol) {
+                if (expression.value.unwrapExactSafeContinuationLockedRead()?.symbol != atomic.getter.symbol) {
+                    invalid = true
+                } else {
+                    assignments += expression
+                }
+            }
+            expression.acceptChildrenVoid(this)
+        }
+        override fun visitGetValue(expression: IrGetValue) {
+            if (expression.symbol == result.symbol) {
+                reads += expression
+            }
+            expression.acceptChildrenVoid(this)
+        }
+        override fun visitSetField(expression: IrSetField) {
+            if (expression.symbol.owner.name.asString() == "resultRef" &&
+                expression.symbol.owner.parent === safeClass
+            ) invalid = true
+            expression.acceptChildrenVoid(this)
+        }
+        override fun visitGetField(expression: IrGetField) {
+            if (expression.symbol.owner.name.asString() == "resultRef" &&
+                expression.symbol.owner.parent === safeClass
+            ) resultRefLoads += expression
+            expression.acceptChildrenVoid(this)
+        }
+    })
+    if (invalid || assignments.size != 1 || reads.size != 5) return null
+    val targetReturns = mutableListOf<IrReturn>()
+    body.acceptVoid(object : IrElementVisitorVoid {
+        override fun visitElement(element: IrElement) = element.acceptChildrenVoid(this)
+        override fun visitFunction(declaration: IrFunction) = Unit
+        override fun visitReturn(expression: IrReturn) {
+            if (expression.returnTargetSymbol == function.symbol) targetReturns += expression
+            expression.acceptChildrenVoid(this)
+        }
+    })
+    val successReads = targetReturns.mapNotNull { it.value.exactSafeContinuationWhenSuccessRead(result) }
+    val movedResultRead = successReads.singleOrNull() ?: return null
+    val permittedReads = Collections.newSetFromMap(IdentityHashMap<IrGetValue, Boolean>())
+    permittedReads += movedResultRead
+    body.acceptVoid(object : IrElementVisitorVoid {
+        override fun visitElement(element: IrElement) = element.acceptChildrenVoid(this)
+        override fun visitFunction(declaration: IrFunction) = Unit
+        override fun visitCall(expression: IrCall) {
+            if (expression.symbol == generationState.context.irBuiltIns.eqeqeqSymbol) {
+                expression.getArgumentsWithIr().mapNotNullTo(permittedReads) {
+                    it.second.unwrapExactSafeContinuationResultRead(result)
+                }
+            }
+            expression.acceptChildrenVoid(this)
+        }
+        override fun visitTypeOperator(expression: IrTypeOperatorCall) {
+            if (expression.operator == IrTypeOperator.INSTANCEOF) {
+                expression.argument.unwrapExactSafeContinuationResultRead(result)?.let { permittedReads += it }
+            }
+            expression.acceptChildrenVoid(this)
+        }
+        override fun visitGetField(expression: IrGetField) {
+            val receiver = expression.receiver.unwrapExactSafeContinuationResultRead(result)
+            if (receiver != null &&
+                expression.symbol.owner.name.asString() == "exception" &&
+                (expression.symbol.owner.parent as? IrClass)?.fqNameForIrSerialization?.asString() ==
+                        "kotlin.Result.Failure"
+            ) permittedReads += receiver
+            expression.acceptChildrenVoid(this)
+        }
+    })
+    // This proves that the owned local never escapes: every use is one bounded identity check,
+    // type check, failure projection, or the unique success edge of the function return `when`.
+    if (permittedReads.size != reads.size || reads.any { it !in permittedReads }) return null
+    if (resultRefLoads.size != 3) return null
+    resultRefLoads.forEach { field ->
+        if (field.symbol.owner.parent !== safeClass || field.symbol.owner.name.asString() != "resultRef" ||
+            field.symbol.owner.isStatic || field.symbol.owner.hasAnnotation(KonanFqNames.volatile) ||
+            field.symbol.owner.hasAnnotation(KonanFqNames.arcWeak) ||
+            field.symbol.owner.hasAnnotation(KonanFqNames.arcUnowned) ||
+            field.symbol.owner.visibility != DescriptorVisibilities.PRIVATE ||
+            (field.symbol.owner.symbol.signature ?: field.symbol.owner.symbol.privateSignature) == null ||
+            !field.type.binaryTypeIsReference() ||
+            (field.receiver as? IrGetValue)?.symbol != function.dispatchReceiverParameter?.symbol
+        ) return null
+    }
+    val resultRefField = resultRefLoads.first().symbol
+    if (resultRefLoads.any { it.symbol != resultRefField }) return null
+    var currentWriter: IrFunction? = null
+    var constructorWrites = 0
+    var invalidWriter = false
+    safeClass.acceptChildrenVoid(object : IrElementVisitorVoid {
+        override fun visitElement(element: IrElement) = element.acceptChildrenVoid(this)
+        override fun visitFunction(declaration: IrFunction) {
+            val previous = currentWriter
+            currentWriter = declaration
+            declaration.acceptChildrenVoid(this)
+            currentWriter = previous
+        }
+        override fun visitSetField(expression: IrSetField) {
+            if (expression.symbol == resultRefField) {
+                val constructor = currentWriter as? IrConstructor
+                val receiver = expression.receiver as? IrGetValue
+                if (constructor == null || constructor.parent !== safeClass ||
+                    receiver?.symbol != safeClass.thisReceiver?.symbol
+                ) {
+                    invalidWriter = true
+                } else {
+                    constructorWrites++
+                }
+            }
+            expression.acceptChildrenVoid(this)
+        }
+    })
+    if (invalidWriter || constructorWrites != 1) return null
+    val resultRefReceiverCalls = mutableListOf<IrCall>()
+    body.acceptVoid(object : IrElementVisitorVoid {
+        override fun visitElement(element: IrElement) = element.acceptChildrenVoid(this)
+        override fun visitFunction(declaration: IrFunction) = Unit
+        override fun visitCall(expression: IrCall) {
+            if (expression.dispatchReceiver.unwrapExactSafeContinuationResultRefLoad() in resultRefLoads) {
+                resultRefReceiverCalls += expression
+            }
+            expression.acceptChildrenVoid(this)
+        }
+    })
+    if (resultRefReceiverCalls.size != 3 ||
+        resultRefReceiverCalls.count { it.symbol == atomic.getter.symbol } != 2 ||
+        resultRefReceiverCalls.singleOrNull { it.symbol != atomic.getter.symbol }?.let {
+            it.symbol.owner.parent === atomic.ownerClass && it.symbol.owner.name.asString() == "compareAndSet" &&
+                    !it.symbol.owner.isExternal && !it.symbol.owner.isOverridable &&
+                    it.symbol.owner.extensionReceiverParameter == null &&
+                    (it.symbol.owner.symbol.signature ?: it.symbol.owner.symbol.privateSignature) != null &&
+                    it.valueArgumentsCount == 2
+        } != true ||
+        atomicCalls.none { it === result.initializer.unwrapExactSafeContinuationLockedRead() } ||
+        atomicCalls.none { call -> assignments.single().value.unwrapExactSafeContinuationLockedRead() === call }
+    ) return null
+    generationState.context.log {
+        "ARC SafeContinuation.getOrThrow ownership web: borrowedReads=${reads.size}, " +
+                "borrowedResultRefLoads=${resultRefLoads.size}"
+    }
+    return ArcSafeContinuationGetOrThrowPlan(function, result, assignments, reads, movedResultRead, resultRefLoads)
+}
+
+private fun IrExpression.exactSafeContinuationWhenSuccessRead(result: IrVariable): IrGetValue? = when (this) {
+    is IrWhen -> branches.lastOrNull()?.takeIf { isElseBranch(it) }?.result
+        ?.unwrapExactSafeContinuationResultRead(result)
+    is IrBlock -> (statements.lastOrNull() as? IrExpression)?.exactSafeContinuationWhenSuccessRead(result)
+    is IrTypeOperatorCall -> if (operator == IrTypeOperator.IMPLICIT_CAST) {
+        argument.exactSafeContinuationWhenSuccessRead(result)
+    } else null
+    else -> null
+}
+
+private fun IrExpression?.unwrapExactSafeContinuationResultRead(result: IrVariable): IrGetValue? = when (this) {
+    is IrGetValue -> takeIf { symbol == result.symbol }
+    is IrTypeOperatorCall -> if (operator == IrTypeOperator.IMPLICIT_CAST) {
+        argument.unwrapExactSafeContinuationResultRead(result)
+    } else null
+    else -> null
+}
+
+private fun IrExpression?.unwrapExactSafeContinuationLockedRead(): IrCall? = when (this) {
+    is IrCall -> this
+    is IrTypeOperatorCall -> if (operator == IrTypeOperator.IMPLICIT_CAST) {
+        argument.unwrapExactSafeContinuationLockedRead()
+    } else null
+    else -> null
+}
+
+private fun IrExpression?.unwrapExactSafeContinuationResultRefLoad(): IrGetField? = when (this) {
+    is IrGetField -> this
+    is IrTypeOperatorCall -> if (operator == IrTypeOperator.IMPLICIT_CAST) {
+        argument.unwrapExactSafeContinuationResultRefLoad()
+    } else null
+    else -> null
 }
 
 private fun IrExpression.unwrapExactLockedReadTailCall(): IrCall? = when (this) {

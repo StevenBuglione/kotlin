@@ -1,0 +1,40 @@
+{
+  "baselineCommit": "3db61efe5e892bf27115f1ebcab957d903067ed4",
+  "baselineMemoryModel": "strict",
+  "baselineTag": "v1.9.10",
+  "candidateCommit": "9ddd54dcbe8c7c3289f605232ffe168e8e0b660b",
+  "candidateMemoryModel": "arc",
+  "commonCompilerFlags": [
+    "-target",
+    "linux_x64",
+    "-opt"
+  ],
+  "compileRepetitions": 3,
+  "emittedCallsiteMethod": "Deterministic objdump -d -C call-target count for Update*Ref, Set/Zero/ReleaseHeapRef, LeaveFrame ownership operations, and Alloc*Instance operations; these are linked-binary callsites, not runtime event counts.",
+  "executionPrefix": [
+    "taskset",
+    "-c",
+    "0"
+  ],
+  "fixture": "tools/arc/fixtures/benchmark.kt",
+  "fixtureSha256": "6c18d78e9e6ca244e17537efe736cf0d627aba617c95107da289b991ce4f8e0f",
+  "interopDefinition": "tools/arc/fixtures/benchmark_cinterop.def",
+  "interopDefinitionSha256": "4ef38350f5460eb4ab765bd152d589147933780f2ae9e48c25ce4f75cb832a9d",
+  "interopHeader": "tools/arc/fixtures/benchmark_cinterop.h",
+  "interopHeaderSha256": "3b7556fa9c4deab30cabb252aa1abf392d5c15d9fdc86e298edfccd8fb4e5eb2",
+  "logicalAllocationDefinition": "Fixture-declared source-level object, array, closure, continuation, and exception creations per invocation.",
+  "optimizerEliminationGate": "Separate curated compiler corpus must eliminate at least 90%; linked-binary callsites are not used as its proxy.",
+  "quickDiagnostic": false,
+  "repetitions": 9,
+  "scenarios": [
+    "coroutines"
+  ],
+  "thresholdEnvironment": {
+    "ARC_BENCH_ENFORCE": "1",
+    "ARC_BENCH_RSS_LIMIT_PERCENT": "5",
+    "ARC_BENCH_SCENARIO_REGRESSION_PERCENT": "5",
+    "ARC_BENCH_SIZE_LIMIT_PERCENT": "5",
+    "ARC_BENCH_THROUGHPUT_FLOOR_PERCENT": "100"
+  },
+  "warmups": 1
+}

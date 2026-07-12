@@ -1448,6 +1448,23 @@ internal class CodeGeneratorVisitor(
 
     private fun evaluateGetValue(value: IrGetValue, resultSlot: LLVMValueRef?): LLVMValueRef {
         context.log{"evaluateGetValue               : ${ir2string(value)}"}
+        if (value in arcOwnership.safeContinuationMovedResultReads) {
+            val variable = value.symbol.owner as? IrVariable
+            require(context.memoryModel == MemoryModel.ARC && context.config.optimizationsEnabled &&
+                    !context.shouldContainDebugInfo() && !context.config.arcDiagnosticsEnabled &&
+                    resultSlot != null && resultSlot == functionGenerationContext.returnSlot &&
+                    variable in arcOwnership.safeContinuationOwnedResultVariables) {
+                "SafeContinuation.getOrThrow result move escaped its exact return boundary: ${ir2string(value)}"
+            }
+            val index = currentCodeContext.getDeclaredValue(variable!!)
+            require(index >= 0) { "SafeContinuation.getOrThrow result has no owning local slot" }
+            val owningSlot = functionGenerationContext.vars.addressOf(index)
+            val result = functionGenerationContext.vars.loadBorrowedMutableReference(index)
+            functionGenerationContext.moveArcOwnedReferenceIntoReturnSlot(
+                    result, owningSlot, resultSlot, verifiedPhysicalSlotOwnership = true
+            )
+            return result
+        }
         if (value in arcOwnership.rootedProjectionReads) {
             val variable = value.symbol.owner as? IrVariable
             require(context.memoryModel == MemoryModel.ARC && context.config.optimizationsEnabled &&
@@ -1480,8 +1497,12 @@ internal class CodeGeneratorVisitor(
          * while removing this slot is dangerous, as it needs to be accurate with setting variable inside expression.
          * So optimization was not implemented here for now.
          */
-        val result = evaluateExpression(value.value)
         val variable = currentCodeContext.getDeclaredValue(value.symbol.owner)
+        val safeContinuationOwnedReload = value in arcOwnership.safeContinuationOwnedResultAssignments
+        val result = evaluateExpression(
+                value.value,
+                if (safeContinuationOwnedReload) functionGenerationContext.vars.addressOf(variable) else null
+        )
         if (value in arcOwnership.rootedProjectionStores) {
             val cursor = value.symbol.owner as? IrVariable
             val selectedProjection = value.value.selectedRootedProjectionField()
@@ -1502,6 +1523,15 @@ internal class CodeGeneratorVisitor(
                 "ARC borrowed strong replacement has no identity-selected field projection: ${ir2string(value)}"
             }
             functionGenerationContext.vars.storeBorrowedStrongProjection(result, variable)
+        } else if (safeContinuationOwnedReload) {
+            require(context.memoryModel == MemoryModel.ARC && context.config.optimizationsEnabled &&
+                    !context.shouldContainDebugInfo() && !context.config.arcDiagnosticsEnabled &&
+                    value.symbol.owner in arcOwnership.safeContinuationOwnedResultVariables &&
+                    functionGenerationContext.arcResultIsAlreadyOwnedBySlot(
+                            result, functionGenerationContext.vars.addressOf(variable)
+                    )) {
+                "SafeContinuation.getOrThrow reload did not replace its exact owning result slot"
+            }
         } else {
             functionGenerationContext.vars.store(result, variable)
         }
@@ -1583,12 +1613,13 @@ internal class CodeGeneratorVisitor(
         context.log{"generateVariable               : ${ir2string(variable)}"}
         val joinedReferencePlan = arcOwnership.joinedReferenceSlots[variable]
         val coroutineSpillMove = arcOwnership.coroutineSpillMovesByVariable[variable]
-        require((joinedReferencePlan == null && coroutineSpillMove == null) ||
+        val safeContinuationOwnedResult = variable in arcOwnership.safeContinuationOwnedResultVariables
+        require((joinedReferencePlan == null && coroutineSpillMove == null && !safeContinuationOwnedResult) ||
                 variable !in arcOwnership.mutableConstructorInitializers) {
             "ARC joined reference slot overlaps mutable constructor forwarding: ${ir2string(variable)}"
         }
         val preallocatedOwningSlot = if (variable in arcOwnership.mutableConstructorInitializers ||
-                joinedReferencePlan != null || coroutineSpillMove != null) {
+                joinedReferencePlan != null || coroutineSpillMove != null || safeContinuationOwnedResult) {
             val index = this.currentCodeContext.genDeclareVariable(variable, null)
             functionGenerationContext.vars.addressOf(index)
         } else {
@@ -1620,6 +1651,12 @@ internal class CodeGeneratorVisitor(
                     preallocatedOwningSlot != null && value != null &&
                     functionGenerationContext.arcResultIsAlreadyOwnedBySlot(value, preallocatedOwningSlot)) {
                 "ARC coroutine producer did not initialize its verified spill slot: ${ir2string(variable)}"
+            }
+        }
+        if (safeContinuationOwnedResult) {
+            require(preallocatedOwningSlot != null && value != null &&
+                    functionGenerationContext.arcResultIsAlreadyOwnedBySlot(value, preallocatedOwningSlot)) {
+                "SafeContinuation.getOrThrow initial atomic read did not initialize its owning result slot"
             }
         }
         if (preallocatedOwningSlot == null) {
