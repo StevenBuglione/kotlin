@@ -325,7 +325,7 @@ private fun ArcFunctionPlan.valueOwnerships(topologicalOrder: List<ArcBlockId>):
                         if (result[operation.source] == ArcOwnership.Immortal) ArcOwnership.Immortal else ArcOwnership.Owned
                 is ArcOperation.Borrow -> result[operation.result] = ArcOwnership.Guaranteed
                 is ArcOperation.StrongLoad -> result[operation.result] = ArcOwnership.Owned
-                is ArcOperation.Destroy, is ArcOperation.StrongStore -> Unit
+                is ArcOperation.Destroy, is ArcOperation.EndBorrow, is ArcOperation.Use, is ArcOperation.StrongStore -> Unit
             }
         }
     }
@@ -419,7 +419,7 @@ private fun ArcOperation.definedValue(ownerships: Map<ArcValue, ArcOwnership>): 
     }
     is ArcOperation.StrongLoad -> result to ArcOwnership.Owned
     is ArcOperation.Borrow -> result to ArcOwnership.Guaranteed
-    is ArcOperation.Destroy, is ArcOperation.StrongStore -> null
+    is ArcOperation.Destroy, is ArcOperation.EndBorrow, is ArcOperation.Use, is ArcOperation.StrongStore -> null
 }
 
 private fun ArcOperation.replacingUse(from: ArcValue, to: ArcValue): ArcOperation = when (this) {
@@ -433,6 +433,8 @@ private fun ArcOperation.uses(value: ArcValue): Boolean = when (this) {
     is ArcOperation.Copy -> source == value
     is ArcOperation.Destroy -> this.value == value
     is ArcOperation.Borrow -> source == value
+    is ArcOperation.EndBorrow -> this.value == value
+    is ArcOperation.Use -> this.value == value
     is ArcOperation.StrongStore -> this.value == value
     is ArcOperation.StrongLoad -> false
 }
@@ -447,5 +449,5 @@ private fun ArcTerminator.successors(): List<ArcBlockId> = when (this) {
 
 private fun ArcOperation.isReferenceCountingOperation(): Boolean = when (this) {
     is ArcOperation.Copy, is ArcOperation.Destroy, is ArcOperation.StrongStore, is ArcOperation.StrongLoad -> true
-    is ArcOperation.Define, is ArcOperation.Borrow -> false
+    is ArcOperation.Define, is ArcOperation.Borrow, is ArcOperation.EndBorrow, is ArcOperation.Use -> false
 }

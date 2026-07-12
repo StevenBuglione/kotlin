@@ -13,6 +13,7 @@ import org.jetbrains.kotlin.backend.common.lower.createIrBuilder
 import org.jetbrains.kotlin.backend.konan.Context
 import org.jetbrains.kotlin.backend.konan.KonanFqNames
 import org.jetbrains.kotlin.backend.konan.MemoryModel
+import org.jetbrains.kotlin.backend.konan.binaryTypeIsReference
 import org.jetbrains.kotlin.ir.IrStatement
 import org.jetbrains.kotlin.ir.builders.declarations.buildVariable
 import org.jetbrains.kotlin.ir.builders.declarations.buildField
@@ -117,6 +118,7 @@ internal class ArcReferenceUsageLowering(private val context: Context) : BodyLow
         irBody.transformChildrenVoid(object : IrElementTransformerVoid() {
             override fun visitGetValue(expression: IrGetValue): IrExpression {
                 val storage = storageVariables[expression.symbol.owner] ?: return super.visitGetValue(expression)
+                context.recordArcReferenceLoadAccessor(container)
                 return context.arcReferenceLoad(
                     scope = container.symbol,
                     storage = IrGetValueImpl(
@@ -148,6 +150,7 @@ internal class ArcReferenceUsageLowering(private val context: Context) : BodyLow
                 expression.transformChildrenVoid(this)
                 val originalField = expression.symbol.owner
                 val kind = originalField.arcReferenceKind() ?: return expression
+                context.recordArcReferenceLoadAccessor(container)
                 val storageField = context.buildOrGetArcReferenceStorageField(originalField)
                 val rawStorage = IrGetFieldImpl(
                     expression.startOffset,
@@ -178,6 +181,18 @@ internal class ArcReferenceUsageLowering(private val context: Context) : BodyLow
                 )
             }
         })
+    }
+}
+
+private fun Context.recordArcReferenceLoadAccessor(container: IrDeclaration) {
+    val function = container as? IrSimpleFunction ?: return
+    if (function.returnType.binaryTypeIsReference()) {
+        val signature = function.symbol.signature ?: function.symbol.privateSignature
+        signature?.let { mapping.arcReferenceLoadAccessorSignatures += it }
+        if (signature == null) {
+            mapping.localArcReferenceLoadAccessorDeclarations +=
+                    (function.attributeOwnerId as? IrSimpleFunction ?: function)
+        }
     }
 }
 

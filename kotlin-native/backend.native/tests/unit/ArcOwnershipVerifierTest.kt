@@ -24,13 +24,75 @@ class ArcOwnershipVerifierTest {
         val plan = plan(
             ArcOperation.Define(owner, ArcOwnership.Owned),
             ArcOperation.Borrow(owner, borrowed),
+            ArcOperation.Use(borrowed),
             ArcOperation.StrongStore(storage, borrowed),
             ArcOperation.StrongLoad(storage, loaded),
             ArcOperation.Destroy(loaded),
+            ArcOperation.EndBorrow(borrowed),
             ArcOperation.Destroy(owner),
         )
 
         assertEquals(ArcOwnershipVerificationResult.Success, ArcOwnershipVerifier.verify(plan))
+    }
+
+    @Test
+    fun ownerCannotEndWhileBorrowIsLive() {
+        val owner = ArcValue("owner")
+        val borrowed = ArcValue("borrowed")
+        val result = ArcOwnershipVerifier.verify(
+            plan(
+                ArcOperation.Define(owner, ArcOwnership.Owned),
+                ArcOperation.Borrow(owner, borrowed),
+                ArcOperation.Destroy(owner),
+            )
+        )
+
+        assertFailureCode(result, ArcOwnershipViolationCode.OWNER_ENDED_WITH_LIVE_BORROW)
+        assertFailureCode(result, ArcOwnershipViolationCode.LIVE_BORROW_AT_EXIT)
+    }
+
+    @Test
+    fun borrowMustEndBeforeFunctionExit() {
+        val owner = ArcValue("owner")
+        val borrowed = ArcValue("borrowed")
+        val result = ArcOwnershipVerifier.verify(
+            plan(
+                ArcOperation.Define(owner, ArcOwnership.Owned),
+                ArcOperation.Borrow(owner, borrowed),
+            )
+        )
+
+        assertFailureCode(result, ArcOwnershipViolationCode.LIVE_BORROW_AT_EXIT)
+    }
+
+    @Test
+    fun useAfterEndBorrowIsRejected() {
+        val owner = ArcValue("owner")
+        val borrowed = ArcValue("borrowed")
+        val result = ArcOwnershipVerifier.verify(
+            plan(
+                ArcOperation.Define(owner, ArcOwnership.Owned),
+                ArcOperation.Borrow(owner, borrowed),
+                ArcOperation.EndBorrow(borrowed),
+                ArcOperation.Use(borrowed),
+                ArcOperation.Destroy(owner),
+            )
+        )
+
+        assertFailureCode(result, ArcOwnershipViolationCode.USE_AFTER_DESTROY)
+    }
+
+    @Test
+    fun endBorrowRejectsOrdinaryGuaranteedValue() {
+        val argument = ArcValue("argument")
+        val result = ArcOwnershipVerifier.verify(
+            plan(
+                operations = listOf(ArcOperation.EndBorrow(argument)),
+                entryValues = mapOf(argument to ArcOwnership.Guaranteed),
+            )
+        )
+
+        assertFailureCode(result, ArcOwnershipViolationCode.END_BORROW_OF_NON_BORROWED)
     }
 
     @Test

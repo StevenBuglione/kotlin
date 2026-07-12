@@ -226,6 +226,8 @@ internal class CodeGeneratorVisitor(
     // TODO: consider eliminating mutable state
     private var currentCodeContext: CodeContext = TopLevelCodeContext
     private var currentArcOwnedResultForwarding: org.jetbrains.kotlin.backend.konan.arc.ArcOwnedResultForwarding? = null
+    private var currentArcPromotionSlots: MutableList<LLVMValueRef>? = null
+    private var currentArcPromotionBoundary: IrExpression? = null
 
     private val intrinsicGeneratorEnvironment = object : IntrinsicGeneratorEnvironment {
         override val codegen: CodeGenerator
@@ -939,6 +941,29 @@ internal class CodeGeneratorVisitor(
     //-------------------------------------------------------------------------//
 
     private fun evaluateExpression(value: IrExpression, resultSlot: LLVMValueRef? = null): LLVMValueRef {
+        val opensPromotionBoundary = value in arcOwnership.scopedArcReferenceLoadBoundaries
+        if (!opensPromotionBoundary) return evaluateExpressionImpl(value, resultSlot)
+
+        val previousSlots = currentArcPromotionSlots
+        val previousBoundary = currentArcPromotionBoundary
+        val slots = mutableListOf<LLVMValueRef>()
+        currentArcPromotionSlots = slots
+        currentArcPromotionBoundary = value
+        try {
+            val result = evaluateExpressionImpl(value, resultSlot)
+            if (!functionGenerationContext.isAfterTerminator()) {
+                slots.asReversed().forEach { slot ->
+                    functionGenerationContext.storeStackRef(codegen.kNullObjHeaderPtr, slot)
+                }
+            }
+            return result
+        } finally {
+            currentArcPromotionSlots = previousSlots
+            currentArcPromotionBoundary = previousBoundary
+        }
+    }
+
+    private fun evaluateExpressionImpl(value: IrExpression, resultSlot: LLVMValueRef?): LLVMValueRef {
         updateBuilderDebugLocation(value)
         recordCoverage(value)
         when (value) {
@@ -1378,6 +1403,12 @@ internal class CodeGeneratorVisitor(
 
     private fun evaluateGetValue(value: IrGetValue, resultSlot: LLVMValueRef?): LLVMValueRef {
         context.log{"evaluateGetValue               : ${ir2string(value)}"}
+        if (resultSlot == null && value in arcOwnership.borrowedMutableReads) {
+            val variable = value.symbol.owner as IrVariable
+            val index = currentCodeContext.getDeclaredValue(variable)
+            require(index >= 0) { "ARC borrowed mutable read has no local slot: ${ir2string(value)}" }
+            return functionGenerationContext.vars.loadBorrowedMutableReference(index)
+        }
         return currentCodeContext.genGetValue(value.symbol.owner, resultSlot)
     }
 
@@ -1436,11 +1467,17 @@ internal class CodeGeneratorVisitor(
 
     private fun generateVariable(variable: IrVariable) {
         context.log{"generateVariable               : ${ir2string(variable)}"}
+        val forwardedMutableSlot = if (variable in arcOwnership.mutableConstructorInitializers) {
+            val index = this.currentCodeContext.genDeclareVariable(variable, null)
+            functionGenerationContext.vars.addressOf(index)
+        } else {
+            null
+        }
         val value = variable.initializer?.let {
-            val resultSlot = if (currentArcOwnedResultForwarding?.producer === variable) {
-                functionGenerationContext.returnSlot
-            } else {
-                null
+            val resultSlot = when {
+                forwardedMutableSlot != null -> forwardedMutableSlot
+                currentArcOwnedResultForwarding?.producer === variable -> functionGenerationContext.returnSlot
+                else -> null
             }
             val callSiteOrigin = (it as? IrBlock)?.origin as? InlinerExpressionLocationHint
             val inlineAtFunctionSymbol = callSiteOrigin?.inlineAtSymbol as? IrFunctionSymbol
@@ -1450,7 +1487,9 @@ internal class CodeGeneratorVisitor(
                 }
             } ?: evaluateExpression(it, resultSlot)
         }
-        this.currentCodeContext.genDeclareVariable(variable, value)
+        if (forwardedMutableSlot == null) {
+            this.currentCodeContext.genDeclareVariable(variable, value)
+        }
     }
 
     private fun CodeContext.genDeclareVariable(
@@ -2158,16 +2197,41 @@ internal class CodeGeneratorVisitor(
     private fun evaluateCall(value: IrFunctionAccessExpression, resultSlot: LLVMValueRef?): LLVMValueRef {
         context.log{"evaluateCall                   : ${ir2string(value)}"}
 
-        intrinsicGenerator.tryEvaluateSpecialCall(value, resultSlot)?.let { return it }
+        val requiredPromotionBoundary = (value as? IrCall)?.let { arcOwnership.scopedArcReferenceLoads[it] }
+        val scopedPromotionSlot = if (resultSlot == null && requiredPromotionBoundary != null) {
+            require(currentArcPromotionBoundary === requiredPromotionBoundary) {
+                "Scoped ARC reference load escaped its verified full-expression boundary"
+            }
+            functionGenerationContext.vars.createAnonymousSlot()
+        } else {
+            null
+        }
+        val effectiveResultSlot = scopedPromotionSlot ?: resultSlot
+
+        fun recordScopedPromotion() {
+            scopedPromotionSlot?.let {
+                val slots = requireNotNull(currentArcPromotionSlots) {
+                    "Scoped ARC reference load was generated outside a full-expression statement"
+                }
+                if (it !in slots) slots.add(it)
+            }
+        }
+
+        intrinsicGenerator.tryEvaluateSpecialCall(value, effectiveResultSlot)?.let {
+            recordScopedPromotion()
+            return it
+        }
 
         val args = evaluateExplicitArgs(value)
 
         updateBuilderDebugLocation(value)
-        return when (value) {
+        val result = when (value) {
             is IrDelegatingConstructorCall -> delegatingConstructorCall(value.symbol.owner, args)
-            is IrConstructorCall -> evaluateConstructorCall(value, args, resultSlot)
-            else -> evaluateFunctionCall(value as IrCall, args, resultLifetime(value), resultSlot)
+            is IrConstructorCall -> evaluateConstructorCall(value, args, effectiveResultSlot)
+            else -> evaluateFunctionCall(value as IrCall, args, resultLifetime(value), effectiveResultSlot)
         }
+        recordScopedPromotion()
+        return result
     }
 
     //-------------------------------------------------------------------------//

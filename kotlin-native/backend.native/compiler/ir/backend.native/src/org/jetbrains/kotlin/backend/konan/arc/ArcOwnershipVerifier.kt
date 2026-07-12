@@ -12,6 +12,9 @@ internal enum class ArcOwnershipViolationCode {
     USE_AFTER_DESTROY,
     UNKNOWN_VALUE,
     DESTROY_OF_NON_OWNED,
+    END_BORROW_OF_NON_BORROWED,
+    OWNER_ENDED_WITH_LIVE_BORROW,
+    LIVE_BORROW_AT_EXIT,
     LOAD_FROM_UNINITIALIZED_STORAGE,
     INCOMPATIBLE_PATH_STATES,
     LEAKED_OWNED_VALUE,
@@ -47,7 +50,11 @@ internal class ArcOwnershipVerificationException(
 ) : IllegalStateException("ARC ownership verification failed:\n${failure.render()}")
 
 internal object ArcOwnershipVerifier {
-    private data class ValueState(val ownership: ArcOwnership, val live: Boolean)
+    private data class ValueState(
+        val ownership: ArcOwnership,
+        val live: Boolean,
+        val borrowedFrom: ArcValue? = null,
+    )
 
     private data class PathState(
         val values: Map<ArcValue, ValueState>,
@@ -159,11 +166,11 @@ internal object ArcOwnershipVerifier {
         val values = state.values.toMutableMap()
         val storage = state.initializedStorage.toMutableSet()
 
-        fun define(value: ArcValue, ownership: ArcOwnership) {
+        fun define(value: ArcValue, ownership: ArcOwnership, borrowedFrom: ArcValue? = null) {
             if (value in values) {
                 violations += violation(plan, ArcOwnershipViolationCode.VALUE_ALREADY_DEFINED, block, index, operation.location, "$value")
             } else {
-                values[value] = ValueState(ownership, live = true)
+                values[value] = ValueState(ownership, live = true, borrowedFrom = borrowedFrom)
             }
         }
 
@@ -192,10 +199,40 @@ internal object ArcOwnershipVerifier {
                         "$operation destroys ${value.ownership}"
                     )
                 } else {
+                    if (values.any { (_, candidate) -> candidate.live && candidate.borrowedFrom == operation.value }) {
+                        violations += violation(
+                            plan, ArcOwnershipViolationCode.OWNER_ENDED_WITH_LIVE_BORROW,
+                            block, index, operation.location,
+                            "${operation.value} is destroyed while one of its borrows is live",
+                        )
+                    }
                     values[operation.value] = value.copy(live = false)
                 }
             }
-            is ArcOperation.Borrow -> live(operation.source)?.let { define(operation.result, ArcOwnership.Guaranteed) }
+            is ArcOperation.Borrow -> live(operation.source)?.let {
+                define(operation.result, ArcOwnership.Guaranteed, borrowedFrom = operation.source)
+            }
+            is ArcOperation.EndBorrow -> live(operation.value)?.let { value ->
+                if (value.borrowedFrom == null) {
+                    violations += violation(
+                        plan, ArcOwnershipViolationCode.END_BORROW_OF_NON_BORROWED,
+                        block, index, operation.location,
+                        "${operation.value} was not produced by Borrow",
+                    )
+                } else {
+                    if (values.any { (_, candidate) -> candidate.live && candidate.borrowedFrom == operation.value }) {
+                        violations += violation(
+                            plan, ArcOwnershipViolationCode.OWNER_ENDED_WITH_LIVE_BORROW,
+                            block, index, operation.location,
+                            "${operation.value} ends while a nested borrow is live",
+                        )
+                    }
+                    values[operation.value] = value.copy(live = false)
+                }
+            }
+            is ArcOperation.Use -> {
+                live(operation.value)
+            }
             is ArcOperation.StrongStore -> live(operation.value)?.let { storage += operation.storage }
             is ArcOperation.StrongLoad -> {
                 if (operation.storage !in storage) {
@@ -229,6 +266,12 @@ internal object ArcOwnershipVerifier {
             }
         }
         state.values.forEach { (value, valueState) ->
+            if (valueState.live && valueState.borrowedFrom != null) {
+                violations += violation(
+                    plan, ArcOwnershipViolationCode.LIVE_BORROW_AT_EXIT, block, index, null,
+                    "$value borrowed from ${valueState.borrowedFrom} remains live at exit",
+                )
+            }
             if (valueState.live && valueState.ownership == ArcOwnership.Owned && value != returned) {
                 violations += violation(
                     plan, ArcOwnershipViolationCode.LEAKED_OWNED_VALUE, block, index, null,
@@ -253,5 +296,5 @@ private fun ArcOperation.definedResult(): ArcValue? = when (this) {
     is ArcOperation.Copy -> result
     is ArcOperation.Borrow -> result
     is ArcOperation.StrongLoad -> result
-    is ArcOperation.Destroy, is ArcOperation.StrongStore -> null
+    is ArcOperation.Destroy, is ArcOperation.EndBorrow, is ArcOperation.Use, is ArcOperation.StrongStore -> null
 }

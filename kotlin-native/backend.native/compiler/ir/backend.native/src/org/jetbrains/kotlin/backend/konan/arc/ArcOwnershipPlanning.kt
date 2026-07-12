@@ -8,6 +8,7 @@ package org.jetbrains.kotlin.backend.konan.arc
 import org.jetbrains.kotlin.backend.konan.MemoryModel
 import org.jetbrains.kotlin.backend.konan.KonanFqNames
 import org.jetbrains.kotlin.backend.konan.binaryTypeIsReference
+import org.jetbrains.kotlin.backend.konan.descriptors.isBuiltInOperator
 import org.jetbrains.kotlin.backend.konan.ir.getSuperClassNotAny
 import org.jetbrains.kotlin.backend.konan.llvm.Lifetime
 import org.jetbrains.kotlin.backend.konan.NativeGenerationState
@@ -15,6 +16,8 @@ import org.jetbrains.kotlin.backend.konan.reportCompilationError
 import org.jetbrains.kotlin.ir.IrElement
 import org.jetbrains.kotlin.ir.declarations.IrFile
 import org.jetbrains.kotlin.ir.declarations.IrClass
+import org.jetbrains.kotlin.ir.declarations.IrDeclarationOrigin
+import org.jetbrains.kotlin.ir.declarations.IrFunction
 import org.jetbrains.kotlin.ir.declarations.IrSimpleFunction
 import org.jetbrains.kotlin.ir.declarations.IrVariable
 import org.jetbrains.kotlin.ir.expressions.IrCall
@@ -25,20 +28,29 @@ import org.jetbrains.kotlin.ir.expressions.IrExpression
 import org.jetbrains.kotlin.ir.expressions.IrGetField
 import org.jetbrains.kotlin.ir.expressions.IrGetObjectValue
 import org.jetbrains.kotlin.ir.expressions.IrGetValue
+import org.jetbrains.kotlin.ir.expressions.IrFunctionAccessExpression
 import org.jetbrains.kotlin.ir.expressions.IrReturn
 import org.jetbrains.kotlin.ir.expressions.IrSetField
 import org.jetbrains.kotlin.ir.expressions.IrStatementOrigin
+import org.jetbrains.kotlin.ir.expressions.IrTypeOperator
+import org.jetbrains.kotlin.ir.expressions.IrTypeOperatorCall
 import org.jetbrains.kotlin.ir.expressions.IrWhen
+import org.jetbrains.kotlin.ir.symbols.IrSimpleFunctionSymbol
 import org.jetbrains.kotlin.ir.types.isBoolean
 import org.jetbrains.kotlin.ir.types.isUnit
 import org.jetbrains.kotlin.ir.util.allParameters
 import org.jetbrains.kotlin.ir.util.constructedClass
 import org.jetbrains.kotlin.ir.util.fqNameForIrSerialization
+import org.jetbrains.kotlin.ir.util.getArgumentsWithIr
 import org.jetbrains.kotlin.ir.util.hasAnnotation
+import org.jetbrains.kotlin.ir.util.IdSignature
 import org.jetbrains.kotlin.ir.util.isElseBranch
+import org.jetbrains.kotlin.ir.util.isOverridable
 import org.jetbrains.kotlin.ir.visitors.IrElementVisitorVoid
 import org.jetbrains.kotlin.ir.visitors.acceptChildrenVoid
 import org.jetbrains.kotlin.ir.visitors.acceptVoid
+import java.util.Collections
+import java.util.IdentityHashMap
 
 internal data class ArcOwnershipPlanningInput(
     val module: org.jetbrains.kotlin.ir.declarations.IrModuleFragment,
@@ -73,9 +85,17 @@ internal data class ArcOwnershipPlanningReport(
  */
 internal data class ArcCodegenOwnershipPlan(
     val ownedResultForwarding: Map<IrSimpleFunction, ArcOwnedResultForwarding>,
+    val borrowedMutableReads: Set<IrGetValue>,
+    val mutableConstructorInitializers: Set<IrVariable>,
+    val scopedArcReferenceLoads: Map<IrCall, IrExpression>,
 ) {
+    val scopedArcReferenceLoadBoundaries: Set<IrExpression> =
+        Collections.newSetFromMap(IdentityHashMap<IrExpression, Boolean>()).apply {
+            addAll(scopedArcReferenceLoads.values)
+        }
+
     companion object {
-        val Empty = ArcCodegenOwnershipPlan(emptyMap())
+        val Empty = ArcCodegenOwnershipPlan(emptyMap(), emptySet(), emptySet(), emptyMap())
     }
 }
 
@@ -83,6 +103,25 @@ internal data class ArcOwnedResultForwarding(
     val producer: IrVariable,
     val returned: IrVariable,
 )
+
+/**
+ * A deliberately redundant checklist for the only mutable read that ARC codegen may borrow.
+ * Keeping this as a value object makes widening the authorization boundary an explicit change.
+ */
+internal data class ArcBorrowedMutableReadEligibility(
+    val arcEnabled: Boolean,
+    val debugInfoDisabled: Boolean,
+    val directKotlinCall: Boolean,
+    val lastExplicitArgument: Boolean,
+    val mutableLocalReference: Boolean,
+    val notCaptured: Boolean,
+    val strongStorage: Boolean,
+    val sideEffectFreeArgumentWrapper: Boolean,
+)
+
+internal fun ArcBorrowedMutableReadEligibility.isAuthorized(): Boolean =
+    arcEnabled && debugInfoDisabled && directKotlinCall && lastExplicitArgument &&
+            mutableLocalReference && notCaptured && strongStorage && sideEffectFreeArgumentWrapper
 
 internal data class ArcOwnershipClassificationCounts(
     val owned: Int = 0,
@@ -124,10 +163,37 @@ internal fun runArcOwnershipPlanning(
     var classifications = ArcOwnershipClassificationCounts()
     var optimization = ArcOwnershipOptimizationMetrics()
     val ownedResultForwarding = linkedMapOf<IrSimpleFunction, ArcOwnedResultForwarding>()
+    val borrowedMutableReads = linkedSetOf<IrGetValue>()
+    val mutableConstructorInitializers = linkedSetOf<IrVariable>()
+    val scopedArcReferenceLoads = linkedMapOf<IrCall, IrExpression>()
+    // ArcReferencesLowering removes the source annotation and may remove the property/accessor
+    // association before this planner runs. Discover exact rewritten function symbols first so
+    // call-site selection neither depends on declaration order nor guesses from lowered names.
+    val discoveredArcReferenceLoadAccessors = collectArcReferenceLoadAccessors(generationState, input.module)
+    val arcReferenceLoadAccessorSignatures = generationState.context.mapping.arcReferenceLoadAccessorSignatures +
+            discoveredArcReferenceLoadAccessors.mapNotNullTo(linkedSetOf()) { it.signature ?: it.privateSignature }
+    val localArcReferenceLoadAccessorDeclarations =
+            generationState.context.mapping.localArcReferenceLoadAccessorDeclarations +
+                    discoveredArcReferenceLoadAccessors.filter { it.signature == null && it.privateSignature == null }
+                        .mapTo(linkedSetOf()) {
+                            it.owner.attributeOwnerId as? IrSimpleFunction ?: it.owner
+                        }
     var skipped = 0
     input.module.files.forEach { file ->
         file.acceptChildrenVoid(object : IrElementVisitorVoid {
             override fun visitSimpleFunction(declaration: IrSimpleFunction) {
+                borrowedMutableReads += selectVerifiedBorrowedMutableReads(generationState, declaration)
+                mutableConstructorInitializers += selectVerifiedMutableConstructorInitializers(
+                    generationState,
+                    declaration,
+                    input.lifetimes,
+                )
+                scopedArcReferenceLoads += selectScopedArcReferenceLoads(
+                    generationState,
+                    declaration,
+                    arcReferenceLoadAccessorSignatures,
+                    localArcReferenceLoadAccessorDeclarations,
+                )
                 val builtPlan = CuratedArcOwnershipPlanBuilder(declaration, input.lifetimes).build()
                 if (builtPlan == null) {
                     skipped++
@@ -163,8 +229,404 @@ internal fun runArcOwnershipPlanning(
         plans,
         classifications,
         optimization,
-        ArcCodegenOwnershipPlan(ownedResultForwarding),
+        ArcCodegenOwnershipPlan(
+            ownedResultForwarding,
+            borrowedMutableReads,
+            mutableConstructorInitializers,
+            scopedArcReferenceLoads,
+        ),
     )
+}
+
+private fun collectArcReferenceLoadAccessors(
+    generationState: NativeGenerationState,
+    module: org.jetbrains.kotlin.ir.declarations.IrModuleFragment,
+): Set<IrSimpleFunctionSymbol> {
+    val weakLoad = generationState.context.ir.symbols.arcWeakReferenceLoad
+    val unownedLoad = generationState.context.ir.symbols.arcUnownedReferenceLoad
+    val accessors = linkedSetOf<IrSimpleFunctionSymbol>()
+    module.files.forEach { file ->
+        file.acceptChildrenVoid(object : IrElementVisitorVoid {
+            override fun visitSimpleFunction(declaration: IrSimpleFunction) {
+                if (declaration.returnType.binaryTypeIsReference()) {
+                    var containsArcReferenceLoad = false
+                    declaration.body?.acceptVoid(object : IrElementVisitorVoid {
+                        override fun visitElement(element: IrElement) {
+                            element.acceptChildrenVoid(this)
+                        }
+
+                        override fun visitFunction(declaration: IrFunction) = Unit
+
+                        override fun visitCall(expression: IrCall) {
+                            if (expression.symbol == weakLoad || expression.symbol == unownedLoad) {
+                                containsArcReferenceLoad = true
+                            }
+                            expression.acceptChildrenVoid(this)
+                        }
+                    })
+                    if (containsArcReferenceLoad) accessors += declaration.symbol
+                }
+                declaration.acceptChildrenVoid(this)
+            }
+        })
+    }
+    return accessors
+}
+
+/**
+ * Select ARC property promotions only inside non-escaping full-expression statements. Calls in
+ * declarations, assignments, returns, field stores, and throws retain the normal durable root.
+ */
+private fun selectScopedArcReferenceLoads(
+    generationState: NativeGenerationState,
+    function: IrSimpleFunction,
+    arcReferenceLoadAccessorSignatures: Set<IdSignature>,
+    localArcReferenceLoadAccessorDeclarations: Set<IrSimpleFunction>,
+): Map<IrCall, IrExpression> {
+    if (generationState.context.shouldContainDebugInfo()) return emptyMap()
+    val body = function.body as? org.jetbrains.kotlin.ir.expressions.IrBlockBody ?: return emptyMap()
+    val selected = linkedMapOf<IrCall, IrExpression>()
+    body.statements.filterIsInstance<IrExpression>().forEach { statement ->
+        var safe = true
+        val candidates = linkedMapOf<IrCall, IrExpression>()
+        val ancestors = mutableListOf<IrElement>()
+        statement.acceptVoid(object : IrElementVisitorVoid {
+            private fun descend(element: IrElement) {
+                ancestors += element
+                element.acceptChildrenVoid(this)
+                ancestors.removeAt(ancestors.lastIndex)
+            }
+
+            override fun visitElement(element: IrElement) {
+                descend(element)
+            }
+
+            override fun visitFunction(declaration: IrFunction) = Unit
+
+            override fun visitVariable(declaration: IrVariable) {
+                // Top-level source declarations are excluded before this visitor. Any immutable
+                // variable reached here is lexically contained in the accepted full expression,
+                // including inliner-generated parameter temporaries.
+                if (declaration.isVar) {
+                    safe = false
+                    return
+                }
+                descend(declaration)
+            }
+
+            override fun visitSetValue(expression: org.jetbrains.kotlin.ir.expressions.IrSetValue) {
+                safe = false
+            }
+
+            override fun visitSetField(expression: IrSetField) {
+                safe = false
+            }
+
+            override fun visitReturn(expression: IrReturn) {
+                // Lowered Unit/primitive functions commonly wrap their whole body in an implicit
+                // return. Traverse its value without treating the terminator as a lifetime
+                // boundary. Only an actual reference return from this function escapes.
+                if (expression.returnTargetSymbol == function.symbol && expression.value.type.binaryTypeIsReference()) {
+                    safe = false
+                } else {
+                    descend(expression.value)
+                }
+            }
+
+            override fun visitThrow(expression: org.jetbrains.kotlin.ir.expressions.IrThrow) {
+                // A throw outside a try exits this frame, whose LeaveFrame consumes all roots.
+                // Do not select promotions inside the thrown value, but keep normal-path sibling
+                // candidates eligible for their earlier non-reference boundaries.
+            }
+
+            override fun visitLoop(loop: org.jetbrains.kotlin.ir.expressions.IrLoop) {
+                safe = false
+            }
+
+            override fun visitSuspendableExpression(expression: org.jetbrains.kotlin.ir.expressions.IrSuspendableExpression) {
+                safe = false
+            }
+
+            override fun visitSuspensionPoint(expression: org.jetbrains.kotlin.ir.expressions.IrSuspensionPoint) {
+                safe = false
+            }
+
+            override fun visitTry(aTry: org.jetbrains.kotlin.ir.expressions.IrTry) {
+                safe = false
+            }
+
+            override fun visitCall(expression: IrCall) {
+                val property = expression.symbol.owner.correspondingPropertySymbol?.owner
+                val accessorSignature = expression.symbol.signature ?: expression.symbol.privateSignature
+                val canonicalAccessor = expression.symbol.owner.attributeOwnerId as? IrSimpleFunction ?: expression.symbol.owner
+                if (accessorSignature in arcReferenceLoadAccessorSignatures ||
+                    canonicalAccessor in localArcReferenceLoadAccessorDeclarations ||
+                    property != null && (property.annotations.hasAnnotation(KonanFqNames.arcWeak) ||
+                            property.annotations.hasAnnotation(KonanFqNames.arcUnowned)) ||
+                    expression.symbol == generationState.context.ir.symbols.arcWeakReferenceLoad ||
+                    expression.symbol == generationState.context.ir.symbols.arcUnownedReferenceLoad) {
+                    // Walk through reference-producing aliases/containers. A primitive or Unit
+                    // consumer cannot return the promoted reference raw. If none exists, the
+                    // verified top-level statement result is ignored, so its own normal exit is
+                    // the lifetime boundary.
+                    val boundary = ancestors.asReversed().filterIsInstance<IrExpression>()
+                        .firstOrNull {
+                            it !is IrReturn && it !is org.jetbrains.kotlin.ir.expressions.IrThrow &&
+                                    !it.type.binaryTypeIsReference()
+                        }
+                        ?: statement
+                    candidates[expression] = boundary
+                }
+                descend(expression)
+            }
+        })
+        if (safe && verifyScopedArcReferencePromotionProof(function)) selected += candidates
+    }
+    return selected
+}
+
+private fun verifyScopedArcReferencePromotionProof(function: IrSimpleFunction): Boolean {
+    val promotion = ArcValue("scoped_promotion")
+    val entry = ArcBlockId("entry")
+    val proof = ArcFunctionPlan(
+        functionName = "${function.fqNameForIrSerialization.asString()}#scoped-arc-reference",
+        entry = entry,
+        entryValues = emptyMap(),
+        entryInitializedStorage = emptySet(),
+        blocks = mapOf(
+            entry to ArcBasicBlock(
+                entry,
+                listOf(
+                    ArcOperation.Define(promotion, ArcOwnership.Owned),
+                    ArcOperation.Use(promotion),
+                    ArcOperation.Destroy(promotion),
+                ),
+                ArcTerminator.Return(),
+            )
+        ),
+    )
+    return ArcOwnershipVerifier.verify(proof) === ArcOwnershipVerificationResult.Success
+}
+
+/**
+ * Forward only a direct constructor allocation into its mutable owner's stack slot. This removes
+ * the otherwise anonymous allocation root without changing later mutable-load behavior.
+ */
+private fun selectVerifiedMutableConstructorInitializers(
+    generationState: NativeGenerationState,
+    function: IrSimpleFunction,
+    lifetimes: Map<IrElement, Lifetime>,
+): Set<IrVariable> {
+    if (generationState.context.shouldContainDebugInfo()) return emptySet()
+    val body = function.body ?: return emptySet()
+    val selected = linkedSetOf<IrVariable>()
+    body.acceptVoid(object : IrElementVisitorVoid {
+        override fun visitElement(element: IrElement) {
+            element.acceptChildrenVoid(this)
+        }
+
+        override fun visitFunction(declaration: IrFunction) = Unit
+
+        override fun visitVariable(declaration: IrVariable) {
+            val constructor = declaration.initializer?.unwrapDirectConstructor()
+            val constructorLifetime = constructor?.let { lifetimes[it] }
+            val eligible = declaration.isVar && declaration.type.binaryTypeIsReference() &&
+                    declaration.parent === function && constructor?.isDirectKotlinCall(generationState) == true &&
+                    constructorLifetime !== Lifetime.STACK && constructorLifetime !== Lifetime.LOCAL &&
+                    !declaration.hasAnnotation(KonanFqNames.arcWeak) &&
+                    !declaration.hasAnnotation(KonanFqNames.arcUnowned) &&
+                    !declaration.hasAnnotation(KonanFqNames.volatile)
+            if (eligible && verifyMutableConstructorInitializerProof(function, declaration)) {
+                selected += declaration
+            }
+            declaration.acceptChildrenVoid(this)
+        }
+    })
+    return selected
+}
+
+private fun IrExpression.unwrapDirectConstructor(): IrConstructorCall? = when (this) {
+    is IrConstructorCall -> this
+    is IrTypeOperatorCall -> if (operator == IrTypeOperator.IMPLICIT_CAST) argument.unwrapDirectConstructor() else null
+    else -> null
+}
+
+private fun verifyMutableConstructorInitializerProof(function: IrSimpleFunction, variable: IrVariable): Boolean {
+    val allocation = ArcValue("allocation_${variable.name}")
+    val slot = ArcStorage("local_${variable.name}")
+    val entry = ArcBlockId("entry")
+    val proof = ArcFunctionPlan(
+        functionName = "${function.fqNameForIrSerialization.asString()}#init-${variable.name}",
+        entry = entry,
+        entryValues = emptyMap(),
+        entryInitializedStorage = emptySet(),
+        blocks = mapOf(
+            entry to ArcBasicBlock(
+                entry,
+                listOf(
+                    ArcOperation.Define(allocation, ArcOwnership.Owned),
+                    ArcOperation.StrongStore(slot, allocation),
+                    ArcOperation.Destroy(allocation),
+                ),
+                ArcTerminator.Return(),
+            )
+        ),
+    )
+    return ArcOwnershipVerifier.verify(proof) === ArcOwnershipVerificationResult.Success
+}
+
+/**
+ * Selects a +0 load only when evaluation is bounded by a direct call that cannot observe the
+ * owner's stack slot. In particular, the read must be the final explicit argument, so no sibling
+ * expression can clear the mutable owner between the load and the call.
+ */
+private fun selectVerifiedBorrowedMutableReads(
+    generationState: NativeGenerationState,
+    function: IrSimpleFunction,
+): Set<IrGetValue> {
+    if (generationState.context.shouldContainDebugInfo()) return emptySet()
+    val body = function.body ?: return emptySet()
+    val selected = linkedSetOf<IrGetValue>()
+
+    body.acceptVoid(object : IrElementVisitorVoid {
+        override fun visitElement(element: IrElement) {
+            element.acceptChildrenVoid(this)
+        }
+
+        // A read of an outer mutable local is captured even if an earlier lowering has not boxed it.
+        override fun visitFunction(declaration: IrFunction) = Unit
+
+        override fun visitFunctionAccess(expression: IrFunctionAccessExpression) {
+            val arguments = expression.getArgumentsWithIr()
+            val (parameter, argument) = arguments.lastOrNull() ?: run {
+                expression.acceptChildrenVoid(this)
+                return
+            }
+            val read = argument.unwrapBorrowedMutableRead(generationState)
+            val variable = read?.symbol?.owner as? IrVariable
+            val directCall = expression.isDirectKotlinCall(generationState)
+            val mutableReference = variable?.let { it.isVar && it.type.binaryTypeIsReference() } == true &&
+                    parameter.type.binaryTypeIsReference()
+            val notCaptured = variable?.parent === function
+            val strongStorage = variable?.let {
+                !it.hasAnnotation(KonanFqNames.arcWeak) &&
+                        !it.hasAnnotation(KonanFqNames.arcUnowned) &&
+                        !it.hasAnnotation(KonanFqNames.volatile)
+            } == true
+            val eligibility = ArcBorrowedMutableReadEligibility(
+                arcEnabled = generationState.context.memoryModel == MemoryModel.ARC,
+                debugInfoDisabled = !generationState.context.shouldContainDebugInfo(),
+                directKotlinCall = directCall,
+                lastExplicitArgument = read != null,
+                mutableLocalReference = mutableReference,
+                notCaptured = notCaptured,
+                strongStorage = strongStorage,
+                sideEffectFreeArgumentWrapper = read != null,
+            )
+            if (read != null && eligibility.isAuthorized() && verifyBorrowedReadProof(function, variable!!)) {
+                selected += read
+            }
+            expression.acceptChildrenVoid(this)
+        }
+    })
+    return selected
+}
+
+private fun IrExpression.unwrapDirectMutableRead(): IrGetValue? = when (this) {
+    is IrGetValue -> this
+    is IrTypeOperatorCall -> if (operator == IrTypeOperator.IMPLICIT_CAST) argument.unwrapDirectMutableRead() else null
+    else -> null
+}
+
+private fun IrExpression.unwrapBorrowedMutableRead(generationState: NativeGenerationState): IrGetValue? =
+    unwrapDirectMutableRead() ?: (this as? IrBlock)?.unwrapLoweredCheckNotNull(generationState)
+
+/**
+ * Match only the three-statement block emitted by BuiltinOperatorLowering.lowerCheckNotNull:
+ * immutable temp initialization, `temp === null` throwing NPE, and the same temp as result.
+ * No arbitrary block, user call, or additional statement is accepted.
+ */
+private fun IrBlock.unwrapLoweredCheckNotNull(generationState: NativeGenerationState): IrGetValue? {
+    if (origin != null || statements.size != 3) return null
+    val temporary = statements[0] as? IrVariable ?: return null
+    if (temporary.origin != IrDeclarationOrigin.IR_TEMPORARY_VARIABLE || temporary.isVar) return null
+    val read = temporary.initializer?.unwrapDirectMutableRead() ?: return null
+    val guard = statements[1] as? IrWhen ?: return null
+    if (!guard.type.isUnit() || guard.branches.size != 1) return null
+    val branch = guard.branches.single()
+    val failure = branch.result as? IrCall ?: return null
+    if (failure.symbol != generationState.context.ir.symbols.throwNullPointerException ||
+        failure.getArgumentsWithIr().isNotEmpty()
+    ) return null
+    if (!branch.condition.isGeneratedNullCheckOf(generationState, temporary)) return null
+    val result = statements[2] as? IrGetValue ?: return null
+    if (result.symbol != temporary.symbol) return null
+    return read
+}
+
+private fun IrExpression.isGeneratedNullCheckOf(
+    generationState: NativeGenerationState,
+    temporary: IrVariable,
+): Boolean {
+    val equality = this as? IrCall ?: return false
+    if (equality.symbol != generationState.context.irBuiltIns.eqeqeqSymbol) return false
+    val operands = equality.getArgumentsWithIr().map { it.second }
+    if (operands.size != 2) return false
+    return (operands[0].isReinterpretedGetOf(generationState, temporary) && operands[1] is IrConst<*> &&
+            (operands[1] as IrConst<*>).value == null) ||
+            (operands[1].isReinterpretedGetOf(generationState, temporary) && operands[0] is IrConst<*> &&
+                    (operands[0] as IrConst<*>).value == null)
+}
+
+private fun IrExpression.isReinterpretedGetOf(
+    generationState: NativeGenerationState,
+    temporary: IrVariable,
+): Boolean = when (this) {
+    is IrGetValue -> symbol == temporary.symbol
+    is IrTypeOperatorCall -> operator == IrTypeOperator.IMPLICIT_CAST &&
+            argument.isReinterpretedGetOf(generationState, temporary)
+    is IrCall -> symbol == generationState.context.ir.symbols.reinterpret &&
+            getArgumentsWithIr().singleOrNull()?.second?.isReinterpretedGetOf(generationState, temporary) == true
+    else -> false
+}
+
+private fun IrFunctionAccessExpression.isDirectKotlinCall(generationState: NativeGenerationState): Boolean = when (this) {
+    is IrConstructorCall -> !symbol.owner.isExternal && !symbol.owner.constructedClass.isExternal
+    is IrCall -> {
+        val callee = symbol.owner
+        !callee.isExternal && !callee.isBuiltInOperator && !callee.isSuspend &&
+                (!callee.isOverridable || superQualifierSymbol != null) &&
+                symbol != generationState.context.ir.symbols.arcWeakReferenceLoad &&
+                symbol != generationState.context.ir.symbols.arcUnownedReferenceLoad
+    }
+    else -> false
+}
+
+/** Tie the side-plan authorization to the same path verifier used for larger ownership plans. */
+private fun verifyBorrowedReadProof(function: IrSimpleFunction, variable: IrVariable): Boolean {
+    val owner = ArcValue("owner_${variable.name}")
+    val borrowed = ArcValue("borrowed_${variable.name}")
+    val entry = ArcBlockId("entry")
+    val proof = ArcFunctionPlan(
+        functionName = "${function.fqNameForIrSerialization.asString()}#borrow-${variable.name}",
+        entry = entry,
+        entryValues = emptyMap(),
+        entryInitializedStorage = emptySet(),
+        blocks = mapOf(
+            entry to ArcBasicBlock(
+                entry,
+                listOf(
+                    ArcOperation.Define(owner, ArcOwnership.Owned),
+                    ArcOperation.Borrow(owner, borrowed),
+                    ArcOperation.Use(borrowed, ArcPlanLocation("guaranteed call argument")),
+                    ArcOperation.EndBorrow(borrowed),
+                    ArcOperation.Destroy(owner),
+                ),
+                ArcTerminator.Return(),
+            )
+        ),
+    )
+    return ArcOwnershipVerifier.verify(proof) === ArcOwnershipVerificationResult.Success
 }
 
 private data class CuratedArcFunctionPlan(

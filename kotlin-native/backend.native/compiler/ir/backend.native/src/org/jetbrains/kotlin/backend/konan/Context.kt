@@ -28,6 +28,7 @@ import org.jetbrains.kotlin.ir.declarations.*
 import org.jetbrains.kotlin.ir.symbols.IrFunctionSymbol
 import org.jetbrains.kotlin.ir.types.IrTypeSystemContext
 import org.jetbrains.kotlin.ir.types.IrTypeSystemContextImpl
+import org.jetbrains.kotlin.ir.util.IdSignature
 import org.jetbrains.kotlin.ir.util.irMessageLogger
 import org.jetbrains.kotlin.name.FqName
 import org.jetbrains.kotlin.name.Name
@@ -48,6 +49,8 @@ internal class NativeMapping : DefaultMapping() {
     val partiallyLoweredInlineFunctions = mutableMapOf<IrFunctionSymbol, IrFunction>()
     val arcReferenceFieldToStorageField =
             DefaultDelegateFactory.newDeclarationToDeclarationMapping<IrField, IrField>()
+    val arcReferenceLoadAccessorSignatures = mutableSetOf<IdSignature>()
+    val localArcReferenceLoadAccessorDeclarations = mutableSetOf<IrSimpleFunction>()
     val outerThisCacheAccessors = DefaultDelegateFactory.newDeclarationToDeclarationMapping<IrClass, IrSimpleFunction>()
     val lateinitPropertyCacheAccessors = DefaultDelegateFactory.newDeclarationToDeclarationMapping<IrProperty, IrSimpleFunction>()
     val objectInstanceGetter = DefaultDelegateFactory.newDeclarationToDeclarationMapping<IrClass, IrSimpleFunction>()

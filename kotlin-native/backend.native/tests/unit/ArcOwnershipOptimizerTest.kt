@@ -106,6 +106,7 @@ class ArcOwnershipOptimizerTest {
                 ArcOperation.Borrow(copied, borrowed),
                 ArcOperation.StrongStore(ArcStorage("directField"), copied),
                 ArcOperation.StrongStore(ArcStorage("borrowedField"), borrowed),
+                ArcOperation.EndBorrow(borrowed),
                 ArcOperation.Destroy(copied),
                 ArcOperation.Destroy(source),
             ),
@@ -119,6 +120,7 @@ class ArcOwnershipOptimizerTest {
                 ArcOperation.Borrow(source, borrowed),
                 ArcOperation.StrongStore(ArcStorage("directField"), source),
                 ArcOperation.StrongStore(ArcStorage("borrowedField"), borrowed),
+                ArcOperation.EndBorrow(borrowed),
                 ArcOperation.Destroy(source),
             ),
             result.plan.blocks.getValue(entry).operations,
@@ -195,16 +197,14 @@ class ArcOwnershipOptimizerTest {
     }
 
     @Test
-    fun keepsContainedCopyWhenBorrowEscapesItsLifetime() {
+    fun keepsBalancedBorrowIntervalWhenThereIsNoCopyToEliminate() {
         val source = ArcValue("source")
-        val copied = ArcValue("copied")
         val borrowed = ArcValue("borrowed")
         val input = plan(
             operations = listOf(
-                ArcOperation.Copy(source, copied),
-                ArcOperation.Borrow(copied, borrowed),
-                ArcOperation.Destroy(copied),
+                ArcOperation.Borrow(source, borrowed),
                 ArcOperation.StrongStore(ArcStorage("field"), borrowed),
+                ArcOperation.EndBorrow(borrowed),
                 ArcOperation.Destroy(source),
             ),
             entryValues = mapOf(source to ArcOwnership.Owned),
@@ -435,6 +435,7 @@ class ArcOwnershipOptimizerTest {
                     ArcOperation.Copy(source, copied),
                     ArcOperation.Borrow(copied, borrowed),
                     ArcOperation.StrongStore(field, borrowed),
+                    ArcOperation.EndBorrow(borrowed),
                     ArcOperation.Destroy(copied),
                     ArcOperation.Destroy(source),
                 ),

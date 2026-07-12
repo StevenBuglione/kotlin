@@ -131,7 +131,7 @@ targetList.forEach { targetName ->
             cacheRoot = project.buildDir.resolve("cache/$targetName").absolutePath
 
             cachedLibraries = mapOf(distDir.resolve("klib/common/stdlib") to
-                    distDir.resolve("klib/cache/${target}-g$cacheKind/stdlib-cache"))
+                    distDir.resolve("klib/cache/${target}-g$cacheKind${cacheMemoryModel.flavorSuffix}/stdlib-cache"))
 
             dependsOn(copyTask)
             dependsOn(":kotlin-native:${targetName}CrossDistStdlib")

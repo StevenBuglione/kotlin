@@ -3380,6 +3380,44 @@ standaloneTest("arc_owned_result_forwarding") {
     source = "codegen/arc/ownedResultForwarding.kt"
 }
 
+standaloneTest("arc_weak_and_unowned_storage") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    useGoldenData = true
+    source = "codegen/arc/weakAndUnownedStorage.kt"
+}
+
+standaloneTest("arc_weak_and_unowned_storage_opt") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    useGoldenData = true
+    source = "codegen/arc/weakAndUnownedStorage.kt"
+    flags = ["-opt"]
+}
+
+standaloneTest("arc_expired_captured_unowned") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    source = "codegen/arc/expiredCapturedUnowned.kt"
+    expectedExitStatusChecker = { it != 0 }
+    outputChecker = { output ->
+        output.contains("attempted to access an expired @ArcUnowned reference")
+    }
+}
+
+linkTest("arc_references_inline_capture_klib") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    source = "runtime/memory/arc_references_klib/main.kt"
+    lib = "runtime/memory/arc_references_klib/library.kt"
+    outputChecker = { it.contains("ARC_REFERENCE_KLIB_OK\n") }
+}
+
+linkTest("arc_references_inline_capture_k2_klib") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    source = "runtime/memory/arc_references_klib/main.kt"
+    lib = "runtime/memory/arc_references_klib/library.kt"
+    flags = ['-Xskip-prerelease-check']
+    libraryFlags = ['-language-version', '2.0']
+    outputChecker = { it.contains("ARC_REFERENCE_KLIB_OK\n") }
+}
+
 tasks.register("arc_ownership_planning_unit_if", KonanDriverTest) {
     enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
     flags = ["-opt", "-Xverbose-phases=ArcOwnershipAnalysis"]
@@ -3547,37 +3585,6 @@ standaloneTest("gcStats") {
     flags = ['-tr', "-Xbinary=gcSchedulerType=disabled"]
     enabled = isExperimentalMM && !isNoopGC && !isAggressiveGC
 }
-    }
-}
-
-standaloneTest("mpp1") {
-    disabled = isK2(project) // KT-56071
-    source = "codegen/mpp/mpp1.kt"
-    flags = ['-tr', '-Xmulti-platform']
-}
-
-linkTest("mpp2") {
-    disabled = isK2(project) // KT-56071
-    useGoldenData = true
-    source = "codegen/mpp/mpp2.kt"
-    lib = "codegen/mpp/libmpp2.kt"
-    flags = ['-Xmulti-platform']
-}
-
-standaloneTest("mpp_default_args") {
-    // Disabled in one stage mode because of KT-57747
-    disabled = !twoStageEnabled || isK2(project) // KT-56071
-    source = "codegen/mpp/mpp_default_args.kt"
-    flags = ['-tr', '-Xmulti-platform']
-}
-
-standaloneTest("mpp_optional_expectation") {
-    source = "codegen/mpp/mpp_optional_expectation.kt"
-    def outputRoot = project.ext.testOutputLocal.toString()
-    def srcPath = "$outputRoot/$name/mpp_optional_expectation.kt".with {
-        isWindows() ? it.replaceAll("/", "\\\\") : it
-    }
-    flags = [
 
 standaloneTest("stress_gc_allocations") {
     // TODO: Support obtaining peak RSS on more platforms.
@@ -3609,6 +3616,37 @@ standaloneTest("array_out_of_memory") {
             expectedExitStatusChecker = { it != 0 }
             outputChecker = { s -> s.contains("Out of memory trying to allocate") }
             break;
+    }
+}
+
+standaloneTest("mpp1") {
+    disabled = isK2(project) // KT-56071
+    source = "codegen/mpp/mpp1.kt"
+    flags = ['-tr', '-Xmulti-platform']
+}
+
+linkTest("mpp2") {
+    disabled = isK2(project) // KT-56071
+    useGoldenData = true
+    source = "codegen/mpp/mpp2.kt"
+    lib = "codegen/mpp/libmpp2.kt"
+    flags = ['-Xmulti-platform']
+}
+
+standaloneTest("mpp_default_args") {
+    // Disabled in one stage mode because of KT-57747
+    disabled = !twoStageEnabled || isK2(project) // KT-56071
+    source = "codegen/mpp/mpp_default_args.kt"
+    flags = ['-tr', '-Xmulti-platform']
+}
+
+standaloneTest("mpp_optional_expectation") {
+    source = "codegen/mpp/mpp_optional_expectation.kt"
+    def outputRoot = project.ext.testOutputLocal.toString()
+    def srcPath = "$outputRoot/$name/mpp_optional_expectation.kt".with {
+        isWindows() ? it.replaceAll("/", "\\\\") : it
+    }
+    flags = [
             '-Xmulti-platform',
             "-Xcommon-sources=$srcPath"
     ]
@@ -6575,6 +6613,13 @@ fileCheckTest("filecheck_smoke0") {
 fileCheckTest("filecheck_arc_owned_result_forwarding") {
     enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
     annotatedSource = project.file('filecheck/arc_owned_result_forwarding.kt')
+    extraOpts = ["-opt"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_borrowed_mutable_call_argument") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('filecheck/arc_borrowed_mutable_call_argument.kt')
     extraOpts = ["-opt"]
     phaseToCheck = "Codegen"
 }

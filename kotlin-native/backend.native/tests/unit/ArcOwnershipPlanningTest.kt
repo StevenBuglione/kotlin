@@ -8,11 +8,37 @@
 package org.jetbrains.kotlin.backend.konan.arc
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ArcOwnershipPlanningTest {
+    @Test
+    fun borrowedMutableReadAuthorizationRequiresEverySafetyGate() {
+        val eligible = ArcBorrowedMutableReadEligibility(
+            arcEnabled = true,
+            debugInfoDisabled = true,
+            directKotlinCall = true,
+            lastExplicitArgument = true,
+            mutableLocalReference = true,
+            notCaptured = true,
+            strongStorage = true,
+            sideEffectFreeArgumentWrapper = true,
+        )
+
+        assertTrue(eligible.isAuthorized())
+        assertFalse(eligible.copy(arcEnabled = false).isAuthorized())
+        assertFalse(eligible.copy(debugInfoDisabled = false).isAuthorized())
+        assertFalse(eligible.copy(directKotlinCall = false).isAuthorized())
+        assertFalse(eligible.copy(lastExplicitArgument = false).isAuthorized())
+        assertFalse(eligible.copy(mutableLocalReference = false).isAuthorized())
+        assertFalse(eligible.copy(notCaptured = false).isAuthorized())
+        assertFalse(eligible.copy(strongStorage = false).isAuthorized())
+        assertFalse(eligible.copy(sideEffectFreeArgumentWrapper = false).isAuthorized())
+    }
+
     @Test
     fun unitIfPlanBuildsVerifiedDiamondAndExposesCfgCopyOptimization() {
         val source = ArcValue("source")

@@ -139,6 +139,18 @@ internal class VariableManager(val functionGenerationContext: FunctionGeneration
         return variables[index].load(resultSlot)
     }
 
+    /**
+     * Loads a mutable reference without creating an anonymous owning root. Callers must have a
+     * verified use interval contained by the lifetime of this stack slot.
+     */
+    fun loadBorrowedMutableReference(index: Int): LLVMValueRef {
+        val record = variables[index]
+        require(record is SlotRecord && record.isVar && record.refSlot) {
+            "Borrowed mutable load requires a mutable reference slot, got $record"
+        }
+        return functionGenerationContext.loadSlot(record.address, false, null)
+    }
+
     fun store(value: LLVMValueRef, index: Int) {
         variables[index].store(value)
     }

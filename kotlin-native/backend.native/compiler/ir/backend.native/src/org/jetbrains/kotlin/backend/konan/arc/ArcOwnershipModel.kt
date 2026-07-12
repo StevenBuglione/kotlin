@@ -57,6 +57,18 @@ internal sealed class ArcOperation(open val location: ArcPlanLocation?) {
         override val location: ArcPlanLocation? = null,
     ) : ArcOperation(location)
 
+    /** Ends the lexical use interval introduced by [Borrow]. */
+    data class EndBorrow(
+        val value: ArcValue,
+        override val location: ArcPlanLocation? = null,
+    ) : ArcOperation(location)
+
+    /** A non-consuming use, such as passing a guaranteed argument to a Kotlin call. */
+    data class Use(
+        val value: ArcValue,
+        override val location: ArcPlanLocation? = null,
+    ) : ArcOperation(location)
+
     data class StrongStore(
         val storage: ArcStorage,
         val value: ArcValue,
