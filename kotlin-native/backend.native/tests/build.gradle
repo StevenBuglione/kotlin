@@ -3380,6 +3380,13 @@ standaloneTest("arc_owned_result_forwarding") {
     source = "codegen/arc/ownedResultForwarding.kt"
 }
 
+standaloneTest("arc_borrowed_array_element") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    flags = ["-opt"]
+    outputChecker = { it.contains("OK\n") }
+    source = "codegen/arc/borrowedArrayElement.kt"
+}
+
 standaloneTest("arc_weak_and_unowned_storage") {
     enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
     useGoldenData = true
@@ -6632,6 +6639,13 @@ fileCheckTest("filecheck_arc_owned_result_forwarding") {
 fileCheckTest("filecheck_arc_borrowed_mutable_call_argument") {
     enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
     annotatedSource = project.file('filecheck/arc_borrowed_mutable_call_argument.kt')
+    extraOpts = ["-opt"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_borrowed_array_element") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('filecheck/arc_borrowed_array_element.kt')
     extraOpts = ["-opt"]
     phaseToCheck = "Codegen"
 }

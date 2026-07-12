@@ -2230,6 +2230,11 @@ internal class CodeGeneratorVisitor(
     private fun evaluateCall(value: IrFunctionAccessExpression, resultSlot: LLVMValueRef?): LLVMValueRef {
         context.log{"evaluateCall                   : ${ir2string(value)}"}
 
+        if (value is IrCall && value in arcOwnership.borrowedArrayElementCalls) {
+            require(resultSlot == null) { "Borrowed Array.get cannot initialize an owning result slot" }
+            return evaluateBorrowedArrayElement(value)
+        }
+
         val requiredPromotionBoundary = (value as? IrCall)?.let { arcOwnership.scopedArcReferenceLoads[it] }
         val scopedPromotionSlot = if (resultSlot == null && requiredPromotionBoundary != null) {
             require(currentArcPromotionBoundary === requiredPromotionBoundary) {
@@ -2265,6 +2270,30 @@ internal class CodeGeneratorVisitor(
         }
         recordScopedPromotion()
         return result
+    }
+
+    /**
+     * Emit the runtime's bounds-checked +0 Array projection. The ownership planner guarantees that
+     * the fresh local array remains alive and its element slot cannot be overwritten until the
+     * immediate Kotlin consumer returns or unwinds.
+     */
+    private fun evaluateBorrowedArrayElement(value: IrCall): LLVMValueRef {
+        require(value.symbol == context.ir.symbols.arrayGet[context.ir.symbols.array])
+        val args = evaluateExplicitArgs(value)
+        require(args.size == 2)
+        require(args[0].type == codegen.kObjHeaderPtr && args[1].type == llvm.int32Type)
+        updateBuilderDebugLocation(value)
+        val borrowedGetter = llvm.externalNativeRuntimeFunction(
+            "Kotlin_Array_get_borrowed",
+            LlvmRetType(codegen.kObjHeaderPtr),
+            listOf(LlvmParamType(codegen.kObjHeaderPtr), LlvmParamType(llvm.int32Type)),
+        )
+        return functionGenerationContext.call(
+            borrowedGetter,
+            args,
+            exceptionHandler = currentCodeContext.exceptionHandler,
+            verbatim = true,
+        )
     }
 
     //-------------------------------------------------------------------------//

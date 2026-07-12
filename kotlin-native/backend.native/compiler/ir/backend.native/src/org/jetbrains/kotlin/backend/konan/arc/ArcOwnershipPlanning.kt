@@ -9,7 +9,10 @@ import org.jetbrains.kotlin.backend.konan.MemoryModel
 import org.jetbrains.kotlin.backend.konan.KonanFqNames
 import org.jetbrains.kotlin.backend.konan.binaryTypeIsReference
 import org.jetbrains.kotlin.backend.konan.descriptors.isBuiltInOperator
+import org.jetbrains.kotlin.backend.konan.descriptors.isTypedIntrinsic
 import org.jetbrains.kotlin.backend.konan.ir.getSuperClassNotAny
+import org.jetbrains.kotlin.backend.konan.ir.KonanNameConventions
+import org.jetbrains.kotlin.backend.konan.isObjCBridgeBased
 import org.jetbrains.kotlin.backend.konan.llvm.Lifetime
 import org.jetbrains.kotlin.backend.konan.NativeGenerationState
 import org.jetbrains.kotlin.backend.konan.reportCompilationError
@@ -36,6 +39,7 @@ import org.jetbrains.kotlin.ir.expressions.IrTypeOperator
 import org.jetbrains.kotlin.ir.expressions.IrTypeOperatorCall
 import org.jetbrains.kotlin.ir.expressions.IrWhen
 import org.jetbrains.kotlin.ir.symbols.IrSimpleFunctionSymbol
+import org.jetbrains.kotlin.ir.types.getClass
 import org.jetbrains.kotlin.ir.types.isBoolean
 import org.jetbrains.kotlin.ir.types.isUnit
 import org.jetbrains.kotlin.ir.util.allParameters
@@ -46,6 +50,7 @@ import org.jetbrains.kotlin.ir.util.hasAnnotation
 import org.jetbrains.kotlin.ir.util.IdSignature
 import org.jetbrains.kotlin.ir.util.isElseBranch
 import org.jetbrains.kotlin.ir.util.isOverridable
+import org.jetbrains.kotlin.ir.util.isReal
 import org.jetbrains.kotlin.ir.visitors.IrElementVisitorVoid
 import org.jetbrains.kotlin.ir.visitors.acceptChildrenVoid
 import org.jetbrains.kotlin.ir.visitors.acceptVoid
@@ -87,6 +92,7 @@ internal data class ArcCodegenOwnershipPlan(
     val ownedResultForwarding: Map<IrSimpleFunction, ArcOwnedResultForwarding>,
     val borrowedGuaranteedAliases: Set<IrVariable>,
     val borrowedMutableReads: Set<IrGetValue>,
+    val borrowedArrayElementCalls: Set<IrCall>,
     val mutableConstructorInitializers: Set<IrVariable>,
     val scopedArcReferenceLoads: Map<IrCall, IrExpression>,
 ) {
@@ -96,7 +102,7 @@ internal data class ArcCodegenOwnershipPlan(
         }
 
     companion object {
-        val Empty = ArcCodegenOwnershipPlan(emptyMap(), emptySet(), emptySet(), emptySet(), emptyMap())
+        val Empty = ArcCodegenOwnershipPlan(emptyMap(), emptySet(), emptySet(), emptySet(), emptySet(), emptyMap())
     }
 }
 
@@ -147,6 +153,45 @@ internal fun ArcBorrowedMutableReadEligibility.isAuthorized(): Boolean =
             mutableLocalReference && notCaptured && strongStorage && sideEffectFreeArgumentWrapper &&
             ownerNotAssignedInSuffix && callFreeSuffix && nonSuspendingSuffix && nonThrowingSuffix &&
             linearControlFlowSuffix
+
+/**
+ * Authorization for replacing the owning Array.get ABI with the ARC-only borrowed projection ABI.
+ * Every item is intentionally explicit: widening one part of the projection lifetime must not
+ * silently weaken the owner, use-site, or exceptional-edge proof.
+ */
+internal data class ArcBorrowedArrayElementEligibility(
+    val arcEnabled: Boolean,
+    val optimizationsEnabled: Boolean,
+    val debugInfoDisabled: Boolean,
+    val nonSuspendFunction: Boolean,
+    val exactReferenceArrayGet: Boolean,
+    val immediateKotlinConsumer: Boolean,
+    val referenceConsumerParameter: Boolean,
+    val strongLocalValOwner: Boolean,
+    val exactFreshStackArrayAllocation: Boolean,
+    val ownerNotCaptured: Boolean,
+    val ownerNeverAssigned: Boolean,
+    val ownerNeverAliased: Boolean,
+    val ownerNeverReturned: Boolean,
+    val ownerNeverEscaped: Boolean,
+    val arrayNeverMutated: Boolean,
+    val onlyVerifiedOwnerReads: Boolean,
+    val suffixDoesNotObserveOwner: Boolean,
+    val callFreeSuffix: Boolean,
+    val nonSuspendingSuffix: Boolean,
+    val nonThrowingSuffix: Boolean,
+    val linearControlFlowSuffix: Boolean,
+    val ownerLivesThroughNormalAndUnwindEdges: Boolean,
+)
+
+internal fun ArcBorrowedArrayElementEligibility.isAuthorized(): Boolean =
+    arcEnabled && optimizationsEnabled && debugInfoDisabled && nonSuspendFunction &&
+            exactReferenceArrayGet && immediateKotlinConsumer && referenceConsumerParameter &&
+            strongLocalValOwner && exactFreshStackArrayAllocation && ownerNotCaptured &&
+            ownerNeverAssigned && ownerNeverAliased && ownerNeverReturned && ownerNeverEscaped &&
+            arrayNeverMutated && onlyVerifiedOwnerReads && suffixDoesNotObserveOwner &&
+            callFreeSuffix && nonSuspendingSuffix && nonThrowingSuffix && linearControlFlowSuffix &&
+            ownerLivesThroughNormalAndUnwindEdges
 
 /** A deliberately exact authorization boundary for representing an unmodified `var` as a borrowed SSA value. */
 internal data class ArcBorrowedGuaranteedAliasEligibility(
@@ -211,6 +256,7 @@ internal fun runArcOwnershipPlanning(
     val ownedResultForwarding = linkedMapOf<IrSimpleFunction, ArcOwnedResultForwarding>()
     val borrowedGuaranteedAliases = linkedSetOf<IrVariable>()
     val borrowedMutableReads = linkedSetOf<IrGetValue>()
+    val borrowedArrayElementCalls = linkedSetOf<IrCall>()
     val mutableConstructorInitializers = linkedSetOf<IrVariable>()
     val scopedArcReferenceLoads = linkedMapOf<IrCall, IrExpression>()
     // ArcReferencesLowering removes the source annotation and may remove the property/accessor
@@ -235,6 +281,11 @@ internal fun runArcOwnershipPlanning(
                     generationState,
                     declaration,
                     guaranteedAliases,
+                )
+                borrowedArrayElementCalls += selectVerifiedBorrowedArrayElementCalls(
+                    generationState,
+                    declaration,
+                    input.lifetimes,
                 )
                 mutableConstructorInitializers += selectVerifiedMutableConstructorInitializers(
                     generationState,
@@ -287,6 +338,7 @@ internal fun runArcOwnershipPlanning(
             ownedResultForwarding,
             borrowedGuaranteedAliases,
             borrowedMutableReads,
+            borrowedArrayElementCalls,
             mutableConstructorInitializers,
             scopedArcReferenceLoads,
         ),
@@ -695,6 +747,7 @@ private fun verifyGuaranteedAliasEliminationProof(function: IrSimpleFunction, va
 
 private data class ArcArgumentSuffixAnalysis(
     var ownerAssigned: Boolean = false,
+    var ownerObserved: Boolean = false,
     var containsCall: Boolean = false,
     var containsSuspension: Boolean = false,
     var containsThrow: Boolean = false,
@@ -725,6 +778,10 @@ private fun analyzeBorrowedArgumentSuffix(
             override fun visitSetValue(expression: org.jetbrains.kotlin.ir.expressions.IrSetValue) {
                 if (expression.symbol == variable.symbol) analysis.ownerAssigned = true
                 expression.acceptChildrenVoid(this)
+            }
+
+            override fun visitGetValue(expression: IrGetValue) {
+                if (expression.symbol == variable.symbol) analysis.ownerObserved = true
             }
 
             override fun visitFunctionAccess(expression: IrFunctionAccessExpression) {
@@ -802,6 +859,270 @@ private fun collectVariablesCapturedByNestedFunctions(function: IrSimpleFunction
         }
     })
     return captured
+}
+
+private data class ArcBorrowedArrayElementCandidate(
+    val consumer: IrFunctionAccessExpression,
+    val parameterReference: Boolean,
+    val arrayGet: IrCall,
+    val owner: IrVariable,
+    val suffix: ArcArgumentSuffixAnalysis,
+)
+
+private data class ArcArrayOwnerUseAnalysis(
+    var assigned: Boolean = false,
+    var aliased: Boolean = false,
+    var returned: Boolean = false,
+    var escaped: Boolean = false,
+    var mutated: Boolean = false,
+    var onlyVerifiedReads: Boolean = true,
+)
+
+/**
+ * Borrow an element only from one exact, nonescaping local Array allocation. The complete set of
+ * reads of the owner is audited by identity: apart from the selected gets, only Array.size reads
+ * used before the element projection are accepted. This deliberately rejects parameters, fields,
+ * aliases, stored arrays, captures, and any shape whose lifetime depends on interprocedural facts.
+ */
+private fun selectVerifiedBorrowedArrayElementCalls(
+    generationState: NativeGenerationState,
+    function: IrSimpleFunction,
+    lifetimes: Map<IrElement, Lifetime>,
+): Set<IrCall> {
+    if (generationState.context.memoryModel != MemoryModel.ARC ||
+        !generationState.context.config.optimizationsEnabled ||
+        generationState.context.shouldContainDebugInfo() || function.isSuspend
+    ) return emptySet()
+    val body = function.body ?: return emptySet()
+    val symbols = generationState.context.ir.symbols
+    val exactArrayGet = symbols.arrayGet[symbols.array] ?: return emptySet()
+    val exactArraySize = symbols.arraySize[symbols.array] ?: return emptySet()
+    val exactArraySet = symbols.arraySet[symbols.array] ?: return emptySet()
+    val capturedVariables = collectVariablesCapturedByNestedFunctions(function)
+    val candidates = mutableListOf<ArcBorrowedArrayElementCandidate>()
+
+    body.acceptVoid(object : IrElementVisitorVoid {
+        override fun visitElement(element: IrElement) {
+            element.acceptChildrenVoid(this)
+        }
+
+        override fun visitFunction(declaration: IrFunction) = Unit
+
+        override fun visitFunctionAccess(expression: IrFunctionAccessExpression) {
+            val arguments = expression.getArgumentsWithIr()
+            arguments.forEachIndexed { index, (parameter, argument) ->
+                val arrayGet = argument as? IrCall ?: return@forEachIndexed
+                if (arrayGet.symbol != exactArrayGet || !arrayGet.type.binaryTypeIsReference()) return@forEachIndexed
+                val ownerRead = arrayGet.dispatchReceiver as? IrGetValue ?: return@forEachIndexed
+                val owner = ownerRead.symbol.owner as? IrVariable ?: return@forEachIndexed
+                val suffix = analyzeBorrowedArgumentSuffix(arguments.drop(index + 1).map { it.second }, owner)
+                candidates += ArcBorrowedArrayElementCandidate(
+                    expression,
+                    parameter.type.binaryTypeIsReference(),
+                    arrayGet,
+                    owner,
+                    suffix,
+                )
+            }
+            expression.acceptChildrenVoid(this)
+        }
+    })
+    if (candidates.isEmpty()) return emptySet()
+
+    val selected = linkedSetOf<IrCall>()
+    candidates.groupBy { it.owner }.forEach { (owner, ownerCandidates) ->
+        val allowedReads = Collections.newSetFromMap(IdentityHashMap<IrGetValue, Boolean>())
+        ownerCandidates.mapNotNullTo(allowedReads) { it.arrayGet.dispatchReceiver as? IrGetValue }
+        body.acceptVoid(object : IrElementVisitorVoid {
+            override fun visitElement(element: IrElement) {
+                element.acceptChildrenVoid(this)
+            }
+
+            override fun visitFunction(declaration: IrFunction) = Unit
+
+            override fun visitCall(expression: IrCall) {
+                if (expression.symbol == exactArraySize) {
+                    val receiver = expression.dispatchReceiver as? IrGetValue
+                    if (receiver?.symbol == owner.symbol) allowedReads += receiver
+                }
+                expression.acceptChildrenVoid(this)
+            }
+        })
+
+        val uses = ArcArrayOwnerUseAnalysis()
+        body.acceptVoid(object : IrElementVisitorVoid {
+            override fun visitElement(element: IrElement) {
+                element.acceptChildrenVoid(this)
+            }
+
+            override fun visitFunction(declaration: IrFunction) = Unit
+
+            override fun visitVariable(declaration: IrVariable) {
+                if (declaration !== owner && declaration.initializer?.unwrapDirectMutableRead()?.symbol == owner.symbol) {
+                    uses.aliased = true
+                }
+                declaration.acceptChildrenVoid(this)
+            }
+
+            override fun visitReturn(expression: IrReturn) {
+                if (expression.value.unwrapDirectMutableRead()?.symbol == owner.symbol) uses.returned = true
+                expression.acceptChildrenVoid(this)
+            }
+
+            override fun visitSetValue(expression: org.jetbrains.kotlin.ir.expressions.IrSetValue) {
+                if (expression.symbol == owner.symbol) uses.assigned = true
+                expression.acceptChildrenVoid(this)
+            }
+
+            override fun visitCall(expression: IrCall) {
+                if (expression.symbol == exactArraySet &&
+                    (expression.dispatchReceiver as? IrGetValue)?.symbol == owner.symbol
+                ) uses.mutated = true
+                if (expression.symbol != exactArrayGet && expression.symbol != exactArraySize &&
+                    expression.getArgumentsWithIr().any { (_, argument) ->
+                        argument.unwrapDirectMutableRead()?.symbol == owner.symbol
+                    }
+                ) uses.escaped = true
+                expression.acceptChildrenVoid(this)
+            }
+
+            override fun visitGetValue(expression: IrGetValue) {
+                if (expression.symbol == owner.symbol && expression !in allowedReads) {
+                    uses.onlyVerifiedReads = false
+                }
+            }
+        })
+
+        val strongLocalValOwner = !owner.isVar && owner.parent === function &&
+                owner.type.getClass()?.symbol == symbols.array &&
+                !owner.hasAnnotation(KonanFqNames.arcWeak) &&
+                !owner.hasAnnotation(KonanFqNames.arcUnowned) &&
+                !owner.hasAnnotation(KonanFqNames.volatile)
+        val exactFreshStackAllocation = owner.initializer?.isCanonicalFreshStackArrayInitializer(
+            symbols.arrayOf,
+            symbols.array,
+            exactArraySet,
+            lifetimes,
+        ) == true
+        val commonOwnerProof = strongLocalValOwner && exactFreshStackAllocation &&
+                owner !in capturedVariables && !uses.assigned && !uses.aliased && !uses.returned &&
+                !uses.escaped && !uses.mutated && uses.onlyVerifiedReads
+
+        ownerCandidates.forEach { candidate ->
+            val eligibility = ArcBorrowedArrayElementEligibility(
+                arcEnabled = generationState.context.memoryModel == MemoryModel.ARC,
+                optimizationsEnabled = generationState.context.config.optimizationsEnabled,
+                debugInfoDisabled = !generationState.context.shouldContainDebugInfo(),
+                nonSuspendFunction = !function.isSuspend,
+                exactReferenceArrayGet = candidate.arrayGet.symbol == exactArrayGet &&
+                        candidate.arrayGet.type.binaryTypeIsReference(),
+                immediateKotlinConsumer = candidate.consumer.isKotlinBorrowConsumer(generationState),
+                referenceConsumerParameter = candidate.parameterReference,
+                strongLocalValOwner = strongLocalValOwner,
+                exactFreshStackArrayAllocation = exactFreshStackAllocation,
+                ownerNotCaptured = owner !in capturedVariables,
+                ownerNeverAssigned = !uses.assigned,
+                ownerNeverAliased = !uses.aliased,
+                ownerNeverReturned = !uses.returned,
+                ownerNeverEscaped = !uses.escaped,
+                arrayNeverMutated = !uses.mutated,
+                onlyVerifiedOwnerReads = uses.onlyVerifiedReads,
+                suffixDoesNotObserveOwner = !candidate.suffix.ownerObserved,
+                callFreeSuffix = !candidate.suffix.containsCall,
+                nonSuspendingSuffix = !candidate.suffix.containsSuspension,
+                nonThrowingSuffix = !candidate.suffix.containsThrow,
+                linearControlFlowSuffix = !candidate.suffix.containsControlFlow,
+                ownerLivesThroughNormalAndUnwindEdges = commonOwnerProof &&
+                        verifyBorrowedArrayElementProof(function, owner),
+            )
+            if (eligibility.isAuthorized()) selected += candidate.arrayGet
+        }
+    }
+    return selected
+}
+
+private fun IrExpression.isCanonicalFreshStackArrayInitializer(
+    arrayOfSymbol: IrSimpleFunctionSymbol,
+    arraySymbol: org.jetbrains.kotlin.ir.symbols.IrClassSymbol,
+    arraySet: IrSimpleFunctionSymbol,
+    lifetimes: Map<IrElement, Lifetime>,
+): Boolean {
+    val arrayOf = this as? IrCall ?: return false
+    if (arrayOf.symbol != arrayOfSymbol || arrayOf.dispatchReceiver != null ||
+        arrayOf.extensionReceiver != null || arrayOf.type.getClass()?.symbol != arraySymbol
+    ) return false
+    val block = arrayOf.getArgumentsWithIr().singleOrNull()?.second as? IrBlock ?: return false
+    if (block.type.getClass()?.symbol != arraySymbol || block.statements.size < 2) return false
+    val result = block.statements.last() as? IrGetValue ?: return false
+    val arrayVariable = result.symbol.owner as? IrVariable ?: return false
+    val allocation = arrayVariable.initializer as? IrConstructorCall ?: return false
+    if (allocation.symbol.owner.constructedClass.symbol != arraySymbol || lifetimes[allocation] !== Lifetime.STACK) {
+        return false
+    }
+    val allocationIndex = block.statements.indexOfFirst { it === arrayVariable }
+    if (allocationIndex < 0 || allocationIndex == block.statements.lastIndex) return false
+    // Canonical VarargLowering evaluates element temporaries, creates one Array, initializes only
+    // that Array's slots, and returns the exact allocation variable. No branch or alternate Array
+    // source can satisfy this structural result-provenance proof.
+    if (block.statements.take(allocationIndex).any {
+        it !is IrVariable || it.type.getClass()?.symbol == arraySymbol
+    }) return false
+    return block.statements.subList(allocationIndex + 1, block.statements.lastIndex).all { statement ->
+        val set = statement as? IrCall ?: return@all false
+        val receiver = set.dispatchReceiver as? IrGetValue
+        receiver?.symbol == arrayVariable.symbol &&
+                (set.symbol == arraySet || set.symbol.owner.name == KonanNameConventions.setWithoutBoundCheck)
+    }
+}
+
+private fun IrFunctionAccessExpression.isKotlinBorrowConsumer(generationState: NativeGenerationState): Boolean = when (this) {
+    is IrConstructorCall -> false
+    is IrCall -> {
+        val callee = symbol.owner
+        callee.isReal && !callee.isExternal && !callee.isBuiltInOperator && !callee.isTypedIntrinsic &&
+                !callee.isObjCBridgeBased() && !callee.isSuspend &&
+                symbol != generationState.context.ir.symbols.arcWeakReferenceLoad &&
+                symbol != generationState.context.ir.symbols.arcUnownedReferenceLoad
+    }
+    else -> false
+}
+
+private fun verifyBorrowedArrayElementProof(function: IrSimpleFunction, ownerVariable: IrVariable): Boolean {
+    val owner = ArcValue("array_owner_${ownerVariable.name}")
+    val element = ArcValue("borrowed_element_${ownerVariable.name}")
+    val entry = ArcBlockId("entry")
+    val invoke = ArcBlockId("invoke")
+    val normal = ArcBlockId("normal")
+    val unwind = ArcBlockId("unwind")
+    val proof = ArcFunctionPlan(
+        functionName = "${function.fqNameForIrSerialization.asString()}#borrow-array-${ownerVariable.name}",
+        entry = entry,
+        entryValues = emptyMap(),
+        entryInitializedStorage = emptySet(),
+        blocks = linkedMapOf(
+            entry to ArcBasicBlock(
+                entry,
+                listOf(ArcOperation.Define(owner, ArcOwnership.Owned), ArcOperation.Borrow(owner, element)),
+                ArcTerminator.Jump(invoke),
+            ),
+            invoke to ArcBasicBlock(
+                invoke,
+                listOf(ArcOperation.Use(element, ArcPlanLocation("immediate Kotlin consumer"))),
+                ArcTerminator.Branch(normal, unwind),
+            ),
+            normal to ArcBasicBlock(
+                normal,
+                listOf(ArcOperation.EndBorrow(element), ArcOperation.Destroy(owner)),
+                ArcTerminator.Return(),
+            ),
+            unwind to ArcBasicBlock(
+                unwind,
+                listOf(ArcOperation.EndBorrow(element), ArcOperation.Destroy(owner)),
+                ArcTerminator.Throw,
+            ),
+        ),
+    )
+    return ArcOwnershipVerifier.verify(proof) === ArcOwnershipVerificationResult.Success
 }
 
 /**

@@ -136,6 +136,12 @@ OBJ_GETTER(Kotlin_Array_get, KConstRef thiz, KInt index) {
   RETURN_OBJ(*Kotlin_Array_get_value(thiz, index));
 }
 
+// Internal ARC ABI. The compiler must prove that the returned reference remains
+// borrowed from a live array for the complete use scope.
+KRef Kotlin_Array_get_borrowed(KConstRef thiz, KInt index) {
+  return *Kotlin_Array_get_value(thiz, index);
+}
+
 OBJ_GETTER(Kotlin_Array_get_without_BoundCheck, KConstRef thiz, KInt index){
   RETURN_OBJ(*Kotlin_Array_get_value<false>(thiz, index));
 }

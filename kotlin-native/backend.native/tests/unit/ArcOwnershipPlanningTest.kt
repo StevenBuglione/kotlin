@@ -76,6 +76,58 @@ class ArcOwnershipPlanningTest {
     }
 
     @Test
+    fun borrowedArrayElementAuthorizationRequiresEverySafetyGate() {
+        val eligible = ArcBorrowedArrayElementEligibility(
+            arcEnabled = true,
+            optimizationsEnabled = true,
+            debugInfoDisabled = true,
+            nonSuspendFunction = true,
+            exactReferenceArrayGet = true,
+            immediateKotlinConsumer = true,
+            referenceConsumerParameter = true,
+            strongLocalValOwner = true,
+            exactFreshStackArrayAllocation = true,
+            ownerNotCaptured = true,
+            ownerNeverAssigned = true,
+            ownerNeverAliased = true,
+            ownerNeverReturned = true,
+            ownerNeverEscaped = true,
+            arrayNeverMutated = true,
+            onlyVerifiedOwnerReads = true,
+            suffixDoesNotObserveOwner = true,
+            callFreeSuffix = true,
+            nonSuspendingSuffix = true,
+            nonThrowingSuffix = true,
+            linearControlFlowSuffix = true,
+            ownerLivesThroughNormalAndUnwindEdges = true,
+        )
+
+        assertTrue(eligible.isAuthorized())
+        assertFalse(eligible.copy(arcEnabled = false).isAuthorized())
+        assertFalse(eligible.copy(optimizationsEnabled = false).isAuthorized())
+        assertFalse(eligible.copy(debugInfoDisabled = false).isAuthorized())
+        assertFalse(eligible.copy(nonSuspendFunction = false).isAuthorized())
+        assertFalse(eligible.copy(exactReferenceArrayGet = false).isAuthorized())
+        assertFalse(eligible.copy(immediateKotlinConsumer = false).isAuthorized())
+        assertFalse(eligible.copy(referenceConsumerParameter = false).isAuthorized())
+        assertFalse(eligible.copy(strongLocalValOwner = false).isAuthorized())
+        assertFalse(eligible.copy(exactFreshStackArrayAllocation = false).isAuthorized())
+        assertFalse(eligible.copy(ownerNotCaptured = false).isAuthorized())
+        assertFalse(eligible.copy(ownerNeverAssigned = false).isAuthorized())
+        assertFalse(eligible.copy(ownerNeverAliased = false).isAuthorized())
+        assertFalse(eligible.copy(ownerNeverReturned = false).isAuthorized())
+        assertFalse(eligible.copy(ownerNeverEscaped = false).isAuthorized())
+        assertFalse(eligible.copy(arrayNeverMutated = false).isAuthorized())
+        assertFalse(eligible.copy(onlyVerifiedOwnerReads = false).isAuthorized())
+        assertFalse(eligible.copy(suffixDoesNotObserveOwner = false).isAuthorized())
+        assertFalse(eligible.copy(callFreeSuffix = false).isAuthorized())
+        assertFalse(eligible.copy(nonSuspendingSuffix = false).isAuthorized())
+        assertFalse(eligible.copy(nonThrowingSuffix = false).isAuthorized())
+        assertFalse(eligible.copy(linearControlFlowSuffix = false).isAuthorized())
+        assertFalse(eligible.copy(ownerLivesThroughNormalAndUnwindEdges = false).isAuthorized())
+    }
+
+    @Test
     fun borrowedGuaranteedAliasAuthorizationRequiresEverySafetyGate() {
         val eligible = ArcBorrowedGuaranteedAliasEligibility(
             arcEnabled = true,
