@@ -22,6 +22,7 @@ import org.jetbrains.kotlin.backend.konan.insertAliasToEntryPoint
 import org.jetbrains.kotlin.backend.konan.llvm.coverage.runCoveragePass
 import org.jetbrains.kotlin.backend.konan.llvm.verifyModule
 import org.jetbrains.kotlin.backend.konan.optimizations.RemoveRedundantSafepointsPass
+import org.jetbrains.kotlin.backend.konan.optimizations.coalesceAdjacentArcReturnUpdates
 import org.jetbrains.kotlin.backend.konan.optimizations.prepareArcFrameElision
 import org.jetbrains.kotlin.backend.konan.optimizations.removeMultipleThreadDataLoads
 import org.jetbrains.kotlin.backend.konan.optimizations.removeEmptyArcFrames
@@ -106,6 +107,15 @@ internal val LTOBitcodeOptimizationPhase = optimizationPipelinePass(
         pipeline = ::LTOOptimizationPipeline
 )
 
+internal val CoalesceAdjacentArcReturnUpdatesPhase = createSimpleNamedCompilerPhase<OptimizationState, LLVMModuleRef>(
+        name = "CoalesceAdjacentArcReturnUpdates",
+        description = "Remove literally adjacent identical ARC return-slot updates after LTO",
+        postactions = getDefaultLlvmModuleActions(),
+) { context, module ->
+    val removed = coalesceAdjacentArcReturnUpdates(module)
+    context.log { "Removed $removed adjacent identical ARC return-slot update(s)" }
+}
+
 internal val ThreadSanitizerPhase = optimizationPipelinePass(
         name = "ThreadSanitizer",
         description = "Prepare to run with thread sanitizer",
@@ -187,6 +197,8 @@ internal fun <T : BitcodePostProcessingContext> PhaseEngine<T>.runBitcodePostPro
             !context.coverage.enabled
     val arcFrameElisionRequested = arcFrameElisionConfigurationAllows &&
             context.config.flexiblePhaseConfig.isEnabled(RemoveEmptyArcFramesPhase)
+    val arcReturnUpdateCoalescingRequested = context.config.memoryModel == MemoryModel.ARC &&
+            context.config.optimizationsEnabled
     useContext(OptimizationState(context.config, optimizationConfig)) {
         val module = this@runBitcodePostProcessing.context.llvmModule
         it.runPhase(MandatoryBitcodeLLVMPostprocessingPhase, module)
@@ -221,6 +233,13 @@ internal fun <T : BitcodePostProcessingContext> PhaseEngine<T>.runBitcodePostPro
         // User-visible phase checkpoint for dumps and verification. The
         // mutation above is deliberately not independently disable-able.
         it.runPhase(RemoveEmptyArcFramesPhase, module, disable = !arcFrameElisionActive)
+        // Empty-frame finalization can make formerly separated return-slot updates literally
+        // adjacent. Run the exact-pair scanner at that first safe point, still before sanitizers.
+        it.runPhase(
+                CoalesceAdjacentArcReturnUpdatesPhase,
+                module,
+                disable = !arcReturnUpdateCoalescingRequested,
+        )
         when (context.config.sanitizer) {
             SanitizerKind.THREAD -> it.runPhase(ThreadSanitizerPhase, module)
             SanitizerKind.ADDRESS -> it.runPhase(AddressSanitizerPhase, module)

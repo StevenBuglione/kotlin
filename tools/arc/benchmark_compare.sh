@@ -11,17 +11,27 @@ expected_baseline=3db61efe5e892bf27115f1ebcab957d903067ed4
 source="$root/tools/arc/fixtures/benchmark.kt"
 reporter="$root/tools/arc/benchmark_report.py"
 artifacts="$state/artifacts"
-repetitions=${ARC_BENCH_REPETITIONS:-9}
-warmups=${ARC_BENCH_WARMUPS:-1}
-compile_repetitions=${ARC_BENCH_COMPILE_REPETITIONS:-3}
+quick=${ARC_BENCH_QUICK:-0}
+[[ "$quick" == 0 || "$quick" == 1 ]] || { echo "ARC_BENCH_QUICK must be 0 or 1" >&2; exit 2; }
+if [[ "$quick" == 1 ]]; then
+    repetitions=${ARC_BENCH_REPETITIONS:-3}
+    warmups=${ARC_BENCH_WARMUPS:-0}
+    compile_repetitions=${ARC_BENCH_COMPILE_REPETITIONS:-1}
+else
+    repetitions=${ARC_BENCH_REPETITIONS:-9}
+    warmups=${ARC_BENCH_WARMUPS:-1}
+    compile_repetitions=${ARC_BENCH_COMPILE_REPETITIONS:-3}
+fi
 
 [[ "$repetitions" =~ ^[0-9]+$ && $repetitions -ge 3 && $((repetitions % 2)) -eq 1 ]] || {
     echo "ARC_BENCH_REPETITIONS must be an odd integer of at least 3" >&2
     exit 2
 }
 [[ "$warmups" =~ ^[0-9]+$ ]] || { echo "ARC_BENCH_WARMUPS must be a nonnegative integer" >&2; exit 2; }
-[[ "$compile_repetitions" =~ ^[0-9]+$ && $compile_repetitions -ge 3 && $((compile_repetitions % 2)) -eq 1 ]] || {
-    echo "ARC_BENCH_COMPILE_REPETITIONS must be an odd integer of at least 3" >&2
+minimum_compile_repetitions=3
+[[ "$quick" == 1 ]] && minimum_compile_repetitions=1
+[[ "$compile_repetitions" =~ ^[0-9]+$ && $compile_repetitions -ge $minimum_compile_repetitions && $((compile_repetitions % 2)) -eq 1 ]] || {
+    echo "ARC_BENCH_COMPILE_REPETITIONS must be an odd integer of at least $minimum_compile_repetitions" >&2
     exit 2
 }
 [[ -f "$source" && -x /usr/bin/time ]] || { echo "benchmark fixture and /usr/bin/time are required" >&2; exit 1; }
@@ -243,6 +253,7 @@ inputs = {
     "repetitions": int(repetitions),
     "warmups": int(warmups),
     "compileRepetitions": int(compile_repetitions),
+    "quickDiagnostic": os.environ.get("ARC_BENCH_QUICK", "0") == "1",
     "executionPrefix": affinity.split(),
     "scenarios": scenarios.split(),
     "logicalAllocationDefinition": "Fixture-declared source-level object, array, closure, continuation, and exception creations per invocation.",

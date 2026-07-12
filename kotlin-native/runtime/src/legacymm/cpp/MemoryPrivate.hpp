@@ -462,6 +462,9 @@ void EnterFrameArc(ObjHeader** start, int parameters, int count) RUNTIME_NOTHROW
 void LeaveFrameArc(ObjHeader** start, int parameters, int count) RUNTIME_NOTHROW;
 void SetCurrentFrameArc(ObjHeader** start) RUNTIME_NOTHROW;
 void MoveReferenceIntoReturnSlotArc(ObjHeader** returnSlot, ObjHeader* object) RUNTIME_NOTHROW;
+size_t Kotlin_ArcRecycledContainerCountForTests(MemoryState* state) RUNTIME_NOTHROW;
+size_t Kotlin_ArcRecycledContainerSizeForTests(MemoryState* state, size_t index) RUNTIME_NOTHROW;
+int Kotlin_ArcAllocatedContainerCountForTests() RUNTIME_NOTHROW;
 #endif
 
 void ReleaseHeapRef(const ObjHeader* object) RUNTIME_NOTHROW;

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
+from pathlib import PurePosixPath
 import shlex
 import shutil
 import subprocess
@@ -38,6 +39,24 @@ MACHINE_PROFILES = {
         "ARC_REMOTE_GIT": "/home/olfa/codex-kotlin-rust",
         "ARC_MAX_WORKERS": "16",
     },
+    "ci2-runtime": {
+        "ARC_REMOTE": "olfa@10.10.10.12",
+        "ARC_REMOTE_DIR": "/home/olfa/codex-kotlin-arc-ci2-runtime",
+        "ARC_REMOTE_GIT": "/home/olfa/codex-kotlin-rust",
+        "ARC_MAX_WORKERS": "8",
+    },
+    "primary-ssa": {
+        "ARC_REMOTE": "olfa@10.10.10.8",
+        "ARC_REMOTE_DIR": "/home/olfa/codex-kotlin-arc-ssa",
+        "ARC_REMOTE_GIT": "/home/olfa/codex-kotlin-rust",
+        "ARC_MAX_WORKERS": "14",
+    },
+    "primary-interop": {
+        "ARC_REMOTE": "olfa@10.10.10.8",
+        "ARC_REMOTE_DIR": "/home/olfa/codex-kotlin-arc-interop",
+        "ARC_REMOTE_GIT": "/home/olfa/codex-kotlin-rust",
+        "ARC_MAX_WORKERS": "12",
+    },
 }
 EXCLUDED_PATHS = (
     ".arc-runs",
@@ -46,7 +65,7 @@ EXCLUDED_PATHS = (
 )
 PROFILES = (
     "dist", "runtime", "sanity", "full", "arc-smoke", "arc-stress", "arc-race", "arc-race-tsan",
-    "arc-unowned-death", "arc-no-collector", "arc-frame-elision-unit",
+    "arc-unowned-death", "arc-no-collector", "arc-frame-elision-unit", "arc-return-update-coalescing-unit",
     "arc-field-projection", "arc-rooted-loop", "arc-deinit-synthetic-root",
     "arc-sanitize", "arc-sanitize-asan", "arc-sanitize-ubsan", "arc-sanitize-tsan",
     "arc-bench-candidate", "arc-bench-baseline", "arc-bench",
@@ -54,6 +73,7 @@ PROFILES = (
 BENCHMARK_ENVIRONMENT = (
     "ARC_BENCH_BUILD_WORKERS", "ARC_BENCH_REPETITIONS", "ARC_BENCH_WARMUPS",
     "ARC_BENCH_COMPILE_REPETITIONS", "ARC_BENCH_SCENARIOS", "ARC_BENCH_CPU",
+    "ARC_BENCH_QUICK",
     "ARC_BENCH_SCENARIO_REGRESSION_PERCENT", "ARC_BENCH_THROUGHPUT_FLOOR_PERCENT",
     "ARC_BENCH_RSS_LIMIT_PERCENT", "ARC_BENCH_SIZE_LIMIT_PERCENT", "ARC_BENCH_ENFORCE",
     "ARC_BENCH_OBJDUMP",
@@ -142,7 +162,25 @@ def remote_init() -> None:
     remote("init", setting("ARC_BASE_REF", DEFAULT_BASE_REF))
 
 
-def create_snapshot_ref() -> tuple[str, str]:
+def snapshot_pathspecs(paths: list[str] | None) -> list[str] | None:
+    if paths is None:
+        return None
+    result: list[str] = []
+    for value in paths:
+        normalized = value.replace("\\", "/").removeprefix("./")
+        path = PurePosixPath(normalized)
+        if not normalized or path.is_absolute() or ".." in path.parts:
+            raise SystemExit(f"invalid snapshot path: {value}")
+        if any(normalized == excluded or normalized.startswith(excluded + "/") for excluded in EXCLUDED_PATHS):
+            raise SystemExit(f"snapshot path is excluded: {value}")
+        if normalized not in result:
+            result.append(normalized)
+    if not result:
+        raise SystemExit("path-scoped snapshot requires at least one path")
+    return result
+
+
+def create_snapshot_ref(paths: list[str] | None = None) -> tuple[str, str]:
     """Create a commit of the worktree without reading or modifying the real index."""
     token = uuid.uuid4().hex
     reference = f"refs/codex/arc/snapshots/{token}"
@@ -153,12 +191,16 @@ def create_snapshot_ref() -> tuple[str, str]:
     environment["GIT_INDEX_FILE"] = index_name
     try:
         run(["git", "read-tree", "HEAD"], env=environment)
-        exclusions = [
-            pattern
-            for path in EXCLUDED_PATHS
-            for pattern in (f":(exclude){path}", f":(exclude){path}/**")
-        ]
-        run(["git", "add", "-A", "--", ".", *exclusions], env=environment)
+        scoped_paths = snapshot_pathspecs(paths)
+        if scoped_paths is None:
+            exclusions = [
+                pattern
+                for path in EXCLUDED_PATHS
+                for pattern in (f":(exclude){path}", f":(exclude){path}/**")
+            ]
+            run(["git", "add", "-A", "--", ".", *exclusions], env=environment)
+        else:
+            run(["git", "add", "-A", "--", *(f":(literal){path}" for path in scoped_paths)], env=environment)
         tree = output(["git", "write-tree"], env=environment)
         commit = output(
             ["git", "commit-tree", tree, "-p", "HEAD", "-m", f"Codex ARC snapshot {token}"],
@@ -176,8 +218,8 @@ def remote_url() -> str:
     return f"ssh://{host}{directory}/.git"
 
 
-def remote_snapshot() -> None:
-    reference, commit = create_snapshot_ref()
+def remote_snapshot(paths: list[str] | None = None) -> None:
+    reference, commit = create_snapshot_ref(paths)
     url = remote_url()
     pushed = False
     try:
@@ -236,6 +278,8 @@ def profile_command(profile: str) -> list[str]:
         return ["bash", "tools/arc/run_fixture.sh", "no-collector"]
     if profile == "arc-frame-elision-unit":
         return ["bash", "tools/arc/run_frame_elision_unit.sh"]
+    if profile == "arc-return-update-coalescing-unit":
+        return ["bash", "tools/arc/run_return_update_coalescing_unit.sh"]
     if profile == "arc-field-projection":
         return gradle + [
             ":kotlin-native:backend.native:tests:test",
@@ -336,11 +380,14 @@ def main() -> None:
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("doctor")
     subparsers.add_parser("remote-init")
-    subparsers.add_parser("remote-snapshot")
+    snapshot_parser = subparsers.add_parser("remote-snapshot")
+    snapshot_parser.add_argument("--paths", nargs="+", help="snapshot only HEAD plus these lane-owned paths")
     bundle_parser = subparsers.add_parser("benchmark-bundle")
     bundle_parser.add_argument("wave")
     run_parser = subparsers.add_parser("run")
     run_parser.add_argument("profile", choices=PROFILES)
+    run_parser.add_argument("--quick", action="store_true", help="use the non-enforcing development benchmark preset")
+    run_parser.add_argument("--scenarios", help="comma- or space-separated benchmark scenarios")
     status_parser = subparsers.add_parser("status")
     status_parser.add_argument("profile", choices=PROFILES)
     log_parser = subparsers.add_parser("log")
@@ -352,7 +399,7 @@ def main() -> None:
     elif arguments.command == "remote-init":
         remote_init()
     elif arguments.command == "remote-snapshot":
-        remote_snapshot()
+        remote_snapshot(arguments.paths)
     elif arguments.command == "benchmark-bundle":
         benchmark_bundle(arguments.wave)
     elif arguments.command == "status":
@@ -360,6 +407,15 @@ def main() -> None:
     elif arguments.command == "log":
         remote_log(arguments.profile)
     else:
+        if arguments.quick:
+            if not arguments.profile.startswith("arc-bench"):
+                raise SystemExit("--quick is supported only for benchmark profiles")
+            os.environ["ARC_BENCH_QUICK"] = "1"
+            os.environ.setdefault("ARC_BENCH_ENFORCE", "0")
+        if arguments.scenarios:
+            if not arguments.profile.startswith("arc-bench"):
+                raise SystemExit("--scenarios is supported only for benchmark profiles")
+            os.environ["ARC_BENCH_SCENARIOS"] = arguments.scenarios
         remote_run(arguments.profile)
 
 

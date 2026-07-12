@@ -59,6 +59,7 @@ import org.jetbrains.kotlin.ir.types.getClass
 import org.jetbrains.kotlin.ir.types.isBoolean
 import org.jetbrains.kotlin.ir.types.isCharArray
 import org.jetbrains.kotlin.ir.types.isInt
+import org.jetbrains.kotlin.ir.types.isNothing
 import org.jetbrains.kotlin.ir.types.isUnit
 import org.jetbrains.kotlin.ir.util.allParameters
 import org.jetbrains.kotlin.ir.util.constructedClass
@@ -109,6 +110,8 @@ internal data class ArcOwnershipPlanningReport(
  */
 internal data class ArcCodegenOwnershipPlan(
     val ownedResultForwarding: Map<IrSimpleFunction, ArcOwnedResultForwarding>,
+    val coroutineResultSlotForwardingCalls: Set<IrCall>,
+    val joinedReferenceSlots: Map<IrVariable, ArcJoinedReferenceSlotPlan>,
     val borrowedGuaranteedAliases: Set<IrVariable>,
     val borrowedMutableReads: Set<IrGetValue>,
     val borrowedFieldReceivers: Set<IrGetValue>,
@@ -130,8 +133,22 @@ internal data class ArcCodegenOwnershipPlan(
 
     companion object {
         val Empty = ArcCodegenOwnershipPlan(
-            emptyMap(), emptySet(), emptySet(), emptySet(), emptySet(), emptySet(), emptySet(), emptySet(), emptySet(),
-            emptySet(), emptySet(), emptySet(), emptySet(), emptyMap()
+            ownedResultForwarding = emptyMap(),
+            coroutineResultSlotForwardingCalls = emptySet(),
+            joinedReferenceSlots = emptyMap(),
+            borrowedGuaranteedAliases = emptySet(),
+            borrowedMutableReads = emptySet(),
+            borrowedFieldReceivers = emptySet(),
+            borrowedStrongFieldLoads = emptySet(),
+            borrowedStrongCallFieldLoads = emptySet(),
+            borrowedStrongProjectionStores = emptySet(),
+            rootedProjectionVariables = emptySet(),
+            rootedProjectionReads = emptySet(),
+            rootedProjectionFieldLoads = emptySet(),
+            rootedProjectionStores = emptySet(),
+            borrowedArrayElementCalls = emptySet(),
+            mutableConstructorInitializers = emptySet(),
+            scopedArcReferenceLoads = emptyMap(),
         )
     }
 }
@@ -154,11 +171,14 @@ internal fun ArcSuspendLikeMarkers.isSuspendLike(): Boolean =
             coroutineImplParentOrigin || continuationParameter
 
 /** Fail closed on every stable marker left by continuation-stub and state-machine lowering. */
-private fun IrSimpleFunction.isArcSuspendLike(): Boolean {
+internal fun IrSimpleFunction.isArcSuspendLike(): Boolean {
     if (isSuspend || origin == IrDeclarationOrigin.LOWERED_SUSPEND_FUNCTION ||
         origin.name == "COROUTINE_IMPL" || (parent as? IrClass)?.origin?.name == "COROUTINE_IMPL"
     ) return true
-    return valueParameters.any { it.origin == IrDeclarationOrigin.CONTINUATION }
+    return valueParameters.any {
+        it.origin == IrDeclarationOrigin.CONTINUATION ||
+                it.type.getClass()?.fqNameForIrSerialization?.asString() == "kotlin.coroutines.Continuation"
+    }
 }
 
 /** Authorization for remembering that a direct object call initialized its exact ARC result slot. */
@@ -177,6 +197,33 @@ internal data class ArcResultSlotForwardingEligibility(
 internal fun ArcResultSlotForwardingEligibility.isAuthorized(): Boolean =
     arcEnabled && debugInfoDisabled && explicitResultSlot && directKotlinCall && nonExternalCall &&
             nonSuspendCall && referenceResult && nonUnitResult && nonNothingResult
+
+/** Authorization for one identity-selected lowered suspend adapter tail call. */
+internal data class ArcCoroutineResultSlotForwardingEligibility(
+    val arcEnabled: Boolean,
+    val optimizationsEnabled: Boolean,
+    val debugInfoDisabled: Boolean,
+    val exactCallIdentitySelected: Boolean,
+    val explicitResultSlot: Boolean,
+    val exactResultSlotIdentity: Boolean,
+    val directKotlinCall: Boolean,
+    val nonExternalCall: Boolean,
+    val nonVirtualCall: Boolean,
+    val ownedResultConvention: Boolean,
+    val referenceResult: Boolean,
+    val nonUnitResult: Boolean,
+    val nonNothingResult: Boolean,
+    val allNormalReturnsInitializeSlot: Boolean,
+    val noDifferentSlotOrSuspendBoundaryWidening: Boolean,
+    val normalSuccessEdgeOnly: Boolean,
+)
+
+internal fun ArcCoroutineResultSlotForwardingEligibility.isAuthorized(): Boolean =
+    arcEnabled && optimizationsEnabled && debugInfoDisabled && exactCallIdentitySelected &&
+            explicitResultSlot && exactResultSlotIdentity && directKotlinCall && nonExternalCall &&
+            nonVirtualCall && ownedResultConvention && referenceResult && nonUnitResult &&
+            nonNothingResult && allNormalReturnsInitializeSlot &&
+            noDifferentSlotOrSuspendBoundaryWidening && normalSuccessEdgeOnly
 
 /**
  * A deliberately redundant checklist for each mutable read that ARC codegen may borrow.
@@ -453,6 +500,8 @@ internal fun runArcOwnershipPlanning(
     var classifications = ArcOwnershipClassificationCounts()
     var optimization = ArcOwnershipOptimizationMetrics()
     val ownedResultForwarding = linkedMapOf<IrSimpleFunction, ArcOwnedResultForwarding>()
+    val coroutineResultSlotForwardingCalls = Collections.newSetFromMap(IdentityHashMap<IrCall, Boolean>())
+    val joinedReferenceSlots = linkedMapOf<IrVariable, ArcJoinedReferenceSlotPlan>()
     val borrowedGuaranteedAliases = linkedSetOf<IrVariable>()
     val borrowedMutableReads = linkedSetOf<IrGetValue>()
     val borrowedFieldReceivers = Collections.newSetFromMap(IdentityHashMap<IrGetValue, Boolean>())
@@ -489,6 +538,8 @@ internal fun runArcOwnershipPlanning(
             }
 
             override fun visitSimpleFunction(declaration: IrSimpleFunction) {
+                coroutineResultSlotForwardingCalls +=
+                    selectVerifiedCoroutineResultSlotForwardingCalls(generationState, declaration)
                 borrowedCharArrayConsumerSymbols?.let { exactConsumers ->
                     borrowedStrongCallFieldLoads += selectVerifiedBorrowedStrongCallFieldLoads(
                         generationState, declaration, exactConsumers
@@ -502,6 +553,11 @@ internal fun runArcOwnershipPlanning(
     input.module.files.forEach { file ->
         file.acceptChildrenVoid(object : IrElementVisitorVoid {
             override fun visitSimpleFunction(declaration: IrSimpleFunction) {
+                joinedReferenceSlots += selectVerifiedJoinedReferenceSlots(
+                    generationState,
+                    declaration,
+                    input.lifetimes,
+                )
                 val guaranteedAliases = selectVerifiedBorrowedGuaranteedAliases(generationState, declaration)
                 borrowedGuaranteedAliases += guaranteedAliases
                 borrowedMutableReads += selectVerifiedBorrowedMutableReads(
@@ -574,6 +630,8 @@ internal fun runArcOwnershipPlanning(
         optimization,
         ArcCodegenOwnershipPlan(
             ownedResultForwarding,
+            coroutineResultSlotForwardingCalls,
+            joinedReferenceSlots,
             borrowedGuaranteedAliases,
             borrowedMutableReads,
             borrowedFieldReceivers,
@@ -2461,6 +2519,135 @@ private fun IrFunctionAccessExpression.isDirectKotlinCall(generationState: Nativ
                 symbol != generationState.context.ir.symbols.arcUnownedReferenceLoad
     }
     else -> false
+}
+
+/**
+ * Select only a lowered suspend adapter's exact direct tail call. Codegen passes the enclosing
+ * function's object-result slot to this expression and records ownership only after the invoke's
+ * normal successor, so exceptional cleanup remains unchanged. Calls inside a state-machine,
+ * try/catch, or another suspend boundary deliberately remain outside this first slice.
+ */
+private fun selectVerifiedCoroutineResultSlotForwardingCalls(
+    generationState: NativeGenerationState,
+    function: IrSimpleFunction,
+): Set<IrCall> {
+    if (generationState.context.memoryModel != MemoryModel.ARC ||
+        !generationState.context.config.optimizationsEnabled ||
+        generationState.context.shouldContainDebugInfo() ||
+        !function.isArcSuspendLike() || function.isExternal ||
+        !function.returnType.binaryTypeIsReference() || function.returnType.isUnit() ||
+        function.returnType.isNothing()
+    ) return emptySet()
+    val body = function.body as? IrBlockBody ?: return emptySet()
+    val selected = Collections.newSetFromMap(IdentityHashMap<IrCall, Boolean>())
+    var forbiddenBoundaryDepth = 0
+
+    body.acceptVoid(object : IrElementVisitorVoid {
+        override fun visitElement(element: IrElement) {
+            element.acceptChildrenVoid(this)
+        }
+
+        override fun visitFunction(declaration: IrFunction) = Unit
+
+        override fun visitTry(aTry: IrTry) {
+            forbiddenBoundaryDepth++
+            aTry.acceptChildrenVoid(this)
+            forbiddenBoundaryDepth--
+        }
+
+        override fun visitSuspendableExpression(expression: IrSuspendableExpression) {
+            forbiddenBoundaryDepth++
+            expression.acceptChildrenVoid(this)
+            forbiddenBoundaryDepth--
+        }
+
+        override fun visitSuspensionPoint(expression: IrSuspensionPoint) {
+            forbiddenBoundaryDepth++
+            expression.acceptChildrenVoid(this)
+            forbiddenBoundaryDepth--
+        }
+
+        override fun visitReturn(expression: IrReturn) {
+            val call = expression.value.unwrapExactCoroutineTailCall()
+            if (forbiddenBoundaryDepth == 0 && expression.returnTargetSymbol == function.symbol && call != null &&
+                call.isExactDirectLoweredSuspendAdapterCall(generationState) &&
+                (call.symbol.owner as? IrSimpleFunction)?.allNormalReturnsInitializeArcResultSlot() == true
+            ) {
+                selected += call
+                generationState.context.log {
+                    "ARC coroutine result-slot forwarding ${function.fqNameForIrSerialization.asString()} -> " +
+                            call.symbol.owner.fqNameForIrSerialization.asString()
+                }
+            }
+            expression.acceptChildrenVoid(this)
+        }
+    })
+    return selected
+}
+
+private fun IrExpression.unwrapExactCoroutineTailCall(): IrCall? = when (this) {
+    is IrCall -> this
+    is IrReturn -> value.unwrapExactCoroutineTailCall()
+    is IrTypeOperatorCall -> if (operator == IrTypeOperator.IMPLICIT_CAST) argument.unwrapExactCoroutineTailCall() else null
+    is IrBlock -> if (origin == null && statements.size == 1) {
+        (statements.single() as? IrExpression)?.unwrapExactCoroutineTailCall()
+    } else {
+        null
+    }
+    else -> null
+}
+
+private fun IrCall.isExactDirectLoweredSuspendAdapterCall(generationState: NativeGenerationState): Boolean {
+    val callee = symbol.owner as? IrSimpleFunction ?: return false
+    return callee.isArcSuspendLike() && !callee.isExternal && !callee.isBuiltInOperator &&
+            (!callee.isOverridable || superQualifierSymbol != null) &&
+            callee.returnType.binaryTypeIsReference() && !callee.returnType.isUnit() &&
+            !callee.returnType.isNothing() && symbol != generationState.context.ir.symbols.arcWeakReferenceLoad &&
+            symbol != generationState.context.ir.symbols.arcUnownedReferenceLoad
+}
+
+/**
+ * Every ordinary return from this direct Kotlin callee writes an object through its result ABI.
+ * Lowered state machines may express their final value through nested returnable blocks and leave
+ * no `IrReturn` targeting the function itself; that zero-return case is vacuously safe because a
+ * normal LLVM return is still emitted only through the object-result epilogue.
+ */
+private fun IrSimpleFunction.allNormalReturnsInitializeArcResultSlot(): Boolean {
+    val body = body as? IrBlockBody ?: return false
+    var invalidReturn = false
+    body.acceptVoid(object : IrElementVisitorVoid {
+        override fun visitElement(element: IrElement) {
+            element.acceptChildrenVoid(this)
+        }
+
+        override fun visitFunction(declaration: IrFunction) = Unit
+
+        override fun visitReturn(expression: IrReturn) {
+            if (expression.returnTargetSymbol == symbol) {
+                val returnedValue = expression.value.unwrapNestedCoroutineReturnValue()
+                if (!returnedValue.type.binaryTypeIsReference() || returnedValue.type.isNothing()) {
+                    invalidReturn = true
+                }
+            }
+            expression.acceptChildrenVoid(this)
+        }
+    })
+    return !invalidReturn
+}
+
+private fun IrExpression.unwrapNestedCoroutineReturnValue(): IrExpression = when (this) {
+    is IrReturn -> value.unwrapNestedCoroutineReturnValue()
+    is IrTypeOperatorCall -> if (operator == IrTypeOperator.IMPLICIT_CAST) {
+        argument.unwrapNestedCoroutineReturnValue()
+    } else {
+        this
+    }
+    is IrBlock -> if (origin == null && statements.size == 1) {
+        (statements.single() as? IrExpression)?.unwrapNestedCoroutineReturnValue() ?: this
+    } else {
+        this
+    }
+    else -> this
 }
 
 /** Tie the existing +0 load authorization causally to contained-copy elimination. */

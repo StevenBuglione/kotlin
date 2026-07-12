@@ -3,6 +3,23 @@ compilerOpts.osx = -D_ANSI_SOURCE
 
 ---
 
+#include <stdarg.h>
+
 static inline FILE* getStdout() {
     return stdout;
+}
+
+static inline int fixedCStringLength(const char* value) {
+    int length = 0;
+    while (value[length] != '\0') ++length;
+    return length;
+}
+
+static inline int mutateFirstVararg(int ignored, ...) {
+    va_list args;
+    va_start(args, ignored);
+    char* value = (char*)va_arg(args, void*);
+    value[0] = 'X';
+    va_end(args);
+    return value[0] == 'X';
 }

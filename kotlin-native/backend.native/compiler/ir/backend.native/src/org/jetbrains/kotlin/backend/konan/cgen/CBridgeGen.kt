@@ -44,6 +44,7 @@ internal interface KotlinStubs {
     val typeSystem: IrTypeSystemContext
     val symbols: KonanSymbols
     val target: KonanTarget
+    val memoryModel: MemoryModel
     val language: String
     fun addKotlin(declaration: IrDeclaration)
     fun addC(lines: List<String>)
@@ -639,7 +640,8 @@ private fun KotlinToCCallBuilder.mapCalleeFunctionParameter(
 
         classifier == symbols.string && (variadic || parameter?.isCStringParameter() == true) -> {
             require(!variadic || !isObjCMethod) { stubs.renderCompilerError(argument) }
-            CStringArgumentPassing()
+            // C varargs carry no pointee-const contract and may mutate the temporary copy.
+            CStringArgumentPassing(allowStaticAsciiCString = !variadic && stubs.memoryModel == MemoryModel.ARC)
         }
 
         classifier == symbols.string && parameter?.isWCStringParameter() == true ->
@@ -1313,9 +1315,22 @@ private class WCStringArgumentPassing : KotlinToCArgumentPassing {
 
 }
 
-private class CStringArgumentPassing : KotlinToCArgumentPassing {
+private class CStringArgumentPassing(
+        private val allowStaticAsciiCString: Boolean
+) : KotlinToCArgumentPassing {
 
     override fun KotlinToCCallBuilder.passValue(expression: IrExpression): CExpression {
+        // A C string literal has static storage duration, so it is safe for the complete
+        // foreign call and avoids constructing CString, ByteArray, and MemScope objects.
+        // Keep this deliberately ASCII-only: non-ASCII constants must retain the runtime's
+        // authoritative UTF-8 encoding behavior. Fixed-width octal escapes also preserve
+        // embedded NULs without consuming digits from the following character.
+        if (allowStaticAsciiCString) {
+            expression.asStaticAsciiCString()?.let {
+                return CExpression(it, CTypes.pointer(CTypes.char))
+            }
+        }
+
         val cstr = irBuilder.irSafeTransform(expression) {
             irCall(symbols.interopCstr.owner).apply {
                 extensionReceiver = it
@@ -1324,6 +1339,26 @@ private class CStringArgumentPassing : KotlinToCArgumentPassing {
         return with(CValuesRefArgumentPassing) { passValue(cstr) }
     }
 
+}
+
+private fun IrExpression.asStaticAsciiCString(): String? {
+    val constant = when (this) {
+        is IrConst<*> -> this
+        is IrGetValue -> (symbol.owner as? IrVariable)
+                ?.takeUnless { it.isVar }
+                ?.initializer as? IrConst<*>
+        else -> null
+    }
+    val value = constant?.value as? String ?: return null
+    if (value.any { it.code > 0x7f }) return null
+    return buildString(value.length * 4 + 2) {
+        append('"')
+        value.forEach {
+            append('\\')
+            append(it.code.toString(radix = 8).padStart(3, '0'))
+        }
+        append('"')
+    }
 }
 
 private object CValuesRefArgumentPassing : KotlinToCArgumentPassing {

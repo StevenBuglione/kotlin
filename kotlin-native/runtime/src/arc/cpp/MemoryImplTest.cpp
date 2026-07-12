@@ -5,6 +5,8 @@
 
 #include "Memory.h"
 
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <thread>
 #include <vector>
@@ -13,6 +15,7 @@
 #include "FinalizerHooks.hpp"
 #include "gtest/gtest.h"
 #include "MemorySharedRefs.hpp"
+#include "Natives.h"
 #include "ObjectTestSupport.hpp"
 #include "PointerBits.h"
 #include "TestSupport.hpp"
@@ -241,6 +244,8 @@ kotlin::test_support::TypeInfoHolder recycledTypeInfo{
 kotlin::test_support::TypeInfoHolder releaseVisibilityTypeInfo{
         kotlin::test_support::TypeInfoHolder::ObjectBuilder<ReleaseVisibilityPayload>()
                 .setArcDestroy(releaseVisibilityArcDestroy)};
+kotlin::test_support::TypeInfoHolder recycledByteArrayTypeInfo{
+        kotlin::test_support::TypeInfoHolder::ArrayBuilder<uint8_t>()};
 std::atomic<int> finalizedNodes = 0;
 std::atomic<int> finalizedRecycledObjects = 0;
 std::atomic<int> recycledArcDeinitCount = 0;
@@ -361,6 +366,10 @@ void installWeakCounter(ObjHeader* object, ObjHeader* counter) {
     WeakCounter::FromObjHeader(counter)->referred = object;
     MetaObjHeader* meta = object->meta_object();
     UpdateHeapRef(&meta->WeakReference.counter_, counter);
+}
+
+ObjHeader* allocateRecycledByteArray(int32_t elements, ObjHolder& holder) {
+    return AllocArrayInstance(recycledByteArrayTypeInfo.typeInfo(), elements, holder.slot());
 }
 
 } // namespace
@@ -595,6 +604,146 @@ TEST(ArcRecyclingTest, ReusesExactSizeAfterCompleteFinalizationAndZeroesPayload)
     });
 }
 
+TEST(ArcRecyclingTest, RetainsFourMixedExactSizesAcrossInterveningMisses) {
+    const int physicalBefore = Kotlin_ArcAllocatedContainerCountForTests();
+    kotlin::RunInNewThread([](MemoryState* state) {
+        constexpr std::array<int32_t, 4> kSizes{7, 29, 83, 191};
+        constexpr std::array<size_t, 4> kOrder{1, 3, 0, 2};
+        std::array<ObjHolder, kSizes.size()> originals;
+        std::array<uintptr_t, kSizes.size()> originalAddresses{};
+        std::array<size_t, kSizes.size()> allocationSizes{};
+        for (size_t index = 0; index < kSizes.size(); ++index) {
+            ObjHeader* object = allocateRecycledByteArray(kSizes[index], originals[index]);
+            originalAddresses[index] = reinterpret_cast<uintptr_t>(object);
+            allocationSizes[index] = containerFor(object)->containerSize();
+        }
+        for (auto& original : originals) original.clear();
+        ASSERT_EQ(Kotlin_ArcRecycledContainerCountForTests(state), kSizes.size());
+        for (size_t index = 0; index < kSizes.size(); ++index) {
+            EXPECT_EQ(Kotlin_ArcRecycledContainerSizeForTests(state, index), allocationSizes[kSizes.size() - 1 - index]);
+        }
+
+        std::array<ObjHolder, kSizes.size()> replacements;
+        std::array<uintptr_t, kSizes.size()> replacementAddresses{};
+        for (size_t position = 0; position < kOrder.size(); ++position) {
+            const size_t index = kOrder[position];
+            replacementAddresses[index] =
+                    reinterpret_cast<uintptr_t>(allocateRecycledByteArray(kSizes[index], replacements[position]));
+        }
+        EXPECT_EQ(replacementAddresses, originalAddresses);
+        EXPECT_EQ(Kotlin_ArcRecycledContainerCountForTests(state), 0u);
+    });
+    EXPECT_EQ(Kotlin_ArcAllocatedContainerCountForTests(), physicalBefore);
+}
+
+TEST(ArcRecyclingTest, RetainsFourDuplicateExactSizesForBurstReuse) {
+    kotlin::RunInNewThread([] {
+        constexpr int32_t kSize = 73;
+        std::array<ObjHolder, 4> originals;
+        std::array<uintptr_t, 4> originalAddresses{};
+        for (size_t index = 0; index < originals.size(); ++index) {
+            originalAddresses[index] =
+                    reinterpret_cast<uintptr_t>(allocateRecycledByteArray(kSize, originals[index]));
+        }
+        for (auto& original : originals) original.clear();
+
+        std::array<ObjHolder, 4> replacements;
+        std::array<uintptr_t, 4> replacementAddresses{};
+        for (size_t index = 0; index < replacements.size(); ++index) {
+            replacementAddresses[index] =
+                    reinterpret_cast<uintptr_t>(allocateRecycledByteArray(kSize, replacements[index]));
+        }
+        std::sort(originalAddresses.begin(), originalAddresses.end());
+        std::sort(replacementAddresses.begin(), replacementAddresses.end());
+        EXPECT_EQ(replacementAddresses, originalAddresses);
+    });
+}
+
+TEST(ArcRecyclingTest, ExactSizeMissPreservesCachedEntry) {
+    kotlin::RunInNewThread([](MemoryState* state) {
+        const int physicalBefore = Kotlin_ArcAllocatedContainerCountForTests();
+        ObjHolder exact;
+        uintptr_t exactAddress = reinterpret_cast<uintptr_t>(allocateRecycledByteArray(41, exact));
+        exact.clear();
+        ASSERT_EQ(Kotlin_ArcRecycledContainerCountForTests(state), 1u);
+        EXPECT_EQ(Kotlin_ArcAllocatedContainerCountForTests(), physicalBefore + 1);
+
+        ObjHolder nearMiss;
+        // Separate counts by more than container alignment so these cannot share one logical size.
+        uintptr_t nearMissAddress = reinterpret_cast<uintptr_t>(allocateRecycledByteArray(57, nearMiss));
+        EXPECT_NE(nearMissAddress, exactAddress);
+        EXPECT_EQ(Kotlin_ArcRecycledContainerCountForTests(state), 1u);
+        EXPECT_EQ(Kotlin_ArcAllocatedContainerCountForTests(), physicalBefore + 2);
+
+        ObjHolder exactReplacement;
+        EXPECT_EQ(reinterpret_cast<uintptr_t>(allocateRecycledByteArray(41, exactReplacement)), exactAddress);
+        EXPECT_EQ(Kotlin_ArcRecycledContainerCountForTests(state), 0u);
+        EXPECT_EQ(Kotlin_ArcAllocatedContainerCountForTests(), physicalBefore + 2);
+    });
+}
+
+TEST(ArcRecyclingTest, FifthDistinctReleaseEvictsOnlyTheLeastRecentlyUsedEntry) {
+    kotlin::RunInNewThread([](MemoryState* state) {
+        const int physicalBefore = Kotlin_ArcAllocatedContainerCountForTests();
+        constexpr std::array<int32_t, 5> kSizes{11, 37, 79, 149, 251};
+        std::array<ObjHolder, kSizes.size()> originals;
+        std::array<uintptr_t, kSizes.size()> originalAddresses{};
+        std::array<size_t, kSizes.size()> allocationSizes{};
+        for (size_t index = 0; index < kSizes.size(); ++index) {
+            ObjHeader* object = allocateRecycledByteArray(kSizes[index], originals[index]);
+            originalAddresses[index] = reinterpret_cast<uintptr_t>(object);
+            allocationSizes[index] = containerFor(object)->containerSize();
+        }
+        for (size_t index = 0; index < 4; ++index) originals[index].clear();
+        ASSERT_EQ(Kotlin_ArcRecycledContainerCountForTests(state), 4u);
+        EXPECT_EQ(Kotlin_ArcAllocatedContainerCountForTests(), physicalBefore + 5);
+        originals[4].clear();
+        ASSERT_EQ(Kotlin_ArcRecycledContainerCountForTests(state), 4u);
+        EXPECT_EQ(Kotlin_ArcAllocatedContainerCountForTests(), physicalBefore + 4);
+        for (size_t index = 0; index < 4; ++index) {
+            EXPECT_EQ(Kotlin_ArcRecycledContainerSizeForTests(state, index), allocationSizes[4 - index]);
+        }
+
+        // Releasing index 4 fills the fifth position and evicts index 0. The four newer exact
+        // sizes must remain independently reusable; no miss may flush the rest of the queue.
+        std::array<ObjHolder, 4> replacements;
+        for (size_t index = 1; index < kSizes.size(); ++index) {
+            EXPECT_EQ(
+                    reinterpret_cast<uintptr_t>(allocateRecycledByteArray(kSizes[index], replacements[index - 1])),
+                    originalAddresses[index]);
+        }
+    });
+}
+
+TEST(ArcRecyclingTest, LargeEncodedSizeWraparoundBypassesTheBoundedCache) {
+    const int physicalBefore = Kotlin_ArcAllocatedContainerCountForTests();
+    kotlin::RunInNewThread([](MemoryState* state) {
+        constexpr int32_t kLargeArraySize = (1 << 25) + 257;
+        const int threadPhysicalBefore = Kotlin_ArcAllocatedContainerCountForTests();
+        ObjHolder large;
+        allocateRecycledByteArray(kLargeArraySize, large);
+        EXPECT_EQ(Kotlin_ArcAllocatedContainerCountForTests(), threadPhysicalBefore + 1);
+        large.clear();
+        EXPECT_EQ(Kotlin_ArcRecycledContainerCountForTests(state), 0u);
+        EXPECT_EQ(Kotlin_ArcAllocatedContainerCountForTests(), threadPhysicalBefore);
+    });
+    EXPECT_EQ(Kotlin_ArcAllocatedContainerCountForTests(), physicalBefore);
+}
+
+TEST(ArcRecyclingTest, ThreadTeardownFlushesEveryCachedPhysicalContainer) {
+    const int physicalBefore = Kotlin_ArcAllocatedContainerCountForTests();
+    kotlin::RunInNewThread([](MemoryState* state) {
+        constexpr std::array<int32_t, 4> kSizes{23, 61, 127, 239};
+        std::array<ObjHolder, kSizes.size()> objects;
+        for (size_t index = 0; index < kSizes.size(); ++index) {
+            allocateRecycledByteArray(kSizes[index], objects[index]);
+        }
+        for (auto& object : objects) object.clear();
+        EXPECT_EQ(Kotlin_ArcRecycledContainerCountForTests(state), kSizes.size());
+    });
+    EXPECT_EQ(Kotlin_ArcAllocatedContainerCountForTests(), physicalBefore);
+}
+
 TEST(ArcForeignReferenceTest, FinalReleaseOnInitiallyUnregisteredThreadRegistersRuntimeBeforeFinalization) {
     ScopedNodeFinalizerHook finalizers;
     kotlin::RunInNewThread([] {
@@ -650,6 +799,71 @@ TEST(ArcRecyclingTest, CrossThreadFinalReleaseRecyclesOnTheReleasingThread) {
         EXPECT_EQ(recycledAddress.load(std::memory_order_relaxed), originalAddress);
         EXPECT_EQ(finalizedNodes.load(std::memory_order_relaxed), 2);
     });
+}
+
+TEST(ArcRecyclingTest, FourCrossThreadFinalReleasesPopulateOnlyTheReleasingThreadCache) {
+    kotlin::RunInNewThread([] {
+        constexpr std::array<int32_t, 4> kSizes{13, 47, 101, 223};
+        constexpr std::array<size_t, 4> kOrder{2, 0, 3, 1};
+        std::array<ObjHolder, kSizes.size()> originals;
+        std::array<KRefSharedHolder, kSizes.size()> shared{};
+        std::array<uintptr_t, kSizes.size()> originalAddresses{};
+        for (size_t index = 0; index < kSizes.size(); ++index) {
+            ObjHeader* object = allocateRecycledByteArray(kSizes[index], originals[index]);
+            originalAddresses[index] = reinterpret_cast<uintptr_t>(object);
+            shared[index].init(object);
+        }
+        for (auto& original : originals) original.clear();
+
+        std::atomic<bool> initiallyRegistered = true;
+        std::atomic<bool> registeredAfterDispose = false;
+        std::array<uintptr_t, kSizes.size()> replacementAddresses{};
+        std::thread foreignThread([&] {
+            initiallyRegistered.store(kotlin::mm::IsCurrentThreadRegistered(), std::memory_order_relaxed);
+            for (auto& holder : shared) holder.dispose();
+            registeredAfterDispose.store(kotlin::mm::IsCurrentThreadRegistered(), std::memory_order_relaxed);
+
+            std::array<ObjHolder, kSizes.size()> replacements;
+            for (size_t position = 0; position < kOrder.size(); ++position) {
+                const size_t index = kOrder[position];
+                replacementAddresses[index] = reinterpret_cast<uintptr_t>(
+                        allocateRecycledByteArray(kSizes[index], replacements[position]));
+            }
+        });
+        foreignThread.join();
+
+        EXPECT_FALSE(initiallyRegistered.load(std::memory_order_relaxed));
+        EXPECT_TRUE(registeredAfterDispose.load(std::memory_order_relaxed));
+        EXPECT_EQ(replacementAddresses, originalAddresses);
+    });
+}
+
+TEST(ArcRecyclingTest, ThreadLocalFiveSizeChurnRemainsZeroedAndTeardownSafe) {
+    constexpr int kThreads = 8;
+    constexpr int kIterations = 500;
+    constexpr std::array<int32_t, 5> kSizes{17, 43, 89, 167, 263};
+    std::atomic<int> stalePayloads = 0;
+    std::vector<std::thread> workers;
+    for (int thread = 0; thread < kThreads; ++thread) {
+        workers.emplace_back([&, thread] {
+            kotlin::RunInNewThread([&, thread] {
+                for (int iteration = 0; iteration < kIterations; ++iteration) {
+                    std::array<ObjHolder, kSizes.size()> objects;
+                    for (size_t index = 0; index < kSizes.size(); ++index) {
+                        ObjHeader* object = allocateRecycledByteArray(kSizes[index], objects[index]);
+                        auto* first = AddressOfElementAt<uint8_t>(object->array(), 0);
+                        auto* last = AddressOfElementAt<uint8_t>(object->array(), kSizes[index] - 1);
+                        if (*first != 0 || *last != 0) stalePayloads.fetch_add(1, std::memory_order_relaxed);
+                        *first = static_cast<uint8_t>(thread + 1);
+                        *last = static_cast<uint8_t>((iteration & 0xff) + 1);
+                    }
+                    for (auto& object : objects) object.clear();
+                }
+            });
+        });
+    }
+    for (auto& worker : workers) worker.join();
+    EXPECT_EQ(stalePayloads.load(std::memory_order_relaxed), 0);
 }
 
 TEST(ArcMemoryModelTest, OrdinaryHeapObjectsAreShareableForCleanerEligibility) {

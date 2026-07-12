@@ -21,7 +21,10 @@ validate_managed_paths() {
     case "$resolved_repo" in
         /home/olfa/codex-kotlin-arc|\
         /home/olfa/codex-kotlin-arc-ci2|\
-        /home/olfa/codex-kotlin-arc-ci2-bench)
+        /home/olfa/codex-kotlin-arc-ci2-bench|\
+        /home/olfa/codex-kotlin-arc-ci2-runtime|\
+        /home/olfa/codex-kotlin-arc-ssa|\
+        /home/olfa/codex-kotlin-arc-interop)
             ;;
         *)
             fail "resolved checkout path $resolved_repo is not an approved ARC worktree"

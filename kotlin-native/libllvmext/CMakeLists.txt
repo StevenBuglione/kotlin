@@ -43,5 +43,28 @@ include_directories(${SRC_DIR}/main/include)
 
 add_library(libllvmext
         ${SRC_DIR}/main/cpp/ArcFrameElision.cpp
+        ${SRC_DIR}/main/cpp/ArcReturnUpdateCoalescing.cpp
         ${SRC_DIR}/main/cpp/CoverageMappingC.cpp
         ${SRC_DIR}/main/cpp/CAPIExtensions.cpp)
+
+option(KONAN_LLVMEXT_BUILD_TESTS "Build libllvmext's standalone unit tests" OFF)
+if (KONAN_LLVMEXT_BUILD_TESTS)
+    enable_testing()
+    add_executable(ArcReturnUpdateCoalescingTest
+            ${SRC_DIR}/test/cpp/ArcReturnUpdateCoalescingTest.cpp)
+    llvm_map_components_to_libnames(LLVM_TEST_LIBS core asmparser support)
+    if (CMAKE_SYSTEM_NAME MATCHES Linux)
+        # The prebuilt LLVM package names zlib as `z`, but minimal Linux builders
+        # may expose only the versioned runtime library. Preserve every other
+        # transitive LLVMSupport dependency while resolving zlib to an actual file.
+        get_target_property(LLVM_SUPPORT_LIBS LLVMSupport INTERFACE_LINK_LIBRARIES)
+        list(REMOVE_ITEM LLVM_SUPPORT_LIBS z)
+        find_file(LLVM_ZLIB_RUNTIME NAMES libz.so.1
+                PATHS /lib/${CMAKE_LIBRARY_ARCHITECTURE} /usr/lib/${CMAKE_LIBRARY_ARCHITECTURE}
+                NO_DEFAULT_PATH REQUIRED)
+        list(APPEND LLVM_SUPPORT_LIBS ${LLVM_ZLIB_RUNTIME})
+        set_property(TARGET LLVMSupport PROPERTY INTERFACE_LINK_LIBRARIES ${LLVM_SUPPORT_LIBS})
+    endif ()
+    target_link_libraries(ArcReturnUpdateCoalescingTest PRIVATE libllvmext ${LLVM_TEST_LIBS})
+    add_test(NAME ArcReturnUpdateCoalescingTest COMMAND ArcReturnUpdateCoalescingTest)
+endif ()

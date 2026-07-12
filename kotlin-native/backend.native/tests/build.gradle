@@ -3380,6 +3380,19 @@ standaloneTest("arc_owned_result_forwarding") {
     source = "codegen/arc/ownedResultForwarding.kt"
 }
 
+standaloneTest("arc_joined_reference_slot") {
+    enabled = project.target.name == "linux_x64" && isArcMM
+    flags = ["-opt"]
+    useGoldenData = true
+    source = "codegen/arc/joinedReferenceSlot.kt"
+}
+
+standaloneTest("arc_return_update_coalescing") {
+    enabled = project.target.name == "linux_x64" && isArcMM
+    flags = ["-opt"]
+    source = "filecheck/arc_return_update_coalescing.kt"
+}
+
 standaloneTest("arc_borrowed_array_element") {
     enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
     flags = ["-opt"]
@@ -4829,6 +4842,31 @@ interopTest("interop4") {
     useGoldenData = true
     source = "interop/basics/4.kt"
     interop = 'cstdio'
+}
+
+fileCheckTest("filecheck_cstring_argument_passing") {
+    enabled = enabled && isArcMM && cacheTesting == null && project.testTarget != 'wasm32'
+    annotatedSource = project.file('interop/basics/4.kt')
+    interop = 'cstdio'
+    checkPrefix = 'CSTRING-BRIDGE'
+    additionalFileCheckFlags = [
+            '--implicit-check-not=c"a\\00b\\00"',
+            '--implicit-check-not=c"dynamic\\00"',
+            '--implicit-check-not=c"mutable\\00"',
+            '--implicit-check-not=c"\\C3\\A9\\00"',
+    ]
+}
+
+fileCheckTest("filecheck_cstring_argument_passing_strict") {
+    enabled = enabled && isArcMM && cacheTesting == null && project.target.name == 'linux_x64'
+    annotatedSource = project.file('interop/basics/4.kt')
+    interop = 'cstdio'
+    checkPrefix = 'CSTRING-STRICT'
+    extraOpts = ['-memory-model', 'strict']
+    additionalFileCheckFlags = [
+            '--implicit-check-not=c"ascii\\00"',
+            '--implicit-check-not=c"static\\00"',
+    ]
 }
 
 standaloneTest("interop5") {
@@ -6662,6 +6700,30 @@ fileCheckTest("filecheck_arc_owned_result_forwarding") {
     annotatedSource = project.file('filecheck/arc_owned_result_forwarding.kt')
     extraOpts = ["-opt"]
     phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_joined_reference_slot") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('codegen/arc/joinedReferenceSlot.kt')
+    extraOpts = ["-opt"]
+    phaseToCheck = "Codegen"
+}
+
+
+fileCheckTest("filecheck_arc_return_update_coalescing") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('filecheck/arc_return_update_coalescing.kt')
+    checkPrefix = "COALESCE"
+    extraOpts = ["-opt"]
+    phaseToCheck = "CoalesceAdjacentArcReturnUpdates"
+}
+
+fileCheckTest("filecheck_arc_return_update_coalescing_before") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('filecheck/arc_return_update_coalescing.kt')
+    checkPrefix = "BEFORE"
+    extraOpts = ["-opt"]
+    phaseToCheck = "RemoveEmptyArcFrames"
 }
 
 fileCheckTest("filecheck_arc_borrowed_mutable_call_argument") {

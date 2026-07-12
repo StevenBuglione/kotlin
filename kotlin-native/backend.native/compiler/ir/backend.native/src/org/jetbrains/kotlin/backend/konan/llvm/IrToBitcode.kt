@@ -13,6 +13,7 @@ import org.jetbrains.kotlin.backend.common.lower.coroutines.getOrCreateFunctionW
 import org.jetbrains.kotlin.backend.common.lower.inline.InlinerExpressionLocationHint
 import org.jetbrains.kotlin.backend.konan.*
 import org.jetbrains.kotlin.backend.konan.arc.isAuthorized
+import org.jetbrains.kotlin.backend.konan.arc.isArcSuspendLike
 import org.jetbrains.kotlin.backend.konan.cexport.CAdapterCodegen
 import org.jetbrains.kotlin.backend.konan.cexport.CAdapterExportedElements
 import org.jetbrains.kotlin.backend.konan.cgen.CBridgeOrigin
@@ -860,7 +861,17 @@ internal class CodeGeneratorVisitor(
                                     return@usingVariableScope
                                 }
                                 when (body) {
-                                    is IrBlockBody -> body.statements.forEach { generateStatement(it) }
+                                    is IrBlockBody -> for (statement in body.statements) {
+                                        generateStatement(statement)
+                                        // A lowered suspend lambda may append a synthetic function return after
+                                        // the identity-selected tail return. Do not ask PositionHolder to emit that
+                                        // unreachable statement: it would manufacture an `undef` epilogue edge and
+                                        // defeat the exact result-slot proof recorded by the real return.
+                                        if (declaration is IrSimpleFunction &&
+                                            functionGenerationContext.isAfterTerminator() &&
+                                            (statement as? IrExpression)?.containsSelectedCoroutineTailCall() == true
+                                        ) break
+                                    }
                                     is IrExpressionBody -> error("IrExpressionBody should've been lowered")
                                     is IrSyntheticBody -> throw AssertionError("Synthetic body ${body.kind} has not been lowered")
                                     else -> TODO(ir2string(body))
@@ -1560,7 +1571,12 @@ internal class CodeGeneratorVisitor(
 
     private fun generateVariable(variable: IrVariable) {
         context.log{"generateVariable               : ${ir2string(variable)}"}
-        val forwardedMutableSlot = if (variable in arcOwnership.mutableConstructorInitializers) {
+        val joinedReferencePlan = arcOwnership.joinedReferenceSlots[variable]
+        require(joinedReferencePlan == null || variable !in arcOwnership.mutableConstructorInitializers) {
+            "ARC joined reference slot overlaps mutable constructor forwarding: ${ir2string(variable)}"
+        }
+        val preallocatedOwningSlot = if (variable in arcOwnership.mutableConstructorInitializers ||
+                joinedReferencePlan != null) {
             val index = this.currentCodeContext.genDeclareVariable(variable, null)
             functionGenerationContext.vars.addressOf(index)
         } else {
@@ -1568,7 +1584,7 @@ internal class CodeGeneratorVisitor(
         }
         val value = variable.initializer?.let {
             val resultSlot = when {
-                forwardedMutableSlot != null -> forwardedMutableSlot
+                preallocatedOwningSlot != null -> preallocatedOwningSlot
                 currentArcOwnedResultForwarding?.producer === variable -> functionGenerationContext.returnSlot
                 else -> null
             }
@@ -1580,7 +1596,14 @@ internal class CodeGeneratorVisitor(
                 }
             } ?: evaluateExpression(it, resultSlot)
         }
-        if (forwardedMutableSlot == null) {
+        if (joinedReferencePlan != null) {
+            require(variable.initializer === joinedReferencePlan.initializer &&
+                    preallocatedOwningSlot != null && value != null &&
+                    functionGenerationContext.arcResultIsAlreadyOwnedBySlot(value, preallocatedOwningSlot)) {
+                "ARC joined reference initializer did not own its verified result slot: ${ir2string(variable)}"
+            }
+        }
+        if (preallocatedOwningSlot == null) {
             this.currentCodeContext.genDeclareVariable(variable, value)
         }
     }
@@ -2120,9 +2143,18 @@ internal class CodeGeneratorVisitor(
         context.log{"evaluateReturn                 : ${ir2string(expression)}"}
         val value = expression.value
         val target = expression.returnTargetSymbol.owner
+        val containsSelectedCoroutineTailCall = value.containsSelectedCoroutineTailCall()
 
         val targetReturnSlot = currentCodeContext.getReturnSlot(target)
         val evaluated = evaluateExpression(value, targetReturnSlot)
+        // Tail-suspend lowering wraps the real `return directCall()` in one synthetic outer
+        // function return. The inner return has already branched to the epilogue and recorded the
+        // exact result-slot ownership fact; emitting the outer return would add an unreachable
+        // `undef` predecessor and make a no-predecessor edge look like an uninitialized normal
+        // return. Suppress only the identity-selected shape after its inner return terminated.
+        if (containsSelectedCoroutineTailCall && functionGenerationContext.isAfterTerminator()) {
+            return codegen.kNothingFakeValue
+        }
         val forwardedReturn = currentArcOwnedResultForwarding
         if (target == (currentCodeContext.functionScope() as? FunctionScope)?.declaration &&
                 ((forwardedReturn != null &&
@@ -2133,6 +2165,26 @@ internal class CodeGeneratorVisitor(
         }
         currentCodeContext.genReturn(target, evaluated)
         return codegen.kNothingFakeValue
+    }
+
+    private fun IrExpression.containsSelectedCoroutineTailCall(): Boolean {
+        var found = false
+        acceptVoid(object : IrElementVisitorVoid {
+            override fun visitElement(element: IrElement) {
+                if (!found) element.acceptChildrenVoid(this)
+            }
+
+            override fun visitFunction(declaration: IrFunction) = Unit
+
+            override fun visitCall(expression: IrCall) {
+                if (expression in arcOwnership.coroutineResultSlotForwardingCalls) {
+                    found = true
+                } else {
+                    expression.acceptChildrenVoid(this)
+                }
+            }
+        })
+        return found
     }
 
     //-------------------------------------------------------------------------//
@@ -2665,7 +2717,14 @@ internal class CodeGeneratorVisitor(
             function.origin == DECLARATION_ORIGIN_STATIC_GLOBAL_INITIALIZER -> evaluateFileGlobalInitializerCall(function)
             function.origin == DECLARATION_ORIGIN_STATIC_THREAD_LOCAL_INITIALIZER -> evaluateFileThreadLocalInitializerCall(function)
             function.origin == DECLARATION_ORIGIN_STATIC_STANDALONE_THREAD_LOCAL_INITIALIZER -> evaluateFileStandaloneThreadLocalInitializerCall(function)
-            else -> evaluateSimpleFunctionCall(function, args, resultLifetime, callee.superQualifierSymbol?.owner, resultSlot)
+            else -> evaluateSimpleFunctionCall(
+                    function,
+                    args,
+                    resultLifetime,
+                    callee.superQualifierSymbol?.owner,
+                    resultSlot,
+                    callee in arcOwnership.coroutineResultSlotForwardingCalls,
+            )
         }
     }
 
@@ -2736,12 +2795,17 @@ internal class CodeGeneratorVisitor(
 
     private fun evaluateSimpleFunctionCall(
             function: IrFunction, args: List<LLVMValueRef>,
-            resultLifetime: Lifetime, superClass: IrClass? = null, resultSlot: LLVMValueRef? = null): LLVMValueRef {
+            resultLifetime: Lifetime, superClass: IrClass? = null, resultSlot: LLVMValueRef? = null,
+            verifiedCoroutineResultSlotForwarding: Boolean = false): LLVMValueRef {
         //context.log{"evaluateSimpleFunctionCall : $tmpVariableName = ${ir2string(value)}"}
-        if (superClass == null && function is IrSimpleFunction && function.isOverridable)
+        if (superClass == null && function is IrSimpleFunction && function.isOverridable) {
+            require(!verifiedCoroutineResultSlotForwarding) {
+                "ARC coroutine result-slot forwarding escaped into a virtual call: ${function.fqNameForIrSerialization}"
+            }
             return callVirtual(function, args, resultLifetime, resultSlot)
-        else
-            return callDirect(function, args, resultLifetime, resultSlot)
+        } else {
+            return callDirect(function, args, resultLifetime, resultSlot, verifiedCoroutineResultSlotForwarding)
+        }
     }
 
     //-------------------------------------------------------------------------//
@@ -2896,21 +2960,50 @@ internal class CodeGeneratorVisitor(
 
     //-------------------------------------------------------------------------//
 
-    fun callDirect(function: IrFunction, args: List<LLVMValueRef>, resultLifetime: Lifetime, resultSlot: LLVMValueRef?): LLVMValueRef {
+    fun callDirect(
+            function: IrFunction,
+            args: List<LLVMValueRef>,
+            resultLifetime: Lifetime,
+            resultSlot: LLVMValueRef?,
+            verifiedCoroutineResultSlotForwarding: Boolean = false,
+    ): LLVMValueRef {
         val functionDeclarations = codegen.llvmFunction(function.target)
         return call(function, functionDeclarations, args, resultLifetime, resultSlot).also { result ->
+            val exactCoroutineResultSlotIdentity =
+                    resultSlot != null && resultSlot == functionGenerationContext.returnSlot
             val eligibility = org.jetbrains.kotlin.backend.konan.arc.ArcResultSlotForwardingEligibility(
                     arcEnabled = context.memoryModel == MemoryModel.ARC,
                     debugInfoDisabled = !context.shouldContainDebugInfo(),
                     explicitResultSlot = resultSlot != null,
                     directKotlinCall = true,
                     nonExternalCall = !function.isExternal && !function.isBuiltInOperator,
-                    nonSuspendCall = !function.isSuspend,
+                    nonSuspendCall = !function.isSuspend &&
+                            (function as? IrSimpleFunction)?.isArcSuspendLike() != true,
                     referenceResult = function.returnType.binaryTypeIsReference(),
                     nonUnitResult = !function.returnType.isUnit(),
                     nonNothingResult = !function.returnType.isNothing(),
             )
-            if (eligibility.isAuthorized()) {
+            val coroutineEligibility = org.jetbrains.kotlin.backend.konan.arc.ArcCoroutineResultSlotForwardingEligibility(
+                    arcEnabled = context.memoryModel == MemoryModel.ARC,
+                    optimizationsEnabled = context.config.optimizationsEnabled,
+                    debugInfoDisabled = !context.shouldContainDebugInfo(),
+                    exactCallIdentitySelected = verifiedCoroutineResultSlotForwarding,
+                    explicitResultSlot = resultSlot != null,
+                    exactResultSlotIdentity = exactCoroutineResultSlotIdentity,
+                    directKotlinCall = true,
+                    nonExternalCall = !function.isExternal && !function.isBuiltInOperator,
+                    nonVirtualCall = true,
+                    ownedResultConvention = !function.isExternal && !function.isBuiltInOperator &&
+                            function.returnType.binaryTypeIsReference(),
+                    referenceResult = function.returnType.binaryTypeIsReference(),
+                    nonUnitResult = !function.returnType.isUnit(),
+                    nonNothingResult = !function.returnType.isNothing(),
+                    allNormalReturnsInitializeSlot = verifiedCoroutineResultSlotForwarding,
+                    noDifferentSlotOrSuspendBoundaryWidening = verifiedCoroutineResultSlotForwarding &&
+                            exactCoroutineResultSlotIdentity,
+                    normalSuccessEdgeOnly = true,
+            )
+            if (eligibility.isAuthorized() || coroutineEligibility.isAuthorized()) {
                 functionGenerationContext.markArcResultOwnedBySlot(result, resultSlot)
             }
         }

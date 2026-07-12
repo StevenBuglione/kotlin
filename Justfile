@@ -45,6 +45,9 @@ remote-arc-no-collector: remote-snapshot
 remote-arc-frame-elision-unit: remote-snapshot
     {{python}} tools/arc/arc.py run arc-frame-elision-unit
 
+remote-arc-return-update-coalescing-unit: remote-snapshot
+    {{python}} tools/arc/arc.py run arc-return-update-coalescing-unit
+
 remote-arc-rooted-loop: remote-snapshot
     {{python}} tools/arc/arc.py run arc-rooted-loop
 
@@ -102,6 +105,9 @@ ci2-full: ci2-snapshot
 ci2-arc-frame-elision-unit: ci2-snapshot
     {{python}} tools/arc/arc.py --machine ci2 run arc-frame-elision-unit
 
+ci2-arc-return-update-coalescing-unit: ci2-snapshot
+    {{python}} tools/arc/arc.py --machine ci2 run arc-return-update-coalescing-unit
+
 ci2-arc-field-projection: ci2-snapshot
     {{python}} tools/arc/arc.py --machine ci2 run arc-field-projection
 
@@ -125,6 +131,13 @@ ci2-arc-bench wave: ci2-bench-snapshot
     {{python}} tools/arc/arc.py --machine ci2-bench run arc-bench-baseline
     status=0; {{python}} tools/arc/arc.py --machine ci2-bench run arc-bench || status=$?; {{python}} tools/arc/arc.py --machine ci2-bench benchmark-bundle {{wave}}; exit "$status"
 
+# Fast development oracle: one compile, three pinned runs, no warmup, and no release-gate failure.
+# Full `ci2-arc-bench` remains the only evidence-producing benchmark recipe.
+ci2-arc-bench-quick scenarios: ci2-bench-snapshot
+    {{python}} tools/arc/arc.py --machine ci2-bench run arc-bench-candidate --quick --scenarios "{{scenarios}}"
+    {{python}} tools/arc/arc.py --machine ci2-bench run arc-bench-baseline --quick --scenarios "{{scenarios}}"
+    {{python}} tools/arc/arc.py --machine ci2-bench run arc-bench --quick --scenarios "{{scenarios}}"
+
 ci2-bench-status profile:
     {{python}} tools/arc/arc.py --machine ci2-bench status {{profile}}
 
@@ -136,3 +149,40 @@ ci2-status profile:
 
 ci2-log profile:
     {{python}} tools/arc/arc.py --machine ci2 log {{profile}}
+
+# Dedicated parallel lanes. These never reset the compiler or benchmark worktrees.
+ci2-runtime-init:
+    {{python}} tools/arc/arc.py --machine ci2-runtime remote-init
+
+ci2-runtime-snapshot: ci2-runtime-init
+    {{python}} tools/arc/arc.py --machine ci2-runtime remote-snapshot
+
+ci2-runtime-run profile: ci2-runtime-snapshot
+    {{python}} tools/arc/arc.py --machine ci2-runtime run {{profile}}
+
+ci2-runtime-status profile:
+    {{python}} tools/arc/arc.py --machine ci2-runtime status {{profile}}
+
+ssa-init:
+    {{python}} tools/arc/arc.py --machine primary-ssa remote-init
+
+ssa-snapshot: ssa-init
+    {{python}} tools/arc/arc.py --machine primary-ssa remote-snapshot
+
+ssa-run profile: ssa-snapshot
+    {{python}} tools/arc/arc.py --machine primary-ssa run {{profile}}
+
+ssa-status profile:
+    {{python}} tools/arc/arc.py --machine primary-ssa status {{profile}}
+
+interop-init:
+    {{python}} tools/arc/arc.py --machine primary-interop remote-init
+
+interop-snapshot: interop-init
+    {{python}} tools/arc/arc.py --machine primary-interop remote-snapshot
+
+interop-run profile: interop-snapshot
+    {{python}} tools/arc/arc.py --machine primary-interop run {{profile}}
+
+interop-status profile:
+    {{python}} tools/arc/arc.py --machine primary-interop status {{profile}}

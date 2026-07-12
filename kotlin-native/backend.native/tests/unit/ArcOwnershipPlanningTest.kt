@@ -42,6 +42,46 @@ class ArcOwnershipPlanningTest {
     }
 
     @Test
+    fun coroutineResultSlotForwardingAuthorizationRequiresEverySafetyGate() {
+        val eligible = ArcCoroutineResultSlotForwardingEligibility(
+            arcEnabled = true,
+            optimizationsEnabled = true,
+            debugInfoDisabled = true,
+            exactCallIdentitySelected = true,
+            explicitResultSlot = true,
+            exactResultSlotIdentity = true,
+            directKotlinCall = true,
+            nonExternalCall = true,
+            nonVirtualCall = true,
+            ownedResultConvention = true,
+            referenceResult = true,
+            nonUnitResult = true,
+            nonNothingResult = true,
+            allNormalReturnsInitializeSlot = true,
+            noDifferentSlotOrSuspendBoundaryWidening = true,
+            normalSuccessEdgeOnly = true,
+        )
+
+        assertTrue(eligible.isAuthorized())
+        assertFalse(eligible.copy(arcEnabled = false).isAuthorized())
+        assertFalse(eligible.copy(optimizationsEnabled = false).isAuthorized())
+        assertFalse(eligible.copy(debugInfoDisabled = false).isAuthorized())
+        assertFalse(eligible.copy(exactCallIdentitySelected = false).isAuthorized())
+        assertFalse(eligible.copy(explicitResultSlot = false).isAuthorized())
+        assertFalse(eligible.copy(exactResultSlotIdentity = false).isAuthorized())
+        assertFalse(eligible.copy(directKotlinCall = false).isAuthorized())
+        assertFalse(eligible.copy(nonExternalCall = false).isAuthorized())
+        assertFalse(eligible.copy(nonVirtualCall = false).isAuthorized())
+        assertFalse(eligible.copy(ownedResultConvention = false).isAuthorized())
+        assertFalse(eligible.copy(referenceResult = false).isAuthorized())
+        assertFalse(eligible.copy(nonUnitResult = false).isAuthorized())
+        assertFalse(eligible.copy(nonNothingResult = false).isAuthorized())
+        assertFalse(eligible.copy(allNormalReturnsInitializeSlot = false).isAuthorized())
+        assertFalse(eligible.copy(noDifferentSlotOrSuspendBoundaryWidening = false).isAuthorized())
+        assertFalse(eligible.copy(normalSuccessEdgeOnly = false).isAuthorized())
+    }
+
+    @Test
     fun borrowedMutableReadAuthorizationRequiresEverySafetyGate() {
         val eligible = ArcBorrowedMutableReadEligibility(
             arcEnabled = true,

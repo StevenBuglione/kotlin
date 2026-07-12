@@ -119,6 +119,7 @@ private abstract class BaseInteropIrTransformer(
                     generationState.fileLowerState.getFunctionReferenceImplUniqueName(prefix)
 
             override val target get() = context.config.target
+            override val memoryModel get() = context.config.memoryModel
 
             override fun throwCompilerError(element: IrElement?, message: String): Nothing {
                 error(irFile, element, message)

@@ -48,14 +48,73 @@ class ArcProfileTest(unittest.TestCase):
             self.assertNotEqual(compiler_dir, os.environ["ARC_REMOTE_DIR"])
             self.assertEqual(16, arc.workers())
 
+    def test_parallel_compiler_runtime_and_ssa_lanes_have_distinct_worktrees(self):
+        configurations = {}
+        for machine in ("ci2", "ci2-bench", "ci2-runtime", "primary-ssa", "primary-interop"):
+            with patch.dict(os.environ, {}, clear=True):
+                arc.select_machine(machine)
+                configurations[machine] = (
+                    os.environ["ARC_REMOTE"],
+                    os.environ["ARC_REMOTE_DIR"],
+                    arc.workers(),
+                )
+        self.assertEqual(5, len({value[1] for value in configurations.values()}))
+        self.assertEqual(("olfa@10.10.10.12", "/home/olfa/codex-kotlin-arc-ci2-runtime", 8), configurations["ci2-runtime"])
+        self.assertEqual(("olfa@10.10.10.8", "/home/olfa/codex-kotlin-arc-ssa", 14), configurations["primary-ssa"])
+        self.assertEqual(("olfa@10.10.10.8", "/home/olfa/codex-kotlin-arc-interop", 12), configurations["primary-interop"])
+
+    def test_path_scoped_snapshots_are_normalized_deduplicated_and_exclude_generated_trees(self):
+        self.assertEqual(
+            ["kotlin-native/runtime/src/legacymm/cpp/Memory.cpp", "tools/arc/arc.py"],
+            arc.snapshot_pathspecs([
+                ".\\kotlin-native\\runtime\\src\\legacymm\\cpp\\Memory.cpp",
+                "tools/arc/arc.py",
+                "tools/arc/arc.py",
+            ]),
+        )
+        for invalid in ("../outside", "/absolute", "wasm/wasm.debug.browsers/file", "tools/arc/__pycache__/x.pyc"):
+            with self.assertRaises(SystemExit):
+                arc.snapshot_pathspecs([invalid])
+        with self.assertRaises(SystemExit):
+            arc.snapshot_pathspecs([])
+
     def test_ci2_benchmark_recipe_uses_only_the_benchmark_machine(self):
         justfile = (Path(__file__).parents[2] / "Justfile").read_text()
         self.assertIn("ci2-arc-bench wave: ci2-bench-snapshot", justfile)
         recipe = justfile.split("ci2-arc-bench wave: ci2-bench-snapshot", 1)[1].split(
-            "ci2-bench-status profile:", 1
+            "ci2-arc-bench-quick scenarios:", 1
         )[0]
         self.assertEqual(4, recipe.count("--machine ci2-bench"))
         self.assertNotIn("--machine ci2 ", recipe)
+
+    def test_quick_benchmark_preset_is_explicit_and_non_evidence_producing(self):
+        with patch.dict(
+            os.environ,
+            {
+                "ARC_BENCH_QUICK": "1",
+                "ARC_BENCH_SCENARIOS": "strings,coroutines",
+                "ARC_BENCH_ENFORCE": "0",
+            },
+            clear=True,
+        ):
+            command = arc.profile_command("arc-bench")
+        self.assertIn("ARC_BENCH_QUICK=1", command)
+        self.assertIn("ARC_BENCH_SCENARIOS=strings,coroutines", command)
+        self.assertIn("ARC_BENCH_ENFORCE=0", command)
+
+        justfile = (Path(__file__).parents[2] / "Justfile").read_text()
+        self.assertIn("ci2-arc-bench-quick scenarios: ci2-bench-snapshot", justfile)
+        quick_recipe = justfile.split(
+            "ci2-arc-bench-quick scenarios: ci2-bench-snapshot", 1
+        )[1].split("ci2-bench-status profile:", 1)[0]
+        self.assertEqual(3, quick_recipe.count("--quick"))
+        self.assertEqual(3, quick_recipe.count("--scenarios"))
+        self.assertNotIn("benchmark-bundle", quick_recipe)
+
+        script = (Path(__file__).parent / "benchmark_compare.sh").read_text()
+        self.assertIn('quick=${ARC_BENCH_QUICK:-0}', script)
+        self.assertIn('compile_repetitions=${ARC_BENCH_COMPILE_REPETITIONS:-1}', script)
+        self.assertIn('"quickDiagnostic": os.environ.get("ARC_BENCH_QUICK", "0") == "1"', script)
 
     def test_remote_runner_serializes_only_measurements_with_the_common_git_lock(self):
         script = (Path(__file__).parent / "remote.sh").read_text()
@@ -76,6 +135,9 @@ class ArcProfileTest(unittest.TestCase):
             "/home/olfa/codex-kotlin-arc",
             "/home/olfa/codex-kotlin-arc-ci2",
             "/home/olfa/codex-kotlin-arc-ci2-bench",
+            "/home/olfa/codex-kotlin-arc-ci2-runtime",
+            "/home/olfa/codex-kotlin-arc-ssa",
+            "/home/olfa/codex-kotlin-arc-interop",
         ):
             self.assertIn(path, script)
         self.assertIn(
@@ -104,6 +166,22 @@ class ArcProfileTest(unittest.TestCase):
         self.assertIn('"$llvm/bin/clang++"', script)
         self.assertIn("-Wl,-l:libz.so.1", script)
         self.assertIn("ArcFrameElisionTest.cpp", script)
+
+    def test_return_update_coalescing_unit_is_wired_to_both_remote_builders(self):
+        with patch.dict(os.environ, {}, clear=True):
+            command = arc.profile_command("arc-return-update-coalescing-unit")
+        self.assertEqual(["bash", "tools/arc/run_return_update_coalescing_unit.sh"], command)
+
+        script = (Path(__file__).parent / "run_return_update_coalescing_unit.sh").read_text()
+        self.assertNotIn("ARC_RETURN_UPDATE_UNIT_DIR", script)
+        self.assertNotIn("rm -rf", script)
+        self.assertIn("-DKONAN_LLVMEXT_BUILD_TESTS=ON", script)
+        self.assertIn("ctest --test-dir", script)
+
+        justfile = (Path(__file__).parents[2] / "Justfile").read_text()
+        self.assertIn("remote-arc-return-update-coalescing-unit: remote-snapshot", justfile)
+        self.assertIn("ci2-arc-return-update-coalescing-unit: ci2-snapshot", justfile)
+        self.assertGreaterEqual(justfile.count("run arc-return-update-coalescing-unit"), 2)
 
     def test_field_projection_profile_runs_emitted_ir_and_machine_gates_on_ci2(self):
         with patch.dict(os.environ, {}, clear=True):

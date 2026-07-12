@@ -114,6 +114,16 @@ constexpr container_size_t kContainerAlignment = 1024;
 // Must match objectAlignment in Runtime.kt
 constexpr container_size_t kObjectAlignment = 8;
 
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+constexpr size_t kArcRecycledContainerCapacity = 4;
+constexpr size_t kArcRecycledContainerMaxSize = 4 * 1024;
+
+struct ArcRecycledContainer {
+  ContainerHeader* container = nullptr;
+  size_t size = 0;
+};
+#endif
+
 // Required e.g. for object size computations to be correct.
 static_assert(sizeof(ContainerHeader) % kObjectAlignment == 0, "sizeof(ContainerHeader) is not aligned");
 
@@ -868,10 +878,11 @@ struct MemoryState {
 #if !USE_GC
   ForeignRefManager* foreignRefManager;
 #if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
-  // Keep one small, fully destroyed allocation close to the thread that released it.
-  // This avoids repeatedly entering the allocator for homogeneous ARC workloads while
-  // bounding retained memory independently of the number of objects being destroyed.
-  ContainerHeader* arcRecycledContainer = nullptr;
+  // Keep a small fully-associative MRU queue of fully destroyed allocations close to the
+  // thread that released them. Four entries cover mixed object/array workloads without
+  // making retained memory depend on the number of objects being destroyed.
+  ArcRecycledContainer arcRecycledContainers[kArcRecycledContainerCapacity] = {};
+  size_t arcRecycledContainerCount = 0;
 #endif
 #endif
 
@@ -1197,38 +1208,79 @@ inline bool isFreezableAtomic(ContainerHeader* container) {
 }
 
 #if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
-constexpr size_t kArcRecycledContainerMaxSize = 4 * 1024;
-
-void flushArcRecycledContainer(MemoryState* state) {
-  ContainerHeader* container = state->arcRecycledContainer;
-  if (container == nullptr) return;
-
-  state->arcRecycledContainer = nullptr;
+void destroyArcPhysicalContainer(MemoryState* state, ContainerHeader* container) {
+  RuntimeAssert(container != nullptr, "Cannot physically destroy a null ARC container");
   CONTAINER_DESTROY_EVENT(state, container);
   freeInObjectPool(container, 0);
   atomicAdd(&allocCount, -1);
+}
+
+void flushArcRecycledContainers(MemoryState* state) {
+  RuntimeAssert(state != nullptr, "Cannot flush ARC recycled containers without memory state");
+  const size_t count = state->arcRecycledContainerCount;
+  state->arcRecycledContainerCount = 0;
+  for (size_t index = 0; index < count; ++index) {
+    ArcRecycledContainer entry = state->arcRecycledContainers[index];
+    state->arcRecycledContainers[index] = {};
+    destroyArcPhysicalContainer(state, entry.container);
+  }
+}
+
+ContainerHeader* takeArcRecycledContainer(MemoryState* state, size_t size) {
+  if (state == nullptr) return nullptr;
+
+  for (size_t index = 0; index < state->arcRecycledContainerCount; ++index) {
+    ArcRecycledContainer entry = state->arcRecycledContainers[index];
+    RuntimeAssert(entry.container != nullptr, "ARC recycled-container queue contains a null entry");
+    if (entry.size != size) continue;
+
+    for (size_t next = index + 1; next < state->arcRecycledContainerCount; ++next) {
+      state->arcRecycledContainers[next - 1] = state->arcRecycledContainers[next];
+    }
+    --state->arcRecycledContainerCount;
+    state->arcRecycledContainers[state->arcRecycledContainerCount] = {};
+    // Restore the complete allocation, including the ARC deallocating bit and all object
+    // payload, to the same state as a fresh zero-initialized pool allocation.
+    memset(entry.container, 0, kotlin::AlignUp(size, kObjectAlignment));
+    return entry.container;
+  }
+  return nullptr;
+}
+
+bool cacheArcRecycledContainer(MemoryState* state, ContainerHeader* container) {
+  if (state == nullptr || isAggregatingFrozenContainer(container) || container->objectCount() != 1) {
+    return false;
+  }
+
+  ObjHeader* object = reinterpret_cast<ObjHeader*>(container + 1);
+  const size_t fullSize = sizeof(ContainerHeader) + objectSize(object);
+  if (fullSize > kArcRecycledContainerMaxSize || !container->hasContainerSize()) return false;
+  RuntimeAssert(container->containerSize() == fullSize,
+                "small ARC recycled container must preserve its exact allocation size");
+
+  ArcRecycledContainer evicted;
+  if (state->arcRecycledContainerCount == kArcRecycledContainerCapacity) {
+    evicted = state->arcRecycledContainers[kArcRecycledContainerCapacity - 1];
+    --state->arcRecycledContainerCount;
+  }
+  for (size_t index = state->arcRecycledContainerCount; index > 0; --index) {
+    state->arcRecycledContainers[index] = state->arcRecycledContainers[index - 1];
+  }
+  state->arcRecycledContainers[0] = {container, fullSize};
+  ++state->arcRecycledContainerCount;
+
+  if (evicted.container != nullptr) destroyArcPhysicalContainer(state, evicted.container);
+  return true;
 }
 #endif
 
 ContainerHeader* allocContainer(MemoryState* state, size_t size) {
  ContainerHeader* result = nullptr;
 #if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
-  bool reusedArcContainer = false;
-  if (state != nullptr && state->arcRecycledContainer != nullptr) {
-    ContainerHeader* container = state->arcRecycledContainer;
-    if (container->hasContainerSize() && container->containerSize() == size) {
-      MEMORY_LOG("ARC recycle %p for request %zu\n", container, size)
-      state->arcRecycledContainer = nullptr;
-      result = container;
-      reusedArcContainer = true;
-      // Restore the complete allocation, including the ARC deallocating bit and all
-      // object payload, to the same state as a fresh zero-initialized pool allocation.
-      memset(container, 0, kotlin::AlignUp(size, kObjectAlignment));
-    } else {
-      // Do not let a stale size monopolize the bounded slot after an allocation phase
-      // changes to another object layout.
-      flushArcRecycledContainer(state);
-    }
+  result = takeArcRecycledContainer(state, size);
+  const bool reusedArcContainer = result != nullptr;
+  if (reusedArcContainer) {
+    MEMORY_LOG("ARC recycle %p for request %zu\n", result, size)
   }
 #endif
 #if USE_GC
@@ -1353,16 +1405,15 @@ void scheduleDestroyContainer(MemoryState* state, ContainerHeader* container) {
 #else
 #if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
   RuntimeAssert(container != nullptr, "Cannot destroy null container");
-  if (state != nullptr && state->arcRecycledContainer == nullptr &&
-      !isAggregatingFrozenContainer(container) && container->hasContainerSize() &&
-      container->containerSize() <= kArcRecycledContainerMaxSize) {
-    state->arcRecycledContainer = container;
-    return;
-  }
+  if (cacheArcRecycledContainer(state, container)) return;
 #endif
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+  destroyArcPhysicalContainer(state, container);
+#else
   CONTAINER_DESTROY_EVENT(state, container);
   freeInObjectPool(container, 0);
   atomicAdd(&allocCount, -1);
+#endif
 #endif
 }
 
@@ -2464,7 +2515,7 @@ void deinitMemory(MemoryState* memoryState, bool destroyRuntime) {
   memoryState->tls.Deinit();
   // Foreign-reference draining and TLS teardown may both perform final ARC releases.
   // Return the last cached physical allocation only after those release sources stop.
-  flushArcRecycledContainer(memoryState);
+  flushArcRecycledContainers(memoryState);
 #if KONAN_ARC_DIAGNOSTICS
   // Only an explicitly requested leak check at the final orderly runtime teardown owns
   // process-wide reporting. Concurrent foreign-thread teardown and other shutdown checkers
@@ -3920,6 +3971,23 @@ void RestoreMemory(MemoryState* memoryState) {
 void ClearMemoryForTests(MemoryState*) {
     // Nothing to do, DeinitMemory will do the job.
 }
+
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+RUNTIME_NOTHROW size_t Kotlin_ArcRecycledContainerCountForTests(MemoryState* state) {
+  RuntimeAssert(state != nullptr, "ARC recycled-container test query requires memory state");
+  return state->arcRecycledContainerCount;
+}
+
+RUNTIME_NOTHROW size_t Kotlin_ArcRecycledContainerSizeForTests(MemoryState* state, size_t index) {
+  RuntimeAssert(state != nullptr, "ARC recycled-container test query requires memory state");
+  RuntimeAssert(index < state->arcRecycledContainerCount, "ARC recycled-container test index is out of bounds");
+  return state->arcRecycledContainers[index].size;
+}
+
+RUNTIME_NOTHROW int Kotlin_ArcAllocatedContainerCountForTests() {
+  return atomicGet(&allocCount);
+}
+#endif
 
 RUNTIME_NOTHROW OBJ_GETTER(AllocInstanceStrict, const TypeInfo* type_info) {
   RETURN_RESULT_OF(allocInstance<true>, type_info);
