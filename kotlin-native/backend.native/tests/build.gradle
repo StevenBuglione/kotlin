@@ -3387,6 +3387,13 @@ standaloneTest("arc_borrowed_array_element") {
     source = "codegen/arc/borrowedArrayElement.kt"
 }
 
+standaloneTest("arc_empty_frame_elision") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    flags = ["-opt"]
+    outputChecker = { it.contains("ARC_EMPTY_FRAME_OK\n") }
+    source = "codegen/arc/emptyFrameElision.kt"
+}
+
 standaloneTest("arc_weak_and_unowned_storage") {
     enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
     useGoldenData = true
@@ -6654,6 +6661,46 @@ fileCheckTest("filecheck_arc_exceptional_frame_cleanup") {
     enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
     annotatedSource = project.file('filecheck/arc_exceptional_frame_cleanup.kt')
     phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_empty_frame_before") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('filecheck/arc_empty_frame_elision.kt')
+    checkPrefix = "BEFORE"
+    extraOpts = ["-opt"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_empty_frame_after") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('filecheck/arc_empty_frame_elision.kt')
+    checkPrefix = "AFTER"
+    extraOpts = ["-opt"]
+    phaseToCheck = "RemoveEmptyArcFrames"
+}
+
+fileCheckTest("filecheck_arc_empty_frame_lto") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('filecheck/arc_empty_frame_elision.kt')
+    checkPrefix = "LTO"
+    extraOpts = ["-opt"]
+    phaseToCheck = "LTOBitcodeOptimization"
+}
+
+fileCheckTest("filecheck_arc_empty_frame_final") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('codegen/arc/emptyFrameElision.kt')
+    checkPrefix = "FINAL"
+    extraOpts = ["-opt"]
+    phaseToCheck = "RemoveEmptyArcFrames"
+}
+
+fileCheckTest("filecheck_arc_empty_frame_no_direct_wrappers") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('filecheck/arc_empty_frame_elision.kt')
+    checkPrefix = "NODIRECT"
+    extraOpts = ["-opt"]
+    phaseToCheck = "RemoveEmptyArcFrames"
 }
 
 fileCheckTest("filecheck_when") {

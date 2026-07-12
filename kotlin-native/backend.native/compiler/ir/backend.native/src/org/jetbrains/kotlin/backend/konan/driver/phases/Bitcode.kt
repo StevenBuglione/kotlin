@@ -22,8 +22,13 @@ import org.jetbrains.kotlin.backend.konan.insertAliasToEntryPoint
 import org.jetbrains.kotlin.backend.konan.llvm.coverage.runCoveragePass
 import org.jetbrains.kotlin.backend.konan.llvm.verifyModule
 import org.jetbrains.kotlin.backend.konan.optimizations.RemoveRedundantSafepointsPass
+import org.jetbrains.kotlin.backend.konan.optimizations.prepareArcFrameElision
 import org.jetbrains.kotlin.backend.konan.optimizations.removeMultipleThreadDataLoads
+import org.jetbrains.kotlin.backend.konan.optimizations.removeEmptyArcFrames
+import org.jetbrains.kotlin.backend.konan.optimizations.restoreArcFrameElision
+import org.jetbrains.kotlin.backend.konan.optimizations.sealArcFrameElisionForLTO
 import org.jetbrains.kotlin.konan.target.SanitizerKind
+import org.jetbrains.kotlin.konan.target.KonanTarget
 import java.io.File
 
 
@@ -88,6 +93,12 @@ internal val ModuleBitcodeOptimizationPhase = optimizationPipelinePass(
         description = "Optimize bitcode",
         pipeline = ::ModuleOptimizationPipeline,
 )
+
+internal val RemoveEmptyArcFramesPhase = createSimpleNamedCompilerPhase<OptimizationState, LLVMModuleRef>(
+        name = "RemoveEmptyArcFrames",
+        description = "Checkpoint after removing proven empty non-unwinding ARC frames",
+        postactions = getDefaultLlvmModuleActions(),
+) { _, _ -> }
 
 internal val LTOBitcodeOptimizationPhase = optimizationPipelinePass(
         name = "LTOBitcodeOptimization",
@@ -166,11 +177,50 @@ internal fun <T : BitcodePostProcessingContext> PhaseEngine<T>.runBitcodePostPro
             closedWorld = context.config.isFinalBinary,
             timePasses = context.config.flexiblePhaseConfig.needProfiling,
     )
+    val arcFrameElisionConfigurationAllows = context is NativeGenerationState &&
+            context.config.memoryModel == MemoryModel.ARC &&
+            context.config.target == KonanTarget.LINUX_X64 &&
+            context.config.optimizationsEnabled &&
+            !context.shouldContainAnyDebugInfo() &&
+            context.config.sanitizer == null &&
+            !context.config.undefinedBehaviorSanitizer &&
+            !context.coverage.enabled
+    val arcFrameElisionRequested = arcFrameElisionConfigurationAllows &&
+            context.config.flexiblePhaseConfig.isEnabled(RemoveEmptyArcFramesPhase)
     useContext(OptimizationState(context.config, optimizationConfig)) {
         val module = this@runBitcodePostProcessing.context.llvmModule
         it.runPhase(MandatoryBitcodeLLVMPostprocessingPhase, module)
-        it.runPhase(ModuleBitcodeOptimizationPhase, module)
-        it.runPhase(LTOBitcodeOptimizationPhase, module)
+        var arcFrameElisionActive = arcFrameElisionRequested && prepareArcFrameElision(module)
+        var removedArcFrames = 0
+        var arcFrameInlineFailures = 0
+        try {
+            it.runPhase(ModuleBitcodeOptimizationPhase, module)
+            if (arcFrameElisionActive && !sealArcFrameElisionForLTO(module)) {
+                restoreArcFrameElision(module)
+                arcFrameElisionActive = false
+            }
+            // Preserve exact frame-wrapper calls through LTO so empty frames
+            // exposed by late Kotlin-body inlining remain auditable.
+            it.runPhase(LTOBitcodeOptimizationPhase, module)
+            if (arcFrameElisionActive) {
+                val result = removeEmptyArcFrames(module)
+                removedArcFrames = result.removedFrames
+                arcFrameInlineFailures = result.inlineFailures
+            }
+        } finally {
+            // Failure paths restore attributes without transforming partially
+            // optimized IR. The successful path is idempotently restored too.
+            if (arcFrameElisionActive) restoreArcFrameElision(module)
+        }
+        if (arcFrameElisionActive) {
+            context.log {
+                "Removed $removedArcFrames empty ARC frame(s); " +
+                        "$arcFrameInlineFailures retained wrapper call(s) could not be inlined"
+            }
+        }
+        // User-visible phase checkpoint for dumps and verification. The
+        // mutation above is deliberately not independently disable-able.
+        it.runPhase(RemoveEmptyArcFramesPhase, module, disable = !arcFrameElisionActive)
         when (context.config.sanitizer) {
             SanitizerKind.THREAD -> it.runPhase(ThreadSanitizerPhase, module)
             SanitizerKind.ADDRESS -> it.runPhase(AddressSanitizerPhase, module)
