@@ -11,7 +11,7 @@ expected_baseline=3db61efe5e892bf27115f1ebcab957d903067ed4
 source="$root/tools/arc/fixtures/benchmark.kt"
 reporter="$root/tools/arc/benchmark_report.py"
 artifacts="$state/artifacts"
-repetitions=${ARC_BENCH_REPETITIONS:-5}
+repetitions=${ARC_BENCH_REPETITIONS:-9}
 warmups=${ARC_BENCH_WARMUPS:-1}
 compile_repetitions=${ARC_BENCH_COMPILE_REPETITIONS:-3}
 

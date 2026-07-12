@@ -35,16 +35,31 @@ Runtime elapsed time uses the Linux nanosecond wall-clock source around the proc
 
 Runtime order alternates baseline/candidate on every repetition and uses a reliably available CPU
 affinity when Linux exposes one (the parallel worker scenario retains the inherited CPU set).
+Runtime scenarios use nine repetitions by default, preserving an odd median sample while giving
+each model the first position four times across paired runs; the baseline leads the unavoidable
+ninth sample. Short fixtures are scaled toward roughly 0.15–0.4 seconds per model so process startup
+and timer noise do not dominate comparisons. When a genuine model-specific ownership cost makes
+that band impossible for both models, the workload keeps the baseline statistically useful instead
+of shrinking the candidate workload and hiding the regression.
 Compilation order also alternates and the committed static metric is
 the median of three compile repetitions by default; raw compilation repetitions remain in
 `compile-raw.tsv`.
 
 The `call-arguments` scenario is the focused emitted-code benchmark for stable-suffix borrowing.
-It performs 20 million direct calls with two mutable `Payload` references around a primitive index,
+It performs 80 million direct calls with two mutable `Payload` references around a primitive index,
 replacing the first reference every 16,384 iterations. Its deliberately large consumer and cold
 recursive edge keep a meaningful call boundary without compiler-version-specific annotations. The
 checksum covers both object values and the argument position; the logical allocation count is the
 two initial payloads plus the exact number of periodic replacements.
+
+The `bounded-cycles` scenario intentionally keeps its leak surface fixed at 25,000 two-object
+cycles. Timing is scaled with 10,240 deterministic edge traversals per cycle, not with additional
+leaked allocations; its reported operation count is therefore 256 million traversals while logical
+allocations remain 50,000.
+
+The `workers` scenario launches four workers that each perform 40 million increments through a
+worker-local `AtomicInt`, for 160 million operations in total. Its logical allocation count is a
+conservative 16, including the four worker-local atomic objects.
 
 For focused validation, `ARC_BENCH_SCENARIOS` accepts a comma-separated subset, for example
 `call-arguments,exceptions,platform-c-interop`. Commas keep the selection intact through the SSH

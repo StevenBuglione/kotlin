@@ -22,7 +22,7 @@ private class MutableFields(var first: Long, var second: Long, var reference: Pa
 private class CycleNode(val value: Int) { var next: CycleNode? = null }
 
 private fun allocationWork(): BenchResult {
-    val count = 2_000_000
+    val count = 6_000_000
     val window = arrayOfNulls<Payload>(4096)
     var checksum = 0L
     repeat(count) { index ->
@@ -35,7 +35,7 @@ private fun allocationWork(): BenchResult {
 }
 
 private fun destructionWork(): BenchResult {
-    val count = 100_000
+    val count = 1_500_000
     var head: ChainNode? = null
     repeat(count) { index -> head = ChainNode(index, head) }
     var checksum = 0L
@@ -49,7 +49,7 @@ private fun destructionWork(): BenchResult {
 }
 
 private fun fieldsWork(): BenchResult {
-    val count = 20_000_000
+    val count = 200_000_000
     val fields = MutableFields(1, 2, Payload(3))
     repeat(count) { index ->
         fields.first += fields.second
@@ -60,7 +60,7 @@ private fun fieldsWork(): BenchResult {
 }
 
 private fun arraysWork(): BenchResult {
-    val count = 20_000_000
+    val count = 120_000_000
     val values = LongArray(8192) { it.toLong() }
     var checksum = 0L
     repeat(count) { index ->
@@ -73,7 +73,7 @@ private fun arraysWork(): BenchResult {
 }
 
 private fun stringsWork(): BenchResult {
-    val count = 150_000
+    val count = 600_000
     var checksum = 0L
     repeat(count) { index ->
         val value = "arc-${index and 1023}-${index.toString(16)}"
@@ -88,7 +88,7 @@ private class Multiply(private val amount: Int) : Operation { override fun apply
 private class Xor(private val amount: Int) : Operation { override fun apply(value: Int) = value xor amount }
 
 private fun virtualDispatchWork(): BenchResult {
-    val count = 20_000_000
+    val count = 80_000_000
     val operations = arrayOf<Operation>(Add(3), Multiply(5), Xor(0x55aa))
     var checksum = 1
     repeat(count) { index -> checksum = operations[index % operations.size].apply(checksum) }
@@ -125,7 +125,7 @@ private fun consumeArguments(first: Payload, marker: Int, second: Payload): Long
 }
 
 private fun callArgumentsWork(): BenchResult {
-    val count = 20_000_000
+    val count = 80_000_000
     var first = Payload(1)
     var second = Payload(7)
     var checksum = 0L
@@ -133,13 +133,13 @@ private fun callArgumentsWork(): BenchResult {
         if ((index and 0x3fff) == 0) first = Payload(index)
         checksum += consumeArguments(first, index, second)
     }
-    check(checksum == 1_898_607_728_141_440L)
+    check(checksum == 30_394_430_133_801_472L)
     val replacements = (count + 0x3fff) / 0x4000
     return BenchResult(checksum, count.toLong(), 2L + replacements)
 }
 
 private fun closuresWork(): BenchResult {
-    val count = 1_000_000
+    val count = 600_000_000
     var checksum = 0L
     repeat(count) { index ->
         val captured = index
@@ -165,7 +165,7 @@ private fun exceptionsWork(): BenchResult {
 private suspend fun suspendStep(value: Int): Int = suspendCoroutine { continuation -> continuation.resume(value + 1) }
 
 private fun coroutinesWork(): BenchResult {
-    val count = 200_000
+    val count = 300_000
     var checksum = 0L
     repeat(count) { index ->
         var outcome: Result<Int>? = null
@@ -179,8 +179,9 @@ private fun coroutinesWork(): BenchResult {
 }
 
 private fun workerLoop(seed: Int): Long {
-    var checksum = seed.toLong()
-    repeat(2_000_000) { checksum = checksum * 1664525L + 1013904223L }
+    val value = AtomicInt(seed)
+    var checksum = 0L
+    repeat(40_000_000) { checksum += value.addAndGet(1) }
     return checksum
 }
 
@@ -191,11 +192,11 @@ private fun workersWork(): BenchResult {
     }
     val checksum = futures.sumOf { it.result }
     workers.forEach { it.requestTermination().result }
-    return BenchResult(checksum, 8_000_000, 12)
+    return BenchResult(checksum, 160_000_000L, 16)
 }
 
 private fun atomicsWork(): BenchResult {
-    val count = 10_000_000
+    val count = 40_000_000
     val value = AtomicInt(0)
     var checksum = 0L
     repeat(count) { checksum += value.addAndGet(1) }
@@ -203,7 +204,7 @@ private fun atomicsWork(): BenchResult {
 }
 
 private fun platformCInteropWork(): BenchResult {
-    val count = 2_000_000
+    val count = 1_800_000
     val value = "kotlin-native-arc"
     var checksum = 0L
     repeat(count) { checksum += strlen(value).toLong() }
@@ -212,15 +213,21 @@ private fun platformCInteropWork(): BenchResult {
 
 private fun boundedCyclesWork(): BenchResult {
     val count = 25_000
+    val traversalsPerCycle = 10_240
     var checksum = 0L
     repeat(count) { index ->
         val first = CycleNode(index)
         val second = CycleNode(index + 1)
         first.next = second
         second.next = first
-        checksum += first.next!!.value + second.next!!.value
+        var cursor = first
+        repeat(traversalsPerCycle) {
+            cursor = cursor.next!!
+            checksum += cursor.value
+        }
     }
-    return BenchResult(checksum, count.toLong(), count * 2L)
+    check(checksum == 3_200_000_000_000L)
+    return BenchResult(checksum, count.toLong() * traversalsPerCycle.toLong(), count * 2L)
 }
 
 fun main(args: Array<String>) {

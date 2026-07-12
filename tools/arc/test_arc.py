@@ -190,17 +190,17 @@ class ArcProfileTest(unittest.TestCase):
         fixture = (Path(__file__).parent / "fixtures" / "benchmark.kt").read_text()
         script = (Path(__file__).parent / "benchmark_compare.sh").read_text()
         self.assertIn("private fun consumeArguments(first: Payload, marker: Int, second: Payload): Long", fixture)
-        self.assertIn("val count = 20_000_000", fixture)
+        self.assertIn("val count = 80_000_000", fixture)
         self.assertIn("var first = Payload(1)", fixture)
         self.assertIn("var second = Payload(7)", fixture)
         self.assertIn("if ((index and 0x3fff) == 0) first = Payload(index)", fixture)
         self.assertIn("checksum += consumeArguments(first, index, second)", fixture)
-        self.assertIn("check(checksum == 1_898_607_728_141_440L)", fixture)
+        self.assertIn("check(checksum == 30_394_430_133_801_472L)", fixture)
         self.assertIn("2L + replacements", fixture)
         self.assertIn("virtual-dispatch call-arguments closures", script)
         self.assertIn('${scenario_selection//,/ }', script)
 
-        count = 20_000_000
+        count = 80_000_000
         block = 0x4000
         full_blocks, remainder = divmod(count, block)
         full_coefficients = sum(range(1, 17)) * (block // 16)
@@ -209,8 +209,81 @@ class ArcProfileTest(unittest.TestCase):
             (block_index * block) * full_coefficients for block_index in range(full_blocks)
         ) + (full_blocks * block) * remainder_coefficients
         checksum = count * (count - 1) // 2 + 7 * count + payload_component
-        self.assertEqual(1_898_607_728_141_440, checksum)
-        self.assertEqual(1_223, 2 + (count + block - 1) // block)
+        self.assertEqual(30_394_430_133_801_472, checksum)
+        self.assertEqual(4_885, 2 + (count + block - 1) // block)
+
+    def test_short_benchmarks_are_scaled_without_expanding_cycle_leaks(self):
+        fixture = (Path(__file__).parent / "fixtures" / "benchmark.kt").read_text()
+        script = (Path(__file__).parent / "benchmark_compare.sh").read_text()
+
+        def body(name, next_name):
+            return fixture.split(f"private fun {name}", 1)[1].split(f"private fun {next_name}", 1)[0]
+
+        expected_counts = {
+            "allocationWork": ("destructionWork", "6_000_000"),
+            "destructionWork": ("fieldsWork", "1_500_000"),
+            "fieldsWork": ("arraysWork", "200_000_000"),
+            "arraysWork": ("stringsWork", "120_000_000"),
+            "stringsWork": ("virtualDispatchWork", "600_000"),
+            "virtualDispatchWork": ("consumeArguments", "80_000_000"),
+            "callArgumentsWork": ("closuresWork", "80_000_000"),
+            "closuresWork": ("exceptionsWork", "600_000_000"),
+            "coroutinesWork": ("workerLoop", "300_000"),
+            "atomicsWork": ("platformCInteropWork", "40_000_000"),
+            "platformCInteropWork": ("boundedCyclesWork", "1_800_000"),
+        }
+        for name, (next_name, count) in expected_counts.items():
+            self.assertIn(f"val count = {count}", body(name, next_name), name)
+        worker_loop = body("workerLoop", "workersWork")
+        self.assertIn("val value = AtomicInt(seed)", worker_loop)
+        self.assertIn("repeat(40_000_000)", worker_loop)
+        self.assertIn("checksum += value.addAndGet(1)", worker_loop)
+        self.assertIn("BenchResult(checksum, 160_000_000L, 16)", body("workersWork", "atomicsWork"))
+        exceptions = fixture.split("private fun exceptionsWork", 1)[1].split("private suspend fun suspendStep", 1)[0]
+        self.assertIn("val count = 100_000", exceptions)
+        self.assertIn("repetitions=${ARC_BENCH_REPETITIONS:-9}", script)
+
+        cycles = body("boundedCyclesWork", "main")
+        self.assertIn("val count = 25_000", cycles)
+        self.assertIn("val traversalsPerCycle = 10_240", cycles)
+        self.assertIn("count * 2L", cycles)
+        cycle_count = 25_000
+        traversals = 10_240
+        checksum = (traversals // 2) * cycle_count * cycle_count
+        self.assertEqual(3_200_000_000_000, checksum)
+        self.assertEqual(256_000_000, cycle_count * traversals)
+        self.assertEqual(50_000, cycle_count * 2)
+        self.assertIn(f"check(checksum == {checksum:_}L)", cycles)
+
+        logical_allocations = {
+            "allocation": 6_000_001,
+            "destruction": 1_500_000,
+            "fields": 12_210,
+            "arrays": 1,
+            "strings": 1_800_000,
+            "virtual-dispatch": 4,
+            "call-arguments": 4_885,
+            "closures": 600_000_000,
+            "coroutines": 900_000,
+            "workers": 16,
+            "atomics": 1,
+            "bounded-cycles": 50_000,
+        }
+        modeled_allocations = {
+            "allocation": 6_000_000 + 1,
+            "destruction": 1_500_000,
+            "fields": 2 + (200_000_000 + 0x3FFF) // 0x4000,
+            "arrays": 1,
+            "strings": 600_000 * 3,
+            "virtual-dispatch": 4,
+            "call-arguments": 2 + (80_000_000 + 0x3FFF) // 0x4000,
+            "closures": 600_000_000,
+            "coroutines": 300_000 * 3,
+            "workers": 16,
+            "atomics": 1,
+            "bounded-cycles": cycle_count * 2,
+        }
+        self.assertEqual(logical_allocations, modeled_allocations)
 
     def test_benchmark_callsite_counter_counts_only_emitted_calls(self):
         disassembly = """
