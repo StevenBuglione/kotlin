@@ -85,6 +85,7 @@ internal data class ArcOwnershipPlanningReport(
  */
 internal data class ArcCodegenOwnershipPlan(
     val ownedResultForwarding: Map<IrSimpleFunction, ArcOwnedResultForwarding>,
+    val borrowedGuaranteedAliases: Set<IrVariable>,
     val borrowedMutableReads: Set<IrGetValue>,
     val mutableConstructorInitializers: Set<IrVariable>,
     val scopedArcReferenceLoads: Map<IrCall, IrExpression>,
@@ -95,7 +96,7 @@ internal data class ArcCodegenOwnershipPlan(
         }
 
     companion object {
-        val Empty = ArcCodegenOwnershipPlan(emptyMap(), emptySet(), emptySet(), emptyMap())
+        val Empty = ArcCodegenOwnershipPlan(emptyMap(), emptySet(), emptySet(), emptySet(), emptyMap())
     }
 }
 
@@ -122,6 +123,27 @@ internal data class ArcBorrowedMutableReadEligibility(
 internal fun ArcBorrowedMutableReadEligibility.isAuthorized(): Boolean =
     arcEnabled && debugInfoDisabled && directKotlinCall && lastExplicitArgument &&
             mutableLocalReference && notCaptured && strongStorage && sideEffectFreeArgumentWrapper
+
+/** A deliberately exact authorization boundary for representing an unmodified `var` as a borrowed SSA value. */
+internal data class ArcBorrowedGuaranteedAliasEligibility(
+    val arcEnabled: Boolean,
+    val debugInfoDisabled: Boolean,
+    val nonSuspendFunction: Boolean,
+    val mutableLocalReference: Boolean,
+    val initializedFromGuaranteedParameter: Boolean,
+    val strongStorage: Boolean,
+    val exactlyOneUse: Boolean,
+    val neverAssigned: Boolean,
+    val notCaptured: Boolean,
+    val notReturned: Boolean,
+    val finalExplicitReferenceArgument: Boolean,
+    val directKotlinCall: Boolean,
+)
+
+internal fun ArcBorrowedGuaranteedAliasEligibility.isAuthorized(): Boolean =
+    arcEnabled && debugInfoDisabled && nonSuspendFunction && mutableLocalReference &&
+            initializedFromGuaranteedParameter && strongStorage && exactlyOneUse && neverAssigned &&
+            notCaptured && notReturned && finalExplicitReferenceArgument && directKotlinCall
 
 internal data class ArcOwnershipClassificationCounts(
     val owned: Int = 0,
@@ -163,6 +185,7 @@ internal fun runArcOwnershipPlanning(
     var classifications = ArcOwnershipClassificationCounts()
     var optimization = ArcOwnershipOptimizationMetrics()
     val ownedResultForwarding = linkedMapOf<IrSimpleFunction, ArcOwnedResultForwarding>()
+    val borrowedGuaranteedAliases = linkedSetOf<IrVariable>()
     val borrowedMutableReads = linkedSetOf<IrGetValue>()
     val mutableConstructorInitializers = linkedSetOf<IrVariable>()
     val scopedArcReferenceLoads = linkedMapOf<IrCall, IrExpression>()
@@ -182,7 +205,13 @@ internal fun runArcOwnershipPlanning(
     input.module.files.forEach { file ->
         file.acceptChildrenVoid(object : IrElementVisitorVoid {
             override fun visitSimpleFunction(declaration: IrSimpleFunction) {
-                borrowedMutableReads += selectVerifiedBorrowedMutableReads(generationState, declaration)
+                val guaranteedAliases = selectVerifiedBorrowedGuaranteedAliases(generationState, declaration)
+                borrowedGuaranteedAliases += guaranteedAliases
+                borrowedMutableReads += selectVerifiedBorrowedMutableReads(
+                    generationState,
+                    declaration,
+                    guaranteedAliases,
+                )
                 mutableConstructorInitializers += selectVerifiedMutableConstructorInitializers(
                     generationState,
                     declaration,
@@ -232,6 +261,7 @@ internal fun runArcOwnershipPlanning(
         optimization,
         ArcCodegenOwnershipPlan(
             ownedResultForwarding,
+            borrowedGuaranteedAliases,
             borrowedMutableReads,
             mutableConstructorInitializers,
             scopedArcReferenceLoads,
@@ -476,6 +506,169 @@ private fun verifyMutableConstructorInitializerProof(function: IrSimpleFunction,
     return ArcOwnershipVerifier.verify(proof) === ArcOwnershipVerificationResult.Success
 }
 
+private data class ArcGuaranteedAliasUseAnalysis(
+    val useCount: Int,
+    val assigned: Boolean,
+    val captured: Boolean,
+    val returned: Boolean,
+    val finalExplicitReferenceArgument: Boolean,
+    val directKotlinCall: Boolean,
+)
+
+/**
+ * Select an unmodified local `var` whose sole value is a guaranteed parameter and whose only read
+ * is already passed +0 to a direct Kotlin call. Codegen may represent this exact variable as an
+ * immutable SSA value: the parameter frame owns the object throughout the complete use interval.
+ */
+private fun selectVerifiedBorrowedGuaranteedAliases(
+    generationState: NativeGenerationState,
+    function: IrSimpleFunction,
+): Set<IrVariable> {
+    if (generationState.context.memoryModel != MemoryModel.ARC ||
+        generationState.context.shouldContainDebugInfo() || function.isSuspend
+    ) return emptySet()
+    val body = function.body ?: return emptySet()
+    val guaranteedParameters = function.allParameters
+        .filter { it.type.binaryTypeIsReference() }
+        .mapTo(linkedSetOf()) { it.symbol }
+    if (guaranteedParameters.isEmpty()) return emptySet()
+
+    val selected = linkedSetOf<IrVariable>()
+    body.acceptVoid(object : IrElementVisitorVoid {
+        override fun visitElement(element: IrElement) {
+            element.acceptChildrenVoid(this)
+        }
+
+        override fun visitFunction(declaration: IrFunction) = Unit
+
+        override fun visitVariable(declaration: IrVariable) {
+            val initializer = declaration.initializer as? IrGetValue
+            val analysis = analyzeGuaranteedAliasUses(generationState, function, declaration)
+            val strongStorage = !declaration.hasAnnotation(KonanFqNames.arcWeak) &&
+                    !declaration.hasAnnotation(KonanFqNames.arcUnowned) &&
+                    !declaration.hasAnnotation(KonanFqNames.volatile)
+            val eligibility = ArcBorrowedGuaranteedAliasEligibility(
+                arcEnabled = generationState.context.memoryModel == MemoryModel.ARC,
+                debugInfoDisabled = !generationState.context.shouldContainDebugInfo(),
+                nonSuspendFunction = !function.isSuspend,
+                mutableLocalReference = declaration.isVar && declaration.type.binaryTypeIsReference() &&
+                        declaration.parent === function,
+                initializedFromGuaranteedParameter = initializer?.symbol in guaranteedParameters,
+                strongStorage = strongStorage,
+                exactlyOneUse = analysis.useCount == 1,
+                neverAssigned = !analysis.assigned,
+                notCaptured = !analysis.captured,
+                notReturned = !analysis.returned,
+                finalExplicitReferenceArgument = analysis.finalExplicitReferenceArgument,
+                directKotlinCall = analysis.directKotlinCall,
+            )
+            if (eligibility.isAuthorized() && verifyGuaranteedAliasEliminationProof(function, declaration)) {
+                selected += declaration
+            }
+            declaration.acceptChildrenVoid(this)
+        }
+    })
+    return selected
+}
+
+private fun analyzeGuaranteedAliasUses(
+    generationState: NativeGenerationState,
+    function: IrSimpleFunction,
+    variable: IrVariable,
+): ArcGuaranteedAliasUseAnalysis {
+    val uses = mutableListOf<IrGetValue>()
+    var assigned = false
+    var captured = false
+    var returned = false
+    var nestedFunctionDepth = 0
+    var returnDepth = 0
+    var qualifyingUse: IrGetValue? = null
+    var directKotlinCall = false
+
+    function.body?.acceptVoid(object : IrElementVisitorVoid {
+        override fun visitElement(element: IrElement) {
+            element.acceptChildrenVoid(this)
+        }
+
+        override fun visitFunction(declaration: IrFunction) {
+            nestedFunctionDepth++
+            declaration.acceptChildrenVoid(this)
+            nestedFunctionDepth--
+        }
+
+        override fun visitReturn(expression: IrReturn) {
+            returnDepth++
+            expression.acceptChildrenVoid(this)
+            returnDepth--
+        }
+
+        override fun visitGetValue(expression: IrGetValue) {
+            if (expression.symbol == variable.symbol) {
+                uses += expression
+                if (nestedFunctionDepth != 0) captured = true
+                if (returnDepth != 0) returned = true
+            }
+        }
+
+        override fun visitSetValue(expression: org.jetbrains.kotlin.ir.expressions.IrSetValue) {
+            if (expression.symbol == variable.symbol) assigned = true
+            expression.acceptChildrenVoid(this)
+        }
+
+        override fun visitFunctionAccess(expression: IrFunctionAccessExpression) {
+            if (nestedFunctionDepth == 0) {
+                val (parameter, argument) = expression.getArgumentsWithIr().lastOrNull() ?: run {
+                    expression.acceptChildrenVoid(this)
+                    return
+                }
+                val read = argument as? IrGetValue
+                if (read?.symbol == variable.symbol && parameter.type.binaryTypeIsReference()) {
+                    qualifyingUse = read
+                    directKotlinCall = expression.isDirectKotlinCall(generationState)
+                }
+            }
+            expression.acceptChildrenVoid(this)
+        }
+    })
+
+    return ArcGuaranteedAliasUseAnalysis(
+        useCount = uses.size,
+        assigned = assigned,
+        captured = captured,
+        returned = returned,
+        finalExplicitReferenceArgument = qualifyingUse != null && qualifyingUse === uses.singleOrNull(),
+        directKotlinCall = directKotlinCall,
+    )
+}
+
+private fun verifyGuaranteedAliasEliminationProof(function: IrSimpleFunction, variable: IrVariable): Boolean {
+    val parameter = ArcValue("parameter_${variable.name}")
+    val alias = ArcValue("alias_${variable.name}")
+    val entry = ArcBlockId("entry")
+    val proof = ArcFunctionPlan(
+        functionName = "${function.fqNameForIrSerialization.asString()}#guaranteed-alias-${variable.name}",
+        entry = entry,
+        entryValues = mapOf(parameter to ArcOwnership.Guaranteed),
+        entryInitializedStorage = emptySet(),
+        blocks = mapOf(
+            entry to ArcBasicBlock(
+                entry,
+                listOf(
+                    ArcOperation.Copy(parameter, alias),
+                    ArcOperation.Use(alias, ArcPlanLocation("final direct-call argument")),
+                    ArcOperation.Destroy(alias),
+                ),
+                ArcTerminator.Return(),
+            )
+        ),
+    )
+    val optimized = ArcOwnershipOptimizer.optimizeVerified(proof)
+    return optimized.metrics.guaranteedEntryCopiesEliminated == 1 &&
+            optimized.plan.blocks.getValue(entry).operations ==
+            listOf(ArcOperation.Use(parameter, ArcPlanLocation("final direct-call argument"))) &&
+            ArcOwnershipVerifier.verify(optimized.plan) === ArcOwnershipVerificationResult.Success
+}
+
 /**
  * Selects a +0 load only when evaluation is bounded by a direct call that cannot observe the
  * owner's stack slot. In particular, the read must be the final explicit argument, so no sibling
@@ -484,6 +677,7 @@ private fun verifyMutableConstructorInitializerProof(function: IrSimpleFunction,
 private fun selectVerifiedBorrowedMutableReads(
     generationState: NativeGenerationState,
     function: IrSimpleFunction,
+    borrowedGuaranteedAliases: Set<IrVariable>,
 ): Set<IrGetValue> {
     if (generationState.context.shouldContainDebugInfo()) return emptySet()
     val body = function.body ?: return emptySet()
@@ -524,7 +718,9 @@ private fun selectVerifiedBorrowedMutableReads(
                 strongStorage = strongStorage,
                 sideEffectFreeArgumentWrapper = read != null,
             )
-            if (read != null && eligibility.isAuthorized() && verifyBorrowedReadProof(function, variable!!)) {
+            if (read != null && variable !in borrowedGuaranteedAliases && eligibility.isAuthorized() &&
+                verifyBorrowedReadProof(function, variable!!)
+            ) {
                 selected += read
             }
             expression.acceptChildrenVoid(this)
@@ -603,31 +799,45 @@ private fun IrFunctionAccessExpression.isDirectKotlinCall(generationState: Nativ
     else -> false
 }
 
-/** Tie the side-plan authorization to the same path verifier used for larger ownership plans. */
+/** Tie the existing +0 load authorization causally to contained-copy elimination. */
 private fun verifyBorrowedReadProof(function: IrSimpleFunction, variable: IrVariable): Boolean {
     val owner = ArcValue("owner_${variable.name}")
-    val borrowed = ArcValue("borrowed_${variable.name}")
+    val copied = ArcValue("copied_${variable.name}")
     val entry = ArcBlockId("entry")
+    val use = ArcBlockId("use")
     val proof = ArcFunctionPlan(
         functionName = "${function.fqNameForIrSerialization.asString()}#borrow-${variable.name}",
         entry = entry,
         entryValues = emptyMap(),
         entryInitializedStorage = emptySet(),
-        blocks = mapOf(
+        blocks = linkedMapOf(
             entry to ArcBasicBlock(
                 entry,
                 listOf(
                     ArcOperation.Define(owner, ArcOwnership.Owned),
-                    ArcOperation.Borrow(owner, borrowed),
-                    ArcOperation.Use(borrowed, ArcPlanLocation("guaranteed call argument")),
-                    ArcOperation.EndBorrow(borrowed),
+                    ArcOperation.Copy(owner, copied),
+                ),
+                ArcTerminator.Jump(use),
+            ),
+            use to ArcBasicBlock(
+                use,
+                listOf(
+                    ArcOperation.Use(copied, ArcPlanLocation("guaranteed call argument")),
+                    ArcOperation.Destroy(copied),
                     ArcOperation.Destroy(owner),
                 ),
                 ArcTerminator.Return(),
-            )
+            ),
         ),
     )
-    return ArcOwnershipVerifier.verify(proof) === ArcOwnershipVerificationResult.Success
+    val optimized = ArcOwnershipOptimizer.optimizeVerified(proof)
+    return optimized.metrics.containedOwnedCopiesEliminated == 1 &&
+            optimized.plan.blocks.getValue(entry).operations ==
+            listOf(ArcOperation.Define(owner, ArcOwnership.Owned)) &&
+            optimized.plan.blocks.getValue(use).operations == listOf(
+                ArcOperation.Use(owner, ArcPlanLocation("guaranteed call argument")),
+                ArcOperation.Destroy(owner),
+            ) && ArcOwnershipVerifier.verify(optimized.plan) === ArcOwnershipVerificationResult.Success
 }
 
 private data class CuratedArcFunctionPlan(

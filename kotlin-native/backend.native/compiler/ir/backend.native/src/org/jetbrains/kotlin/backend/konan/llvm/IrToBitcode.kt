@@ -645,6 +645,10 @@ internal class CodeGeneratorVisitor(
     private inner class VariableScope : InnerScopeImpl() {
 
         override fun genDeclareVariable(variable: IrVariable, value: LLVMValueRef?, variableLocation: VariableDebugLocation?): Int {
+            if (variable in arcOwnership.borrowedGuaranteedAliases) {
+                require(value != null) { "Borrowed guaranteed alias must have an initializer: ${ir2string(variable)}" }
+                return functionGenerationContext.vars.createImmutable(variable, value)
+            }
             return functionGenerationContext.vars.createVariable(variable, value, variableLocation)
         }
 

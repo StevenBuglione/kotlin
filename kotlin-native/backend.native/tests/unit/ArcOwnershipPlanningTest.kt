@@ -40,6 +40,38 @@ class ArcOwnershipPlanningTest {
     }
 
     @Test
+    fun borrowedGuaranteedAliasAuthorizationRequiresEverySafetyGate() {
+        val eligible = ArcBorrowedGuaranteedAliasEligibility(
+            arcEnabled = true,
+            debugInfoDisabled = true,
+            nonSuspendFunction = true,
+            mutableLocalReference = true,
+            initializedFromGuaranteedParameter = true,
+            strongStorage = true,
+            exactlyOneUse = true,
+            neverAssigned = true,
+            notCaptured = true,
+            notReturned = true,
+            finalExplicitReferenceArgument = true,
+            directKotlinCall = true,
+        )
+
+        assertTrue(eligible.isAuthorized())
+        assertFalse(eligible.copy(arcEnabled = false).isAuthorized())
+        assertFalse(eligible.copy(debugInfoDisabled = false).isAuthorized())
+        assertFalse(eligible.copy(nonSuspendFunction = false).isAuthorized())
+        assertFalse(eligible.copy(mutableLocalReference = false).isAuthorized())
+        assertFalse(eligible.copy(initializedFromGuaranteedParameter = false).isAuthorized())
+        assertFalse(eligible.copy(strongStorage = false).isAuthorized())
+        assertFalse(eligible.copy(exactlyOneUse = false).isAuthorized())
+        assertFalse(eligible.copy(neverAssigned = false).isAuthorized())
+        assertFalse(eligible.copy(notCaptured = false).isAuthorized())
+        assertFalse(eligible.copy(notReturned = false).isAuthorized())
+        assertFalse(eligible.copy(finalExplicitReferenceArgument = false).isAuthorized())
+        assertFalse(eligible.copy(directKotlinCall = false).isAuthorized())
+    }
+
+    @Test
     fun unitIfPlanBuildsVerifiedDiamondAndExposesCfgCopyOptimization() {
         val source = ArcValue("source")
         val alias = ArcValue("alias")

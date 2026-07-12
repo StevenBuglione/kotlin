@@ -9,6 +9,49 @@ private class WeakPromotionHolder(owner: BorrowedPayload) {
     var weak: BorrowedPayload? = owner
 }
 
+// CHECK-LABEL: define internal %struct.ObjHeader* @"kfun:borrowGuaranteedAlias#internal"
+private fun borrowGuaranteedAlias(owner: BorrowedPayload): BorrowedSink {
+    // The sole local alias is proven to remain inside the guaranteed parameter lifetime. It is
+    // represented as an SSA value even though source semantics spell it `var`.
+    // CHECK-NOT: call void @UpdateStackRef
+    // CHECK: {{call|invoke}} void @"kfun:BorrowedSink.<init>#internal"(%struct.ObjHeader* {{%[0-9]+}}, %struct.ObjHeader* %0)
+    // CHECK-NOT: call void @UpdateStackRef
+    // CHECK: ret %struct.ObjHeader*
+    var alias = owner
+    val sink = BorrowedSink(alias)
+    return sink
+}
+
+// CHECK-LABEL: define internal %struct.ObjHeader* @"kfun:retainReassignedGuaranteedAlias#internal"
+private fun retainReassignedGuaranteedAlias(owner: BorrowedPayload): BorrowedSink {
+    // A reassignment rejects the SSA authorization and retains the ordinary owning local slot.
+    // CHECK: call void @UpdateStackRef(%struct.ObjHeader** %alias, %struct.ObjHeader* %0)
+    var alias = owner
+    // CHECK: call void @UpdateStackRef(%struct.ObjHeader** %alias
+    alias = BorrowedPayload(7)
+    val sink = BorrowedSink(alias)
+    return sink
+}
+
+// CHECK-LABEL: define internal %struct.ObjHeader* @"kfun:retainCapturedGuaranteedAlias#internal"
+private fun retainCapturedGuaranteedAlias(owner: BorrowedPayload): BorrowedSink {
+    // A nested function capture rejects the authorization and keeps an owning capture field.
+    // CHECK: call void @UpdateHeapRef(%struct.ObjHeader** {{%[0-9]+}}, %struct.ObjHeader* %0)
+    var alias = owner
+    fun capturedValue(): Int = alias.value
+    check(capturedValue() == owner.value)
+    val sink = BorrowedSink(owner)
+    return sink
+}
+
+// CHECK-LABEL: define internal %struct.ObjHeader* @"kfun:retainReturnedGuaranteedAlias#internal"
+private fun retainReturnedGuaranteedAlias(owner: BorrowedPayload): BorrowedPayload {
+    // Returning the alias transfers +1 ownership and therefore keeps the normal local slot.
+    // CHECK: call void @UpdateStackRef(%struct.ObjHeader** %alias, %struct.ObjHeader* %0)
+    var alias = owner
+    return alias
+}
+
 // CHECK-LABEL: define internal %struct.ObjHeader* @"kfun:borrowLastMutableArgument#internal"
 private fun borrowLastMutableArgument(): BorrowedSink {
     var owner = BorrowedPayload(42)
@@ -93,6 +136,11 @@ private fun nonescapingMutableConstructor(): Int {
 }
 
 fun main() {
+    val guaranteedOwner = BorrowedPayload(42)
+    check(borrowGuaranteedAlias(guaranteedOwner).payload === guaranteedOwner)
+    check(retainReassignedGuaranteedAlias(guaranteedOwner).payload.value == 7)
+    check(retainCapturedGuaranteedAlias(guaranteedOwner).payload === guaranteedOwner)
+    check(retainReturnedGuaranteedAlias(guaranteedOwner) === guaranteedOwner)
     check(borrowLastMutableArgument().payload.value == 42)
     check(borrowLoweredCheckNotNullArgument().payload.value == 42)
     check(retainForArbitraryArgumentBlock().payload.value == 2)
