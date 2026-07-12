@@ -24,6 +24,7 @@ import org.jetbrains.kotlin.ir.declarations.IrClass
 import org.jetbrains.kotlin.ir.declarations.IrDeclarationOrigin
 import org.jetbrains.kotlin.ir.declarations.IrFunction
 import org.jetbrains.kotlin.ir.declarations.IrSimpleFunction
+import org.jetbrains.kotlin.ir.declarations.IrValueDeclaration
 import org.jetbrains.kotlin.ir.declarations.IrValueParameter
 import org.jetbrains.kotlin.ir.declarations.IrVariable
 import org.jetbrains.kotlin.ir.expressions.IrCall
@@ -56,6 +57,8 @@ import org.jetbrains.kotlin.ir.expressions.IrVararg
 import org.jetbrains.kotlin.ir.symbols.IrSimpleFunctionSymbol
 import org.jetbrains.kotlin.ir.types.getClass
 import org.jetbrains.kotlin.ir.types.isBoolean
+import org.jetbrains.kotlin.ir.types.isCharArray
+import org.jetbrains.kotlin.ir.types.isInt
 import org.jetbrains.kotlin.ir.types.isUnit
 import org.jetbrains.kotlin.ir.util.allParameters
 import org.jetbrains.kotlin.ir.util.constructedClass
@@ -69,6 +72,7 @@ import org.jetbrains.kotlin.ir.util.isReal
 import org.jetbrains.kotlin.ir.visitors.IrElementVisitorVoid
 import org.jetbrains.kotlin.ir.visitors.acceptChildrenVoid
 import org.jetbrains.kotlin.ir.visitors.acceptVoid
+import org.jetbrains.kotlin.name.Name
 import java.util.Collections
 import java.util.IdentityHashMap
 
@@ -109,6 +113,7 @@ internal data class ArcCodegenOwnershipPlan(
     val borrowedMutableReads: Set<IrGetValue>,
     val borrowedFieldReceivers: Set<IrGetValue>,
     val borrowedStrongFieldLoads: Set<IrGetField>,
+    val borrowedStrongCallFieldLoads: Set<IrGetField>,
     val borrowedStrongProjectionStores: Set<IrSetValue>,
     val rootedProjectionVariables: Set<IrVariable>,
     val rootedProjectionReads: Set<IrGetValue>,
@@ -125,7 +130,7 @@ internal data class ArcCodegenOwnershipPlan(
 
     companion object {
         val Empty = ArcCodegenOwnershipPlan(
-            emptyMap(), emptySet(), emptySet(), emptySet(), emptySet(), emptySet(), emptySet(), emptySet(),
+            emptyMap(), emptySet(), emptySet(), emptySet(), emptySet(), emptySet(), emptySet(), emptySet(), emptySet(),
             emptySet(), emptySet(), emptySet(), emptySet(), emptyMap()
         )
     }
@@ -220,6 +225,36 @@ internal fun ArcBorrowedFieldReceiverEligibility.isAuthorized(): Boolean =
             exactDirectInstanceFieldReceiver && nonVolatileField && strongFieldStorage &&
             mutableLocalReferenceOwner && ownerNotCaptured && strongOwnerStorage &&
             immediateAddressAndLoadOnly && ownerLivesThroughLoad
+
+/** Authorization for borrowing a strong CharArray field through one exact safe library call. */
+internal data class ArcBorrowedStrongCallFieldEligibility(
+    val arcEnabled: Boolean,
+    val optimizationsEnabled: Boolean,
+    val debugInfoDisabled: Boolean,
+    val nonSuspendFunction: Boolean,
+    val exactDirectInstanceFieldArgument: Boolean,
+    val referenceField: Boolean,
+    val nonVolatileField: Boolean,
+    val strongFieldStorage: Boolean,
+    val ownerIsCurrentDispatchReceiver: Boolean,
+    val ownerReferenceIsGuaranteedForCall: Boolean,
+    val exactAllowlistedCharArrayConsumer: Boolean,
+    val ownerNotAssignedInSuffix: Boolean,
+    val callFreeSuffix: Boolean,
+    val nonSuspendingSuffix: Boolean,
+    val nonThrowingSuffix: Boolean,
+    val linearControlFlowSuffix: Boolean,
+    val ownershipEffectFreeSuffix: Boolean,
+    val verifierProofAccepted: Boolean,
+)
+
+internal fun ArcBorrowedStrongCallFieldEligibility.isAuthorized(): Boolean =
+    arcEnabled && optimizationsEnabled && debugInfoDisabled && nonSuspendFunction &&
+            exactDirectInstanceFieldArgument && referenceField && nonVolatileField && strongFieldStorage &&
+            ownerIsCurrentDispatchReceiver && ownerReferenceIsGuaranteedForCall &&
+            exactAllowlistedCharArrayConsumer && ownerNotAssignedInSuffix && callFreeSuffix &&
+            nonSuspendingSuffix && nonThrowingSuffix && linearControlFlowSuffix &&
+            ownershipEffectFreeSuffix && verifierProofAccepted
 
 /**
  * Authorization for the exact loop-carried projection `owner = owner.field` (including the
@@ -422,6 +457,7 @@ internal fun runArcOwnershipPlanning(
     val borrowedMutableReads = linkedSetOf<IrGetValue>()
     val borrowedFieldReceivers = Collections.newSetFromMap(IdentityHashMap<IrGetValue, Boolean>())
     val borrowedStrongFieldLoads = Collections.newSetFromMap(IdentityHashMap<IrGetField, Boolean>())
+    val borrowedStrongCallFieldLoads = Collections.newSetFromMap(IdentityHashMap<IrGetField, Boolean>())
     val borrowedStrongProjectionStores = Collections.newSetFromMap(IdentityHashMap<IrSetValue, Boolean>())
     val rootedProjectionVariables = Collections.newSetFromMap(IdentityHashMap<IrVariable, Boolean>())
     val rootedProjectionReads = Collections.newSetFromMap(IdentityHashMap<IrGetValue, Boolean>())
@@ -442,6 +478,26 @@ internal fun runArcOwnershipPlanning(
                         .mapTo(linkedSetOf()) {
                             it.owner.attributeOwnerId as? IrSimpleFunction ?: it.owner
                         }
+    val borrowedCharArrayConsumerSymbols = resolveBorrowedCharArrayConsumerSymbols(generationState)
+    // The historical curated-plan visitor below intentionally analyzes top-level functions only.
+    // This selector targets an exact class-member pattern, so give it an independent recursive
+    // walk instead of silently broadening every existing ownership-plan family to class members.
+    input.module.files.forEach { file ->
+        file.acceptChildrenVoid(object : IrElementVisitorVoid {
+            override fun visitElement(element: IrElement) {
+                element.acceptChildrenVoid(this)
+            }
+
+            override fun visitSimpleFunction(declaration: IrSimpleFunction) {
+                borrowedCharArrayConsumerSymbols?.let { exactConsumers ->
+                    borrowedStrongCallFieldLoads += selectVerifiedBorrowedStrongCallFieldLoads(
+                        generationState, declaration, exactConsumers
+                    )
+                }
+                declaration.acceptChildrenVoid(this)
+            }
+        })
+    }
     var skipped = 0
     input.module.files.forEach { file ->
         file.acceptChildrenVoid(object : IrElementVisitorVoid {
@@ -522,6 +578,7 @@ internal fun runArcOwnershipPlanning(
             borrowedMutableReads,
             borrowedFieldReceivers,
             borrowedStrongFieldLoads,
+            borrowedStrongCallFieldLoads,
             borrowedStrongProjectionStores,
             rootedProjectionVariables,
             rootedProjectionReads,
@@ -942,6 +999,7 @@ private data class ArcArgumentSuffixAnalysis(
     var containsSuspension: Boolean = false,
     var containsThrow: Boolean = false,
     var containsControlFlow: Boolean = false,
+    var containsReferenceOwnershipEffect: Boolean = false,
 )
 
 /**
@@ -952,7 +1010,7 @@ private data class ArcArgumentSuffixAnalysis(
  */
 private fun analyzeBorrowedArgumentSuffix(
     suffix: List<IrExpression>,
-    variable: IrVariable,
+    variable: IrValueDeclaration,
 ): ArcArgumentSuffixAnalysis = ArcArgumentSuffixAnalysis().also { analysis ->
     suffix.forEach { expression ->
         expression.acceptVoid(object : IrElementVisitorVoid {
@@ -967,7 +1025,25 @@ private fun analyzeBorrowedArgumentSuffix(
 
             override fun visitSetValue(expression: org.jetbrains.kotlin.ir.expressions.IrSetValue) {
                 if (expression.symbol == variable.symbol) analysis.ownerAssigned = true
+                if (expression.symbol.owner.type.binaryTypeIsReference()) {
+                    analysis.containsReferenceOwnershipEffect = true
+                }
                 expression.acceptChildrenVoid(this)
+            }
+
+            override fun visitSetField(expression: IrSetField) {
+                // Even a store to an unrelated field may release its previous value and run an
+                // arbitrary ARC deinitializer. Keep this deliberately fail-closed until effects
+                // are represented in the ownership plan.
+                analysis.containsReferenceOwnershipEffect = true
+                expression.acceptChildrenVoid(this)
+            }
+
+            override fun visitVariable(declaration: IrVariable) {
+                if (declaration.type.binaryTypeIsReference()) {
+                    analysis.containsReferenceOwnershipEffect = true
+                }
+                declaration.acceptChildrenVoid(this)
             }
 
             override fun visitGetValue(expression: IrGetValue) {
@@ -1483,6 +1559,168 @@ private data class ArcBorrowedStrongFieldProjectionSelection(
     val fieldLoads: Set<IrGetField>,
     val replacementStores: Set<IrSetValue>,
 )
+
+private data class ArcBorrowedCharArrayConsumerSymbols(
+    val sizeGetter: IrSimpleFunctionSymbol,
+    val sizedCopy: IrSimpleFunctionSymbol,
+)
+
+private fun resolveBorrowedCharArrayConsumerSymbols(
+    generationState: NativeGenerationState,
+): ArcBorrowedCharArrayConsumerSymbols? {
+    val symbols = generationState.context.ir.symbols
+    val sizeGetter = symbols.arraySize[symbols.charArray] ?: return null
+    val sizedCopy = generationState.context.irBuiltIns
+        .findFunctions(Name.identifier("copyOf"), "kotlin", "collections")
+        .singleOrNull { symbol ->
+            val function = symbol.owner
+            !function.isExpect && function.isReal && !function.isExternal &&
+                    function.extensionReceiverParameter?.type?.isCharArray() == true &&
+                    function.valueParameters.singleOrNull()?.type?.isInt() == true &&
+                    function.returnType.isCharArray()
+        } ?: return null
+    return ArcBorrowedCharArrayConsumerSymbols(sizeGetter, sizedCopy)
+}
+
+/**
+ * Borrow `this.charArrayField` only through the two non-mutating CharArray consumers used by
+ * StringBuilder capacity growth. The callee never receives `this`, so it cannot replace the
+ * owning field; both normal and exceptional exits remain bounded by the receiver parameter.
+ */
+private fun selectVerifiedBorrowedStrongCallFieldLoads(
+    generationState: NativeGenerationState,
+    function: IrSimpleFunction,
+    exactConsumers: ArcBorrowedCharArrayConsumerSymbols,
+): Set<IrGetField> {
+    val nonSuspendFunction = !function.isArcSuspendLike()
+    if (generationState.context.memoryModel != MemoryModel.ARC ||
+        !generationState.context.config.optimizationsEnabled ||
+        generationState.context.shouldContainDebugInfo() || !nonSuspendFunction
+    ) return emptySet()
+    val body = function.body ?: return emptySet()
+    val dispatchReceiver = function.dispatchReceiverParameter ?: return emptySet()
+    val selected = Collections.newSetFromMap(IdentityHashMap<IrGetField, Boolean>())
+
+    body.acceptVoid(object : IrElementVisitorVoid {
+        override fun visitElement(element: IrElement) {
+            element.acceptChildrenVoid(this)
+        }
+
+        override fun visitFunction(declaration: IrFunction) = Unit
+
+        override fun visitCall(expression: IrCall) {
+            val arguments = expression.getArgumentsWithIr()
+            arguments.forEachIndexed { index, (_, argument) ->
+                val fieldLoad = argument as? IrGetField ?: return@forEachIndexed
+                val ownerRead = fieldLoad.receiver as? IrGetValue
+                val field = fieldLoad.symbol.owner
+                val exactAllowlistedCharArrayConsumer =
+                    expression.isAllowlistedBorrowedCharArrayConsumer(fieldLoad, exactConsumers)
+                if (!exactAllowlistedCharArrayConsumer) return@forEachIndexed
+                val suffix = analyzeBorrowedArgumentSuffix(
+                    arguments.drop(index + 1).map { it.second }, dispatchReceiver
+                )
+                val verifierAccepted = verifyBorrowedStrongCallFieldProof(
+                    function, field.name.asString(), expression.symbol.owner.name.asString()
+                )
+                val eligibility = ArcBorrowedStrongCallFieldEligibility(
+                    arcEnabled = generationState.context.memoryModel == MemoryModel.ARC,
+                    optimizationsEnabled = generationState.context.config.optimizationsEnabled,
+                    debugInfoDisabled = !generationState.context.shouldContainDebugInfo(),
+                    nonSuspendFunction = nonSuspendFunction,
+                    exactDirectInstanceFieldArgument = !field.isStatic && fieldLoad.receiver === ownerRead,
+                    referenceField = fieldLoad.type.binaryTypeIsReference() && fieldLoad.type.isCharArray(),
+                    nonVolatileField = !field.hasAnnotation(KonanFqNames.volatile),
+                    strongFieldStorage = !field.hasAnnotation(KonanFqNames.arcWeak) &&
+                            !field.hasAnnotation(KonanFqNames.arcUnowned),
+                    ownerIsCurrentDispatchReceiver = ownerRead?.symbol == dispatchReceiver.symbol,
+                    ownerReferenceIsGuaranteedForCall = dispatchReceiver.type.binaryTypeIsReference(),
+                    exactAllowlistedCharArrayConsumer = exactAllowlistedCharArrayConsumer,
+                    ownerNotAssignedInSuffix = !suffix.ownerAssigned,
+                    callFreeSuffix = !suffix.containsCall,
+                    nonSuspendingSuffix = !suffix.containsSuspension,
+                    nonThrowingSuffix = !suffix.containsThrow,
+                    linearControlFlowSuffix = !suffix.containsControlFlow,
+                    ownershipEffectFreeSuffix = !suffix.containsReferenceOwnershipEffect,
+                    verifierProofAccepted = verifierAccepted,
+                )
+                if (eligibility.isAuthorized()) {
+                    generationState.context.log {
+                        "ARC borrowed strong call field ${function.fqNameForIrSerialization.asString()}::${field.name} " +
+                                "-> ${expression.symbol.owner.fqNameForIrSerialization.asString()}"
+                    }
+                    selected += fieldLoad
+                }
+            }
+            expression.acceptChildrenVoid(this)
+        }
+    })
+    return selected
+}
+
+private fun IrCall.isAllowlistedBorrowedCharArrayConsumer(
+    fieldLoad: IrGetField,
+    exactConsumers: ArcBorrowedCharArrayConsumerSymbols,
+): Boolean {
+    val callee = symbol.owner
+    if (!callee.isReal || callee.isExternal || callee.isSuspend || callee.isArcSuspendLike()) return false
+    val arguments = getArgumentsWithIr()
+    val fieldIndex = arguments.indexOfFirst { it.second === fieldLoad }
+    if (fieldIndex < 0 || !fieldLoad.type.isCharArray()) return false
+    val sizeGetter = symbol == exactConsumers.sizeGetter &&
+            callee.returnType.isInt() && arguments.size == 1 && fieldIndex == 0 &&
+            arguments[0].first.type.isCharArray()
+    val sizedCopy = symbol == exactConsumers.sizedCopy &&
+            callee.returnType.isCharArray() && arguments.size == 2 && fieldIndex == 0 &&
+            arguments[0].first.type.isCharArray() && arguments[1].first.type.isInt() &&
+            arguments[1].second.type.isInt()
+    return sizeGetter || sizedCopy
+}
+
+private fun verifyBorrowedStrongCallFieldProof(
+    function: IrSimpleFunction,
+    fieldName: String,
+    consumerName: String,
+): Boolean {
+    val owner = ArcValue("call_field_owner_$fieldName")
+    val projection = ArcValue("call_field_projection_$fieldName")
+    val entry = ArcBlockId("entry")
+    val invoke = ArcBlockId("invoke")
+    val normal = ArcBlockId("normal")
+    val unwind = ArcBlockId("unwind")
+    val proof = ArcFunctionPlan(
+        functionName = "${function.fqNameForIrSerialization.asString()}#borrow-call-field-$fieldName-$consumerName",
+        entry = entry,
+        entryValues = emptyMap(),
+        entryInitializedStorage = emptySet(),
+        blocks = linkedMapOf(
+            entry to ArcBasicBlock(
+                entry,
+                listOf(
+                    ArcOperation.Define(owner, ArcOwnership.Guaranteed),
+                    ArcOperation.Borrow(owner, projection, ArcBorrowKind.Projection),
+                ),
+                ArcTerminator.Jump(invoke),
+            ),
+            invoke to ArcBasicBlock(
+                invoke,
+                listOf(ArcOperation.Use(projection, ArcPlanLocation("allowlisted CharArray call argument"))),
+                ArcTerminator.Branch(normal, unwind),
+            ),
+            normal to ArcBasicBlock(
+                normal,
+                listOf(ArcOperation.EndBorrow(projection)),
+                ArcTerminator.Return(),
+            ),
+            unwind to ArcBasicBlock(
+                unwind,
+                listOf(ArcOperation.EndBorrow(projection)),
+                ArcTerminator.Throw,
+            ),
+        ),
+    )
+    return ArcOwnershipVerifier.verify(proof) === ArcOwnershipVerificationResult.Success
+}
 
 private fun selectVerifiedBorrowedStrongFieldProjections(
     generationState: NativeGenerationState,

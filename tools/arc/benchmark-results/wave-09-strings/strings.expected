@@ -1,0 +1,1 @@
+ARC_BENCH_OK scenario=strings checksum=-14061657653598 operations=600000 allocations=1800000

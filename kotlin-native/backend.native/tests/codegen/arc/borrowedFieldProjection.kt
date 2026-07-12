@@ -21,6 +21,35 @@ private fun escapeFieldResult(owner: Node): Node = owner.next!!
 
 private fun observe(node: Node): Int = node.value
 
+private fun inspectCharBuffer(value: CharArray): Int = value.size
+
+private class CharBufferOwner(initial: CharArray) {
+    private var buffer = initial
+
+    fun ensureCapacity(requiredCapacity: Int) {
+        if (requiredCapacity > buffer.size) buffer = buffer.copyOf(requiredCapacity)
+    }
+
+    fun verifyFailedCopyPreservesBuffer(): Int {
+        var failedAsExpected = false
+        try {
+            buffer.copyOf(-1)
+        } catch (_: RuntimeException) {
+            failedAsExpected = true
+        }
+        check(failedAsExpected) { "copyOf with a negative capacity must fail" }
+        return buffer.size
+    }
+
+    fun inspectThroughUnknownConsumer(): Int = inspectCharBuffer(buffer)
+
+    fun copyAfterReplacingInSuffix(replacement: CharArray, newSize: Int): CharArray =
+        buffer.copyOf(run {
+            buffer = replacement
+            newSize
+        })
+}
+
 private fun interveningCall(head: Node): Int {
     var cursor = head
     cursor = run {
@@ -155,6 +184,17 @@ fun main() {
     check(escapeFieldResult(head) === middle)
     check(interveningCall(head) == 2)
     check(capturedOwner(head) == 4)
+
+    val charBufferOwner = CharBufferOwner(CharArray(1))
+    check(charBufferOwner.verifyFailedCopyPreservesBuffer() == 1)
+    charBufferOwner.ensureCapacity(8)
+    check(charBufferOwner.inspectThroughUnknownConsumer() == 8)
+    val original = charArrayOf('o', 'k')
+    val replacement = charArrayOf('x')
+    val suffixOwner = CharBufferOwner(original)
+    val copiedOriginal = suffixOwner.copyAfterReplacingInSuffix(replacement, original.size)
+    check(copiedOriginal.size == 2 && copiedOriginal[0] == 'o' && copiedOriginal[1] == 'k')
+    check(suffixOwner.inspectThroughUnknownConsumer() == replacement.size)
 
     val volatileTail = VolatileNode(5, null)
     check(volatileField(VolatileNode(4, volatileTail)) == 5)

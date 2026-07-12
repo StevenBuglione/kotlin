@@ -1843,7 +1843,10 @@ internal class CodeGeneratorVisitor(
                 alignment = generationState.llvmDeclarations.forStaticField(value.symbol.owner).alignment
             }
         }
-        if (value in arcOwnership.borrowedStrongFieldLoads || value in arcOwnership.rootedProjectionFieldLoads) {
+        if (value in arcOwnership.borrowedStrongFieldLoads ||
+            value in arcOwnership.borrowedStrongCallFieldLoads ||
+            value in arcOwnership.rootedProjectionFieldLoads
+        ) {
             require(context.memoryModel == MemoryModel.ARC && context.config.optimizationsEnabled &&
                     !context.shouldContainDebugInfo()) {
                 "ARC borrowed/rooted strong field load escaped its optimization boundary: ${ir2string(value)}"
@@ -1854,10 +1857,10 @@ internal class CodeGeneratorVisitor(
                     !value.symbol.owner.hasAnnotation(KonanFqNames.arcUnowned)) {
                 "ARC borrowed strong field load requires a direct nonvolatile reference projection: ${ir2string(value)}"
             }
-            // The selected receiver's mutable stack slot owns the field target through this raw
-            // projection. evaluateSetValue immediately retains it into that same slot before the
-            // old receiver is released, so an intermediate owning result slot is both redundant
-            // and substantially more expensive in tight traversal loops.
+            // Either the selected receiver's mutable stack slot owns the target until the final
+            // replacement, or the current dispatch receiver owns an exact CharArray field through
+            // one allowlisted call. Both verified boundaries make an intermediate owning result
+            // slot redundant.
             return functionGenerationContext.loadSlot(
                     fieldAddress, false, null, alignment = alignment
             )

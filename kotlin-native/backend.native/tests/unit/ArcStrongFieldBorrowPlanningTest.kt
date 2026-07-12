@@ -63,6 +63,50 @@ class ArcStrongFieldBorrowPlanningTest {
     }
 
     @Test
+    fun strongCharArrayCallFieldBorrowRequiresEverySafetyGate() {
+        val eligible = ArcBorrowedStrongCallFieldEligibility(
+            arcEnabled = true,
+            optimizationsEnabled = true,
+            debugInfoDisabled = true,
+            nonSuspendFunction = true,
+            exactDirectInstanceFieldArgument = true,
+            referenceField = true,
+            nonVolatileField = true,
+            strongFieldStorage = true,
+            ownerIsCurrentDispatchReceiver = true,
+            ownerReferenceIsGuaranteedForCall = true,
+            exactAllowlistedCharArrayConsumer = true,
+            ownerNotAssignedInSuffix = true,
+            callFreeSuffix = true,
+            nonSuspendingSuffix = true,
+            nonThrowingSuffix = true,
+            linearControlFlowSuffix = true,
+            ownershipEffectFreeSuffix = true,
+            verifierProofAccepted = true,
+        )
+
+        assertTrue(eligible.isAuthorized())
+        assertFalse(eligible.copy(arcEnabled = false).isAuthorized())
+        assertFalse(eligible.copy(optimizationsEnabled = false).isAuthorized())
+        assertFalse(eligible.copy(debugInfoDisabled = false).isAuthorized())
+        assertFalse(eligible.copy(nonSuspendFunction = false).isAuthorized())
+        assertFalse(eligible.copy(exactDirectInstanceFieldArgument = false).isAuthorized())
+        assertFalse(eligible.copy(referenceField = false).isAuthorized())
+        assertFalse(eligible.copy(nonVolatileField = false).isAuthorized())
+        assertFalse(eligible.copy(strongFieldStorage = false).isAuthorized())
+        assertFalse(eligible.copy(ownerIsCurrentDispatchReceiver = false).isAuthorized())
+        assertFalse(eligible.copy(ownerReferenceIsGuaranteedForCall = false).isAuthorized())
+        assertFalse(eligible.copy(exactAllowlistedCharArrayConsumer = false).isAuthorized())
+        assertFalse(eligible.copy(ownerNotAssignedInSuffix = false).isAuthorized())
+        assertFalse(eligible.copy(callFreeSuffix = false).isAuthorized())
+        assertFalse(eligible.copy(nonSuspendingSuffix = false).isAuthorized())
+        assertFalse(eligible.copy(nonThrowingSuffix = false).isAuthorized())
+        assertFalse(eligible.copy(linearControlFlowSuffix = false).isAuthorized())
+        assertFalse(eligible.copy(ownershipEffectFreeSuffix = false).isAuthorized())
+        assertFalse(eligible.copy(verifierProofAccepted = false).isAuthorized())
+    }
+
+    @Test
     fun strongFieldProjectionBorrowRequiresEverySafetyGate() {
         val eligible = ArcBorrowedStrongFieldProjectionEligibility(
             arcEnabled = true,

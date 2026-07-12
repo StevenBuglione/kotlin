@@ -34,6 +34,49 @@ private fun escapeFieldResult(owner: ProjectionNode): ProjectionNode {
 
 private fun observe(node: ProjectionNode): Int = node.value
 
+private fun inspectCharBuffer(value: CharArray): Int = value.size
+
+private class CharBufferOwner(initialCapacity: Int) {
+    private var buffer = CharArray(initialCapacity)
+
+    // CHECK-LABEL: define internal void @"kfun:CharBufferOwner.ensureCapacity#internal"
+    fun ensureCapacity(requiredCapacity: Int) {
+        // These are the two exact non-mutating CharArray consumers used by StringBuilder's
+        // capacity-growth path. The receiver remains guaranteed for both calls, so its strong
+        // buffer field can be passed +0 without an anonymous owning stack slot.
+        // CHECK-NOT: call void @UpdateStackRef
+        if (requiredCapacity > buffer.size) {
+            // CHECK-NOT: call void @UpdateStackRef
+            buffer = buffer.copyOf(requiredCapacity)
+            // CHECK: call void @UpdateHeapRef
+        }
+        // CHECK-NOT: call void @UpdateStackRef
+        // CHECK: ret void
+    }
+
+    // CHECK-LABEL: define internal i32 @"kfun:CharBufferOwner.inspectThroughUnknownConsumer#internal"
+    fun inspectThroughUnknownConsumer(): Int {
+        // An arbitrary Kotlin callee is not in the exact non-mutating intrinsic allowlist. Keep
+        // the field value owned across that call even though this particular fixture is benign.
+        // CHECK: [[UNKNOWN_FIELD:%[0-9]+]] = load %struct.ObjHeader*, %struct.ObjHeader** %{{[0-9]+}}
+        // CHECK: call void @UpdateStackRef(%struct.ObjHeader** %{{[0-9]+}}, %struct.ObjHeader* [[UNKNOWN_FIELD]])
+        // CHECK: {{call|invoke}} i32 @"kfun:inspectCharBuffer#internal"
+        return inspectCharBuffer(buffer)
+    }
+
+    // CHECK-LABEL: define internal %struct.ObjHeader* @"kfun:CharBufferOwner.copyAfterReplacingInSuffix#internal"
+    fun copyAfterReplacingInSuffix(replacement: CharArray, newSize: Int): CharArray =
+        buffer.copyOf(run {
+            // The field load happens before this later argument. Replacing the field releases its
+            // old owner, so the projected array must already have an independent owning slot.
+            // CHECK: [[SUFFIX_FIELD:%[0-9]+]] = load %struct.ObjHeader*, %struct.ObjHeader** %{{[0-9]+}}
+            // CHECK: call void @UpdateStackRef(%struct.ObjHeader** %{{[0-9]+}}, %struct.ObjHeader* [[SUFFIX_FIELD]])
+            // CHECK: call void @UpdateHeapRef
+            buffer = replacement
+            newSize
+        })
+}
+
 // CHECK-LABEL: define internal i32 @"kfun:retainAcrossInterveningCall#internal"
 private fun retainAcrossInterveningCall(head: ProjectionNode): Int {
     var cursor = head
@@ -171,6 +214,11 @@ fun main() {
     check(escapeFieldResult(head) === middle)
     check(retainAcrossInterveningCall(head) == 2)
     check(retainCapturedOwner(head) == 4)
+
+    val charBufferOwner = CharBufferOwner(1)
+    charBufferOwner.ensureCapacity(8)
+    check(charBufferOwner.inspectThroughUnknownConsumer() == 8)
+    check(charBufferOwner.copyAfterReplacingInSuffix(CharArray(1), 8).size == 8)
 
     val volatileTail = VolatileNode(7, null)
     check(retainVolatileField(VolatileNode(6, volatileTail)) == 7)
