@@ -15,6 +15,7 @@ import org.jetbrains.kotlin.backend.konan.*
 import org.jetbrains.kotlin.backend.konan.arc.isAuthorized
 import org.jetbrains.kotlin.backend.konan.arc.isArcSuspendLike
 import org.jetbrains.kotlin.backend.konan.arc.ArcReturnedReceiverSlotReuseEligibility
+import org.jetbrains.kotlin.backend.konan.arc.ArcLockedReadCanonicalPlan
 import org.jetbrains.kotlin.backend.konan.arc.unwrapExactArcCoroutineSpillRead
 import org.jetbrains.kotlin.backend.konan.cexport.CAdapterCodegen
 import org.jetbrains.kotlin.backend.konan.cexport.CAdapterExportedElements
@@ -2785,6 +2786,7 @@ internal class CodeGeneratorVisitor(
                     resultSlot,
                     callee in arcOwnership.coroutineResultSlotForwardingCalls,
                     verifiedReturnedReceiverBorrow,
+                    arcOwnership.lockedReadResultSlotForwardingCalls[callee],
             )
         }
     }
@@ -2858,17 +2860,22 @@ internal class CodeGeneratorVisitor(
             function: IrFunction, args: List<LLVMValueRef>,
             resultLifetime: Lifetime, superClass: IrClass? = null, resultSlot: LLVMValueRef? = null,
             verifiedCoroutineResultSlotForwarding: Boolean = false,
-            verifiedReturnedReceiverBorrow: Boolean = false): LLVMValueRef {
+            verifiedReturnedReceiverBorrow: Boolean = false,
+            verifiedLockedReadResultSlotForwarding: ArcLockedReadCanonicalPlan? = null): LLVMValueRef {
         //context.log{"evaluateSimpleFunctionCall : $tmpVariableName = ${ir2string(value)}"}
         if (superClass == null && function is IrSimpleFunction && function.isOverridable) {
             require(!verifiedCoroutineResultSlotForwarding) {
                 "ARC coroutine result-slot forwarding escaped into a virtual call: ${function.fqNameForIrSerialization}"
+            }
+            require(verifiedLockedReadResultSlotForwarding == null) {
+                "ARC locked-read result-slot forwarding escaped into a virtual call: ${function.fqNameForIrSerialization}"
             }
             return callVirtual(function, args, resultLifetime, resultSlot)
         } else {
             return callDirect(
                     function, args, resultLifetime, resultSlot,
                     verifiedCoroutineResultSlotForwarding, verifiedReturnedReceiverBorrow,
+                    verifiedLockedReadResultSlotForwarding,
             )
         }
     }
@@ -3032,6 +3039,7 @@ internal class CodeGeneratorVisitor(
             resultSlot: LLVMValueRef?,
             verifiedCoroutineResultSlotForwarding: Boolean = false,
             verifiedReturnedReceiverBorrow: Boolean = false,
+            verifiedLockedReadResultSlotForwarding: ArcLockedReadCanonicalPlan? = null,
     ): LLVMValueRef {
         if (verifiedReturnedReceiverBorrow) {
             require(context.memoryModel == MemoryModel.ARC && context.config.optimizationsEnabled &&
@@ -3041,6 +3049,29 @@ internal class CodeGeneratorVisitor(
         }
         val functionDeclarations = codegen.llvmFunction(function.target)
         return call(function, functionDeclarations, args, resultLifetime, resultSlot).also { result ->
+            if (verifiedLockedReadResultSlotForwarding != null) {
+                val canonical = verifiedLockedReadResultSlotForwarding
+                require(context.memoryModel == MemoryModel.ARC && context.config.optimizationsEnabled &&
+                        !context.shouldContainDebugInfo() && resultSlot != null &&
+                        resultSlot == functionGenerationContext.returnSlot &&
+                        functionGenerationContext.irFunction === canonical.getter &&
+                        function === canonical.runtimeGetter &&
+                        function.parent === canonical.ownerClass &&
+                        canonical.getter.correspondingPropertySymbol?.owner?.parent === canonical.ownerClass &&
+                        canonical.stdlibLibrary === context.stdlibModule.konanLibrary &&
+                        canonical.ownerClass.konanLibrary === canonical.stdlibLibrary &&
+                        canonical.getter.konanLibrary === canonical.stdlibLibrary &&
+                        canonical.runtimeGetter.konanLibrary === canonical.stdlibLibrary &&
+                        canonical.ownerClass.fqNameForIrSerialization.asString() in setOf(
+                            "kotlin.native.concurrent.FreezableAtomicReference",
+                            "kotlin.concurrent.AtomicReference",
+                        ) && canonical.ownerClass.symbol.signature == canonical.ownerClassSignature &&
+                        (canonical.getter.symbol.signature ?: canonical.getter.symbol.privateSignature) == canonical.getterSignature &&
+                        (function.symbol.signature ?: function.symbol.privateSignature) == canonical.runtimeGetterSignature) {
+                    "ARC locked-read forwarding escaped its exact runtime result ABI"
+                }
+                functionGenerationContext.markArcResultOwnedBySlot(result, resultSlot)
+            }
             val exactCoroutineResultSlotIdentity =
                     resultSlot != null && resultSlot == functionGenerationContext.returnSlot
             val eligibility = org.jetbrains.kotlin.backend.konan.arc.ArcResultSlotForwardingEligibility(

@@ -12,6 +12,8 @@ import org.jetbrains.kotlin.backend.konan.descriptors.isBuiltInOperator
 import org.jetbrains.kotlin.backend.konan.descriptors.isTypedIntrinsic
 import org.jetbrains.kotlin.backend.konan.ir.getSuperClassNotAny
 import org.jetbrains.kotlin.backend.konan.ir.KonanNameConventions
+import org.jetbrains.kotlin.backend.konan.ir.getAnnotationArgumentValue
+import org.jetbrains.kotlin.backend.konan.ir.konanLibrary
 import org.jetbrains.kotlin.backend.konan.isObjCBridgeBased
 import org.jetbrains.kotlin.backend.konan.llvm.Lifetime
 import org.jetbrains.kotlin.backend.konan.llvm.IntrinsicType
@@ -70,10 +72,12 @@ import org.jetbrains.kotlin.ir.util.IdSignature
 import org.jetbrains.kotlin.ir.util.isElseBranch
 import org.jetbrains.kotlin.ir.util.isOverridable
 import org.jetbrains.kotlin.ir.util.isReal
+import org.jetbrains.kotlin.descriptors.DescriptorVisibilities
 import org.jetbrains.kotlin.ir.visitors.IrElementVisitorVoid
 import org.jetbrains.kotlin.ir.visitors.acceptChildrenVoid
 import org.jetbrains.kotlin.ir.visitors.acceptVoid
 import org.jetbrains.kotlin.name.Name
+import org.jetbrains.kotlin.library.KotlinLibrary
 import java.util.Collections
 import java.util.IdentityHashMap
 
@@ -111,6 +115,7 @@ internal data class ArcOwnershipPlanningReport(
 internal data class ArcCodegenOwnershipPlan(
     val ownedResultForwarding: Map<IrSimpleFunction, ArcOwnedResultForwarding>,
     val coroutineResultSlotForwardingCalls: Set<IrCall>,
+    val lockedReadResultSlotForwardingCalls: Map<IrCall, ArcLockedReadCanonicalPlan>,
     val returnedReceiverBorrowCalls: Set<IrCall>,
     val coroutineSpillMovesByVariable: Map<IrVariable, ArcCoroutineSpillMovePlan>,
     val coroutineSpillMovesByReturn: Map<IrReturn, ArcCoroutineSpillMovePlan>,
@@ -138,6 +143,7 @@ internal data class ArcCodegenOwnershipPlan(
         val Empty = ArcCodegenOwnershipPlan(
             ownedResultForwarding = emptyMap(),
             coroutineResultSlotForwardingCalls = emptySet(),
+            lockedReadResultSlotForwardingCalls = emptyMap(),
             returnedReceiverBorrowCalls = emptySet(),
             coroutineSpillMovesByVariable = emptyMap(),
             coroutineSpillMovesByReturn = emptyMap(),
@@ -170,6 +176,17 @@ internal data class ArcCoroutineSpillMovePlan(
     val spillVariable: IrVariable,
     val returnExpression: IrReturn,
     val ownership: ArcCoroutineOwnershipPlan,
+)
+
+internal data class ArcLockedReadCanonicalPlan(
+    val ownerClass: IrClass,
+    val getter: IrSimpleFunction,
+    val runtimeGetter: IrSimpleFunction,
+    val tailCall: IrCall,
+    val getterSignature: IdSignature,
+    val runtimeGetterSignature: IdSignature,
+    val ownerClassSignature: IdSignature,
+    val stdlibLibrary: KotlinLibrary,
 )
 
 internal data class ArcSuspendLikeMarkers(
@@ -515,6 +532,9 @@ internal fun runArcOwnershipPlanning(
     var optimization = ArcOwnershipOptimizationMetrics()
     val ownedResultForwarding = linkedMapOf<IrSimpleFunction, ArcOwnedResultForwarding>()
     val coroutineResultSlotForwardingCalls = Collections.newSetFromMap(IdentityHashMap<IrCall, Boolean>())
+    val lockedReadResultSlotForwardingCalls = Collections.synchronizedMap(
+        IdentityHashMap<IrCall, ArcLockedReadCanonicalPlan>()
+    )
     val returnedReceiverBorrowCalls = Collections.newSetFromMap(IdentityHashMap<IrCall, Boolean>())
     val coroutineSpillMovesByVariable = linkedMapOf<IrVariable, ArcCoroutineSpillMovePlan>()
     val coroutineSpillMovesByReturn = Collections.synchronizedMap(IdentityHashMap<IrReturn, ArcCoroutineSpillMovePlan>())
@@ -545,6 +565,9 @@ internal fun runArcOwnershipPlanning(
                             it.owner.attributeOwnerId as? IrSimpleFunction ?: it.owner
                         }
     val borrowedCharArrayConsumerSymbols = resolveBorrowedCharArrayConsumerSymbols(generationState)
+    resolveCanonicalLockedReadPlans(generationState, input.module).forEach { plan ->
+        lockedReadResultSlotForwardingCalls[plan.tailCall] = plan
+    }
     // The historical curated-plan visitor below intentionally analyzes top-level functions only.
     // This selector targets an exact class-member pattern, so give it an independent recursive
     // walk instead of silently broadening every existing ownership-plan family to class members.
@@ -653,6 +676,7 @@ internal fun runArcOwnershipPlanning(
         ArcCodegenOwnershipPlan(
             ownedResultForwarding,
             coroutineResultSlotForwardingCalls,
+            lockedReadResultSlotForwardingCalls,
             returnedReceiverBorrowCalls,
             coroutineSpillMovesByVariable,
             coroutineSpillMovesByReturn,
@@ -2707,6 +2731,95 @@ private fun selectVerifiedCoroutineSpillMove(
     ) ?: return null
     if (ownership.reduction != ArcCoroutineOwnershipReduction(updateStackRefs = 0, updateReturnRefs = 1)) return null
     return ArcCoroutineSpillMovePlan(function, producer, spill, returned, ownership)
+}
+
+/**
+ * Select only the stdlib atomic-reference value getter's exact tail call to the ARC-owned runtime
+ * ABI. The runtime locks, retains +1, and initializes the supplied result slot before returning.
+ */
+private fun resolveCanonicalLockedReadPlans(
+    generationState: NativeGenerationState,
+    module: org.jetbrains.kotlin.ir.declarations.IrModuleFragment,
+): List<ArcLockedReadCanonicalPlan> {
+    if (generationState.context.memoryModel != MemoryModel.ARC ||
+        !generationState.context.config.optimizationsEnabled ||
+        generationState.context.shouldContainDebugInfo()
+    ) return emptyList()
+    val expectedClasses = setOf(
+        "kotlin.native.concurrent.FreezableAtomicReference",
+        "kotlin.concurrent.AtomicReference",
+    )
+    val stdlibLibrary = generationState.context.stdlibModule.konanLibrary ?: return emptyList()
+    val candidates = mutableListOf<IrClass>()
+    module.files.forEach { file ->
+        file.acceptChildrenVoid(object : IrElementVisitorVoid {
+            override fun visitElement(element: IrElement) {
+                element.acceptChildrenVoid(this)
+            }
+
+            override fun visitClass(declaration: IrClass) {
+                if (declaration.konanLibrary === stdlibLibrary &&
+                    declaration.fqNameForIrSerialization.asString() in expectedClasses &&
+                    declaration.symbol.signature != null
+                ) candidates += declaration
+                declaration.acceptChildrenVoid(this)
+            }
+        })
+    }
+    return candidates.mapNotNull { ownerClass ->
+        val functions = mutableListOf<IrSimpleFunction>()
+        ownerClass.acceptChildrenVoid(object : IrElementVisitorVoid {
+            override fun visitElement(element: IrElement) {
+                element.acceptChildrenVoid(this)
+            }
+
+            override fun visitClass(declaration: IrClass) = Unit
+
+            override fun visitSimpleFunction(declaration: IrSimpleFunction) {
+                functions += declaration
+                declaration.acceptChildrenVoid(this)
+            }
+        })
+        val getter = functions.singleOrNull {
+            it.konanLibrary === stdlibLibrary && it.isReal && !it.isExternal &&
+                    it.correspondingPropertySymbol?.owner?.name?.asString() == "value" &&
+                    it.valueParameters.isEmpty() && it.dispatchReceiverParameter != null &&
+                    it.returnType.binaryTypeIsReference()
+        } ?: return@mapNotNull null
+        val runtimeGetter = functions.singleOrNull {
+            it.konanLibrary === stdlibLibrary && it.isReal && it.isExternal &&
+                    it.visibility == DescriptorVisibilities.PRIVATE && it.name.asString() == "getImpl" &&
+                    !it.isTypedIntrinsic && it.valueParameters.isEmpty() &&
+                    it.dispatchReceiverParameter != null && it.returnType.binaryTypeIsReference() &&
+                    it.getAnnotationArgumentValue<String>(KonanFqNames.gcUnsafeCall, "callee") ==
+                    "Kotlin_AtomicReference_get"
+        } ?: return@mapNotNull null
+        val getterSignature = getter.symbol.signature ?: getter.symbol.privateSignature ?: return@mapNotNull null
+        val runtimeSignature = runtimeGetter.symbol.signature ?: runtimeGetter.symbol.privateSignature ?: return@mapNotNull null
+        val ownerClassSignature = ownerClass.symbol.signature ?: return@mapNotNull null
+        val body = getter.body as? IrBlockBody ?: return@mapNotNull null
+        val returned = body.statements.singleOrNull() as? IrReturn ?: return@mapNotNull null
+        if (returned.returnTargetSymbol != getter.symbol) return@mapNotNull null
+        val tailCall = returned.value.unwrapExactLockedReadTailCall() ?: return@mapNotNull null
+        if (tailCall.symbol != runtimeGetter.symbol || tailCall.extensionReceiver != null ||
+            tailCall.valueArgumentsCount != 0 ||
+            (tailCall.dispatchReceiver as? IrGetValue)?.symbol != getter.dispatchReceiverParameter?.symbol
+        ) return@mapNotNull null
+        ArcLockedReadCanonicalPlan(
+            ownerClass, getter, runtimeGetter, tailCall,
+            getterSignature, runtimeSignature, ownerClassSignature, stdlibLibrary,
+        )
+    }
+}
+
+private fun IrExpression.unwrapExactLockedReadTailCall(): IrCall? = when (this) {
+    is IrCall -> this
+    is IrTypeOperatorCall -> if (operator == IrTypeOperator.IMPLICIT_CAST) {
+        argument.unwrapExactLockedReadTailCall()
+    } else {
+        null
+    }
+    else -> null
 }
 
 /** Exact grammar shared with coroutine spill codegen: one local read plus implicit ABI casts only. */

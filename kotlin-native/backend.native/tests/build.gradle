@@ -3401,6 +3401,13 @@ standaloneTest("arc_coroutine_spill_move") {
     source = "codegen/arc/coroutineSpillMove.kt"
 }
 
+standaloneTest("arc_coroutine_locked_read_spill") {
+    enabled = project.target.name == "linux_x64" && isArcMM
+    flags = ["-opt"]
+    useGoldenData = true
+    source = "codegen/arc/coroutineLockedReadSpill.kt"
+}
+
 standaloneTest("arc_return_update_coalescing") {
     enabled = project.target.name == "linux_x64" && isArcMM
     flags = ["-opt"]
@@ -6742,6 +6749,37 @@ fileCheckTest("filecheck_arc_coroutine_spill_move_debug") {
     annotatedSource = project.file('codegen/arc/coroutineSpillMove.kt')
     checkPrefix = "DEBUG"
     extraOpts = ["-opt", "-g"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_coroutine_locked_read_spill") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('codegen/arc/coroutineLockedReadSpill.kt')
+    extraOpts = ["-opt"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_coroutine_locked_read_spill_debug") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('codegen/arc/coroutineLockedReadSpill.kt')
+    checkPrefix = "DEBUG"
+    extraOpts = ["-opt", "-g"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_coroutine_locked_read_spill_modern") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('codegen/arc/coroutineLockedReadSpill.kt')
+    checkPrefix = "MODERN"
+    extraOpts = ["-opt"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_coroutine_locked_read_spill_strict") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('codegen/arc/coroutineLockedReadStrict.kt')
+    checkPrefix = "STRICT"
+    extraOpts = ["-opt", "-memory-model", "strict"]
     phaseToCheck = "Codegen"
 }
 
