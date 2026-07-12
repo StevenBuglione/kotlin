@@ -1,9 +1,19 @@
 package arc.references.klib
 
+import kotlin.native.arc.ArcDeinit
 import kotlin.native.arc.ArcUnowned
 import kotlin.native.arc.ArcWeak
 
-class ArcReferencePayload(val value: Int)
+private var payloadDeinitCount = 0
+
+fun arcReferencePayloadDeinitCount(): Int = payloadDeinitCount
+
+class ArcReferencePayload(val value: Int) {
+    @ArcDeinit
+    private fun deinit() {
+        payloadDeinitCount++
+    }
+}
 
 class KlibWeakHolder(owner: ArcReferencePayload) {
     @ArcWeak

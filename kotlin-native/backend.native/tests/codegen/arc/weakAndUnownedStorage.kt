@@ -89,6 +89,17 @@ fun main() {
     check(timingDeinitCount == 1)
     check(argumentHolder.weak == null)
 
+    timingDeinitCount = 0
+    var inlineOwner: TimingPayload? = TimingPayload()
+    val inlineBox = TimingStrongBox(inlineOwner)
+    val inlineHolder = TimingWeakHolder(inlineOwner!!)
+    inlineOwner = null
+    // The getter's anonymous scoped root survives the nested returnable block, the later clearing
+    // argument, and the consumer; its verified boundary cleanup then releases the final strong reference.
+    consume(run { inlineHolder.weak }!!, clear(inlineBox))
+    check(timingDeinitCount == 1)
+    check(inlineHolder.weak == null)
+
     // The ARC constructor-forwarding side plan predeclares a normal root slot. Function prologue
     // zero-initialization must make cleanup safe when construction unwinds before producing a value.
     try {

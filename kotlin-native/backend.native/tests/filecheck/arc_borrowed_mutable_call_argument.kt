@@ -60,6 +60,18 @@ private fun consumeScopedWeakPromotion(holder: WeakPromotionHolder) {
     check(holder.weak?.value == 42)
 }
 
+private fun consumePayload(payload: BorrowedPayload?): Int = payload?.value ?: -1
+
+// CHECK-LABEL: define internal void @"kfun:consumeInlineRunWeakPromotion#internal"
+private fun consumeInlineRunWeakPromotion(holder: WeakPromotionHolder) {
+    // The inlined lambda places the accessor call directly in a nested IrReturn value. Visit that
+    // value, keep its anonymous scoped root live through the consumer, and clear it at the boundary.
+    // CHECK: {{call|invoke}} %struct.ObjHeader* @"kfun:WeakPromotionHolder.<get-weak>#internal"(%struct.ObjHeader* {{%[0-9]+}}, %struct.ObjHeader** [[INLINE_PROMOTION:%[0-9]+]])
+    // CHECK: {{call|invoke}} i32 @"kfun:consumePayload#internal"
+    // CHECK: call void @UpdateStackRef(%struct.ObjHeader** [[INLINE_PROMOTION]], %struct.ObjHeader* null)
+    check(consumePayload(run { holder.weak }) == 42)
+}
+
 // CHECK-LABEL: define internal %struct.ObjHeader* @"kfun:returnDurableWeakPromotion#internal"
 private fun returnDurableWeakPromotion(holder: WeakPromotionHolder): BorrowedPayload? {
     // A value assigned and returned is not a scoped full-expression promotion.
@@ -87,6 +99,7 @@ fun main() {
     val promotionOwner = BorrowedPayload(42)
     val promotionHolder = WeakPromotionHolder(promotionOwner)
     consumeScopedWeakPromotion(promotionHolder)
+    consumeInlineRunWeakPromotion(promotionHolder)
     check(returnDurableWeakPromotion(promotionHolder) === promotionOwner)
     check(nonescapingMutableConstructor() == 5)
 }

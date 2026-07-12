@@ -1,5 +1,6 @@
 import arc.references.klib.ArcReferencePayload
 import arc.references.klib.KlibWeakHolder
+import arc.references.klib.arcReferencePayloadDeinitCount
 import arc.references.klib.unownedReader
 import arc.references.klib.weakReader
 
@@ -18,10 +19,12 @@ private fun escapedReaders(): Readers {
 }
 
 private fun dependencyGetterDoesNotLeaveAFrameRoot() {
+    val deinitCountBefore = arcReferencePayloadDeinitCount()
     var owner: ArcReferencePayload? = ArcReferencePayload(7)
     val holder = KlibWeakHolder(owner!!)
     check(holder.weak?.value == 7)
     owner = null
+    check(arcReferencePayloadDeinitCount() == deinitCountBefore + 1)
     check(holder.weak == null)
 }
 

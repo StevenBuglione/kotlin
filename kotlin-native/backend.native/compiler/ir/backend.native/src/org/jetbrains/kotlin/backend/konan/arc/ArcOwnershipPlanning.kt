@@ -329,7 +329,7 @@ private fun selectScopedArcReferenceLoads(
                 if (expression.returnTargetSymbol == function.symbol && expression.value.type.binaryTypeIsReference()) {
                     safe = false
                 } else {
-                    descend(expression.value)
+                    descend(expression)
                 }
             }
 
