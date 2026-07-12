@@ -21,6 +21,17 @@ void HandleCurrentExceptionWhenLeavingKotlinCode();
 
 RUNTIME_NOTHROW OBJ_GETTER(Kotlin_getExceptionObject, void* holder);
 
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+typedef void (*KotlinCatchingCallback)(KNativePtr context);
+
+// ARC-only exception boundary for code running on a registered Kotlin runtime thread. Invokes
+// [callback] and converts a thrown Kotlin exception into an owned reference in [exceptionOut].
+// Returns 0 on success and 1 for a Kotlin exception. The caller must provide an initialized,
+// caller-owned reference slot and release or clear it after a non-zero result. Foreign exceptions
+// never cross this ABI.
+KInt Kotlin_runCatching(KotlinCatchingCallback callback, KNativePtr context, KRef* exceptionOut) RUNTIME_NOTHROW;
+#endif
+
 // The functions below are implemented in Kotlin (at package kotlin.native.internal).
 
 // Throws null pointer exception. Context is evaluated from caller's address.

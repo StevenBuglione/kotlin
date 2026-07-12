@@ -34,9 +34,7 @@ public open class Throwable(open val message: String?, open val cause: Throwable
     @get:ExportForCppRuntime("Kotlin_Throwable_getStackTrace")
     private val stackTrace: NativePtrArray = getCurrentStackTrace()
 
-    private val stackTraceStrings: Array<String> by lazy {
-        getStackTraceStrings(stackTrace).freeze()
-    }
+    private val stackTraceStrings: Array<String> by lazyStackTraceStrings(stackTrace)
 
     /**
      * Returns an array of stack trace strings representing the stack trace
@@ -151,6 +149,11 @@ private external fun getCurrentStackTrace(): NativePtrArray
 
 @GCUnsafeCall("Kotlin_getStackTraceStrings")
 private external fun getStackTraceStrings(stackTrace: NativePtrArray): Array<String>
+
+@OptIn(FreezingIsDeprecated::class)
+private fun lazyStackTraceStrings(stackTrace: NativePtrArray): Lazy<Array<String>> = lazy {
+    getStackTraceStrings(stackTrace).freeze()
+}
 
 /**
  * Returns the detailed description of this throwable with its stack trace.

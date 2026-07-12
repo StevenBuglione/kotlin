@@ -1,0 +1,6 @@
+language = C
+
+---
+
+typedef void (*KotlinCatchingTestCallback)(void* context);
+int invokeKotlinCatching(KotlinCatchingTestCallback callback, void* context);

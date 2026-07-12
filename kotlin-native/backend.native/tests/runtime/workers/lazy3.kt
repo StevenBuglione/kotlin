@@ -40,12 +40,7 @@ class LazyCapturesThis {
 }
 
 fun test2() {
-    if (Platform.memoryModel == MemoryModel.ARC) {
-        // Throwable's uninitialized lazy stack-trace delegate captures its owner.
-        ensureRemainsAlive { Throwable() }
-    } else {
-        ensureGetsCollectedFrozenAndNotFrozen { Throwable() }
-    }
+    ensureGetsCollectedFrozenAndNotFrozen { Throwable() }
     ensureGetsCollectedFrozenAndNotFrozen {
         val throwable = Throwable()
         throwable.getStackTrace()

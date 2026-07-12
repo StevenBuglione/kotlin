@@ -4673,6 +4673,11 @@ createInterop("exceptions_cCallback") {
     it.extraOpts "-Xcompile-source", "$projectDir/interop/exceptions/cCallback.cpp"
 }
 
+createInterop("exceptions_arcCatching") {
+    it.defFile "interop/exceptions/arcCatching.def"
+    it.extraOpts "-Xcompile-source", "$projectDir/interop/exceptions/arcCatching.cpp"
+}
+
 /**
  * Creates a task for the interop test. Configures runner and adds library and test build tasks.
  */
@@ -5808,6 +5813,13 @@ interopTest("interop_exceptions_cCallback") {
     source = "interop/exceptions/cCallback.kt"
     outputChecker = { s -> s.contains("CATCH IN C++") }
     interop = "exceptions_cCallback"
+}
+
+interopTest("interop_exceptions_arc_catching") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    source = "interop/exceptions/arcCatching.kt"
+    outputChecker = { s -> s == "OK\n" }
+    interop = "exceptions_arcCatching"
 }
 
 tasks.register("library_ir_provider_mismatch", KonanDriverTest) {
