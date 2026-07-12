@@ -116,13 +116,14 @@ class ArcProfileTest(unittest.TestCase):
         self.assertIn('compile_repetitions=${ARC_BENCH_COMPILE_REPETITIONS:-1}', script)
         self.assertIn('"quickDiagnostic": os.environ.get("ARC_BENCH_QUICK", "0") == "1"', script)
 
-    def test_remote_runner_serializes_only_measurements_with_the_common_git_lock(self):
+    def test_remote_runner_serializes_only_evidence_measurements_with_the_common_git_lock(self):
         script = (Path(__file__).parent / "remote.sh").read_text()
         self.assertIn("rev-parse --path-format=absolute --git-common-dir", script)
         self.assertIn("codex-arc-host.lock", script)
         self.assertIn("command -v flock", script)
+        self.assertIn('[[ "$argument" == ARC_BENCH_QUICK=1 ]] && quick_benchmark=1', script)
         self.assertIn("mode=-s", script)
-        self.assertIn('[[ "$profile" == arc-bench ]] && mode=-x', script)
+        self.assertIn('[[ "$profile" == arc-bench && $quick_benchmark -eq 0 ]] && mode=-x', script)
         self.assertIn("flock %q %q", script)
         self.assertGreaterEqual(script.count("acquire_shared_host_lock"), 3)
         self.assertIn("mv %q %q", script)

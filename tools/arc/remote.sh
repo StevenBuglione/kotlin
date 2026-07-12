@@ -114,13 +114,18 @@ check_no_active_runs() {
 
 write_runner() {
     local state=$1 log=$2 status=$3 runner=$4 profile=$5
-    local lock mode
+    local lock mode argument quick_benchmark=0
     shift 5
     lock=$(host_lock_path)
     # Only the measurement/comparison phase is exclusive. Candidate and baseline
     # distribution preparation collect no timing data and remain ordinary shared jobs.
+    # Quick diagnostics are deliberately non-evidence-producing, so allowing them to
+    # share a host is more useful than queueing them behind a long correctness suite.
+    for argument in "$@"; do
+        [[ "$argument" == ARC_BENCH_QUICK=1 ]] && quick_benchmark=1
+    done
     mode=-s
-    [[ "$profile" == arc-bench ]] && mode=-x
+    [[ "$profile" == arc-bench && $quick_benchmark -eq 0 ]] && mode=-x
     {
         echo '#!/usr/bin/env bash'
         echo 'set +e'
