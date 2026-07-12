@@ -46,6 +46,7 @@ internal interface KotlinStubs {
     val target: KonanTarget
     val memoryModel: MemoryModel
     val language: String
+    val isInteropStubsCompilation: Boolean
     fun addKotlin(declaration: IrDeclaration)
     fun addC(lines: List<String>)
     fun getUniqueCName(prefix: String): String
@@ -59,7 +60,8 @@ private class KotlinToCCallBuilder(
         val irBuilder: IrBuilderWithScope,
         val stubs: KotlinStubs,
         val isObjCMethod: Boolean,
-        foreignExceptionMode: ForeignExceptionMode.Mode
+        foreignExceptionMode: ForeignExceptionMode.Mode,
+        noCallback: Boolean = false
 ) {
 
     val cBridgeName = stubs.getUniqueCName("knbridge")
@@ -67,7 +69,10 @@ private class KotlinToCCallBuilder(
     val symbols: KonanSymbols get() = stubs.symbols
 
     val bridgeCallBuilder = KotlinCallBuilder(irBuilder, symbols)
-    val bridgeBuilder = KotlinCBridgeBuilder(irBuilder.startOffset, irBuilder.endOffset, cBridgeName, stubs, isKotlinToC = true, foreignExceptionMode)
+    val bridgeBuilder = KotlinCBridgeBuilder(
+            irBuilder.startOffset, irBuilder.endOffset, cBridgeName, stubs,
+            isKotlinToC = true, foreignExceptionMode, noCallback
+    )
     val cBridgeBodyLines = mutableListOf<String>()
     val cCallBuilder = CCallBuilder()
     val cFunctionBuilder = CFunctionBuilder()
@@ -111,9 +116,15 @@ private fun IrType.isCppClass(): Boolean= this.classOrNull?.owner?.hasAnnotation
 
 internal fun KotlinStubs.generateCCall(expression: IrCall, builder: IrBuilderWithScope, isInvoke: Boolean,
                                        foreignExceptionMode: ForeignExceptionMode.Mode = ForeignExceptionMode.default): IrExpression {
-    val callBuilder = KotlinToCCallBuilder(builder, this, isObjCMethod = false, foreignExceptionMode)
-
     val callee = expression.symbol.owner
+    val callBuilder = KotlinToCCallBuilder(
+            builder,
+            this,
+            isObjCMethod = false,
+            foreignExceptionMode,
+            noCallback = !isInvoke &&
+                    callee.isAuthenticatedNoCallbackCFunction(isInteropStubsCompilation)
+    )
 
     // TODO: consider computing all arguments before converting.
 

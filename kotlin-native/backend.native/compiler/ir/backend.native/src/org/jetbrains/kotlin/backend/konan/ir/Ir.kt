@@ -105,6 +105,9 @@ internal abstract class KonanSymbols(
 
     val symbolName = topLevelClass(RuntimeNames.symbolNameAnnotation)
     val filterExceptions = topLevelClass(RuntimeNames.filterExceptions)
+    val cCallNoCallback = topLevelClass(RuntimeNames.cCall).owner.declarations.single {
+        it is IrClass && it.name == RuntimeNames.cCallNoCallback.shortName()
+    }.symbol as IrClassSymbol
     val exportForCppRuntime = topLevelClass(RuntimeNames.exportForCppRuntime)
     val typedIntrinsic = topLevelClass(RuntimeNames.typedIntrinsicAnnotation)
 

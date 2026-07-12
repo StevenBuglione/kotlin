@@ -680,8 +680,13 @@ internal abstract class FunctionalStubBuilder(
         return hasStableParameterNames
     }
 
-    protected fun buildFunctionAnnotations(func: FunctionDecl, stubName: String = func.name) =
-            listOf(AnnotationStub.CCall.Symbol("${context.generateNextUniqueId("knifunptr_")}_${stubName}"))
+    protected fun buildFunctionAnnotations(func: FunctionDecl, stubName: String = func.name): List<AnnotationStub> =
+            listOf(AnnotationStub.CCall.Symbol("${context.generateNextUniqueId("knifunptr_")}_${stubName}")) +
+                    if (func.name in context.configuration.noCallbackFunctions) {
+                        listOf(AnnotationStub.CCall.NoCallback)
+                    } else {
+                        emptyList()
+                    }
 
     protected fun FunctionDecl.returnsVoid(): Boolean = this.returnType.unwrapTypedefs() is VoidType
 

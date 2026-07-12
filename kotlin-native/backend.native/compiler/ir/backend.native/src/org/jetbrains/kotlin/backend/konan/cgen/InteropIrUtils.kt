@@ -6,6 +6,7 @@
 package org.jetbrains.kotlin.backend.konan.cgen
 
 import org.jetbrains.kotlin.backend.jvm.ir.propertyIfAccessor
+import org.jetbrains.kotlin.backend.konan.InteropFqNames
 import org.jetbrains.kotlin.backend.konan.KonanFqNames
 import org.jetbrains.kotlin.backend.konan.RuntimeNames
 import org.jetbrains.kotlin.backend.konan.ir.*
@@ -36,6 +37,30 @@ fun IrDeclaration.hasCCallAnnotation(name: String): Boolean =
         this.annotations.hasAnnotation(cCall.child(Name.identifier(name)))
                 // LazyIr doesn't pass annotations from descriptor to IrValueParameter.
                 || this.descriptor.annotations.hasAnnotation(cCall.child(Name.identifier(name)))
+
+private fun IrDeclaration.hasCCallAnnotation(): Boolean =
+        this.annotations.hasAnnotation(cCall) || this.descriptor.annotations.hasAnnotation(cCall)
+
+/**
+ * Returns true only for a no-callback assertion carried by a real cinterop declaration.
+ *
+ * [CCall.NoCallback] is serialized so that it survives through a cinterop KLIB. An
+ * annotation alone is not a sufficient trust boundary, however: source and arbitrary
+ * KLIB producers can manufacture annotation metadata. Requiring cinterop library
+ * provenance also excludes user-authored external declarations that copy the marker.
+ */
+internal fun IrSimpleFunction.isAuthenticatedNoCallbackCFunction(
+        isInteropStubsCompilation: Boolean
+): Boolean =
+        isExternal &&
+                parent is IrFile &&
+                dispatchReceiverParameter == null &&
+                extensionReceiverParameter == null &&
+                (isFromInteropLibrary() ||
+                        (isInteropStubsCompilation &&
+                                (parent as IrFile).annotations.hasAnnotation(InteropFqNames.interopStubs))) &&
+                hasCCallAnnotation() &&
+                hasCCallAnnotation("NoCallback")
 
 internal fun IrValueParameter.isWCStringParameter() = hasCCallAnnotation("WCString")
 
@@ -112,4 +137,3 @@ internal fun IrFunction.isCStructMemberAtAccessor() = hasAnnotation(RuntimeNames
 internal fun IrFunction.isCStructArrayMemberAtAccessor() = hasAnnotation(RuntimeNames.cStructArrayMemberAt)
 
 internal fun IrFunction.isCStructBitFieldAccessor() = hasAnnotation(RuntimeNames.cStructBitField)
-

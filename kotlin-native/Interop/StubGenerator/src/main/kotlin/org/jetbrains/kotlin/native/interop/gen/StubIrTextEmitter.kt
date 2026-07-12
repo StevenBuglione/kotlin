@@ -481,6 +481,8 @@ class StubIrTextEmitter(
                 else -> "($protocolGetter, $binaryName)"
             }
         }
+        AnnotationStub.CCall.NoCallback ->
+            "@CCall.NoCallback"
         AnnotationStub.CCall.CString ->
             "@CCall.CString"
         AnnotationStub.CCall.WCString ->

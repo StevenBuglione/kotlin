@@ -278,6 +278,7 @@ private fun processCLib(
     val compiler = "${tool.llvmHome}/bin/clang"
     val excludedFunctions = def.config.excludedFunctions.toSet()
     val excludedMacros = def.config.excludedMacros.toSet()
+    val noCallbackFunctions = def.config.noCallbackFunctions.toSet()
     val staticLibraries = def.config.staticLibraries + cinteropArguments.staticLibrary.toTypedArray()
     val projectDir = cinteropArguments.projectDir
     val libraryPaths = (def.config.libraryPaths + cinteropArguments.libraryPath).map {
@@ -320,6 +321,16 @@ private fun processCLib(
 
     val (nativeIndex, compilation) = plugin.buildNativeIndex(library, verbose)
 
+    require(flavor == KotlinPlatform.NATIVE || noCallbackFunctions.isEmpty()) {
+        "noCallbackFunctions is supported only by Kotlin/Native cinterop"
+    }
+    validateNoCallbackFunctions(
+            library.language,
+            nativeIndex.functions,
+            noCallbackFunctions,
+            excludedFunctions
+    )
+
     val target = tool.target
 
     val klibSuffix = CompilerOutputKind.LIBRARY.suffix(target)
@@ -334,6 +345,7 @@ private fun processCLib(
             strictEnums = def.config.strictEnums.toSet(),
             nonStrictEnums = def.config.nonStrictEnums.toSet(),
             noStringConversion = def.config.noStringConversion.toSet(),
+            noCallbackFunctions = noCallbackFunctions,
             exportForwardDeclarations = def.config.exportForwardDeclarations,
             disableDesignatedInitializerChecks = def.config.disableDesignatedInitializerChecks,
             target = target

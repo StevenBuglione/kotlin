@@ -413,6 +413,7 @@ private class MappingExtensions(
                     ("protocolGetter" to protocolGetter).asOptionalAnnotationArgument(),
                     ("binaryName" to binaryName).asOptionalAnnotationArgument()
             )
+            AnnotationStub.CCall.NoCallback -> emptyMap()
             AnnotationStub.CCall.CString -> emptyMap()
             AnnotationStub.CCall.WCString -> emptyMap()
             is AnnotationStub.CCall.Symbol -> mapOfNotNull(

@@ -4,6 +4,7 @@ import kotlinx.metadata.KmAnnotationArgument
 import kotlinx.metadata.KmClassifier
 import kotlinx.metadata.KmModuleFragment
 import kotlinx.metadata.klib.compileTimeValue
+import kotlinx.metadata.klib.annotations
 import org.jetbrains.kotlin.native.interop.indexer.FunctionDecl
 import org.jetbrains.kotlin.native.interop.indexer.IntegerConstantDef
 import org.jetbrains.kotlin.native.interop.indexer.IntegerType
@@ -94,6 +95,26 @@ class StubIrToMetadataTests {
             assertTrue(returnTypeClassifier is KmClassifier.Class)
             assertEquals("kotlin/Int", returnTypeClassifier.name)
         }
+    }
+
+    @Test
+    fun `no callback annotation is serialized`() {
+        val function = createTrivialFunction("leaf")
+        val markedFunction = FunctionStub(
+                name = function.name,
+                returnType = function.returnType,
+                parameters = function.parameters,
+                origin = function.origin,
+                annotations = listOf(AnnotationStub.CCall.NoCallback),
+                external = function.external,
+                receiver = function.receiver,
+                modality = function.modality
+        )
+
+        val metadata = createMetadata("no_callback", functions = listOf(markedFunction))
+        val annotation = metadata.pkg!!.functions.single().annotations.single()
+        assertEquals("kotlinx/cinterop/internal/CCall.NoCallback", annotation.className)
+        assertTrue(annotation.arguments.isEmpty())
     }
 
     @Test

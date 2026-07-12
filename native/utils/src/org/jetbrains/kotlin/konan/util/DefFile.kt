@@ -112,6 +112,10 @@ class DefFile(val file:File?, val config:DefFileConfig, val manifestAddendProper
             properties.getSpaceSeparated("noStringConversion")
         }
 
+        val noCallbackFunctions by lazy {
+            properties.getSpaceSeparated("noCallbackFunctions")
+        }
+
         val depends by lazy {
             properties.getSpaceSeparated("depends")
         }

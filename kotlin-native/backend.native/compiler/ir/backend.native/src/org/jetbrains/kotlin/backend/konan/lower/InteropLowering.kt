@@ -104,6 +104,9 @@ private abstract class BaseInteropIrTransformer(
             override val language: String
                 get() = klib?.manifestProperties?.getProperty("language") ?: "C"
 
+            override val isInteropStubsCompilation: Boolean
+                get() = context.config.isInteropStubs
+
             override fun addKotlin(declaration: IrDeclaration) {
                 addTopLevel(declaration)
             }
