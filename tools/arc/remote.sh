@@ -23,6 +23,7 @@ validate_managed_paths() {
         /home/olfa/codex-kotlin-arc-primary-bench|\
         /home/olfa/codex-kotlin-arc-ci2|\
         /home/olfa/codex-kotlin-arc-ci2-bench|\
+        /home/olfa/codex-kotlin-arc-ci2-cstring|\
         /home/olfa/codex-kotlin-arc-ci2-runtime|\
         /home/olfa/codex-kotlin-arc-ssa|\
         /home/olfa/codex-kotlin-arc-interop)

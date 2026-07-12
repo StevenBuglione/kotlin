@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "scenario": "platform-c-dynamic-cstring",
+  "baseline": {
+    "role": "baseline-strict",
+    "tag": "v1.9.10",
+    "commit": "3db61efe5e892bf27115f1ebcab957d903067ed4",
+    "tree": "c1771ad840cc5e08506c522bf7ff8160d3537f39",
+    "memoryModel": "strict"
+  },
+  "candidate": {
+    "role": "candidate",
+    "commit": "f3f458c73dac672cfe4da9e78755546331a7a7c4",
+    "tree": "778a8fd4236cf92558f8c97801c613e76b5a7fbf",
+    "memoryModel": "arc"
+  },
+  "fixture": {
+    "path": "tools/arc/fixtures/benchmark.kt",
+    "sha256": "e69a89cda9684c695a7dedd90808ab20375fe32c1e589fbe1d2ebf028142e35b",
+    "interopDefinitionSha256": "da598d7809b1271ee0183265c95e85e84de177d73501605ce3f34b845706c4b6",
+    "authenticatedNoCallbackCStringWrapper": true
+  },
+  "execution": {
+    "repetitionsPerModel": 9,
+    "rawRows": 18,
+    "warmupsPerModel": 1,
+    "compileRepetitionsPerModel": 3,
+    "cpuAffinity": [0]
+  },
+  "observableOutput": {
+    "line": "ARC_BENCH_OK scenario=platform-c-dynamic-cstring checksum=34200000 operations=1800000 allocations=3601758",
+    "sha256": "786cc4dd7f8dac473d738577cf420ceee6fd01b7bd58425678184ffb99323b83",
+    "checksum": 34200000,
+    "operations": 1800000,
+    "logicalAllocations": 3601758,
+    "baselineAndCandidateMatched": true
+  },
+  "result": {
+    "baselineMedianSeconds": 0.302481645,
+    "candidateMedianSeconds": 0.132682941,
+    "latencyDeltaPercent": -56.135,
+    "throughputRatioPercent": 227.973,
+    "baselinePeakRssKiB": 3200,
+    "candidatePeakRssKiB": 2688,
+    "rssDeltaPercent": -16.000,
+    "binaryBytesDeltaPercent": -4.240,
+    "passed": true
+  },
+  "semanticVerification": {
+    "utf8ReplacementMatchesLegacyCString": true,
+    "embeddedNulMatchesLegacyCString": true,
+    "twoArgumentReverseNormalCleanup": true,
+    "twoArgumentReverseExceptionalCleanup": true,
+    "voidAndNonVoidBridgeCoverage": true
+  },
+  "validatedEvidence": [
+    "baseline-provenance.json",
+    "candidate-provenance.json",
+    "inputs.json",
+    "raw.tsv",
+    "static.tsv",
+    "summary.tsv",
+    "comparison.md"
+  ]
+}

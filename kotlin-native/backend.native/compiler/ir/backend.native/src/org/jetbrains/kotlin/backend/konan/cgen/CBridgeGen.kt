@@ -47,6 +47,9 @@ internal interface KotlinStubs {
     val memoryModel: MemoryModel
     val language: String
     val isInteropStubsCompilation: Boolean
+    val optimizationsEnabled: Boolean
+    val debugInfoEnabled: Boolean
+    val arcDiagnosticsEnabled: Boolean
     fun addKotlin(declaration: IrDeclaration)
     fun addC(lines: List<String>)
     fun getUniqueCName(prefix: String): String
@@ -61,7 +64,7 @@ private class KotlinToCCallBuilder(
         val stubs: KotlinStubs,
         val isObjCMethod: Boolean,
         foreignExceptionMode: ForeignExceptionMode.Mode,
-        noCallback: Boolean = false
+        val noCallback: Boolean = false
 ) {
 
     val cBridgeName = stubs.getUniqueCName("knbridge")
@@ -76,6 +79,46 @@ private class KotlinToCCallBuilder(
     val cBridgeBodyLines = mutableListOf<String>()
     val cCallBuilder = CCallBuilder()
     val cFunctionBuilder = CFunctionBuilder()
+    private val scopedCStringArguments = mutableListOf<Pair<String, String>>()
+
+    fun passScopedCString(expression: IrExpression, kotlinType: IrType): CExpression {
+        val bridgeValue = passThroughBridge(expression, kotlinType, CTypes.voidPtr)
+        val cStringName = "scopedCString${scopedCStringArguments.size}"
+        scopedCStringArguments += bridgeValue.name to cStringName
+        return CExpression(cStringName, CTypes.pointer(CTypes.char))
+    }
+
+    fun wrapScopedCStringCall(expression: String, returnType: CType): String {
+        if (scopedCStringArguments.isEmpty()) return expression
+        val cleanupFunction = "${cBridgeName}_disposeScopedCString"
+        return buildString {
+            append("({ ")
+            scopedCStringArguments.forEach { (bridgeValue, cStringName) ->
+                append("char *$cStringName __attribute__((cleanup($cleanupFunction))) = ")
+                append("CreateCStringFromStringWithReplacement($bridgeValue); ")
+            }
+            if (returnType === CTypes.void) {
+                append(expression)
+                append("; ")
+            } else {
+                append(returnType.render("scopedCStringResult"))
+                append(" = ")
+                append(expression)
+                append("; scopedCStringResult; ")
+            }
+            append("})")
+        }
+    }
+
+    fun scopedCStringSupportLines(): List<String> {
+        if (scopedCStringArguments.isEmpty()) return emptyList()
+        val cleanupFunction = "${cBridgeName}_disposeScopedCString"
+        return listOf(
+                "extern char* CreateCStringFromStringWithReplacement(const void*);",
+                "extern void DisposeCString(char*);",
+                "static void $cleanupFunction(char** value) { DisposeCString(*value); }"
+        )
+    }
 
 }
 
@@ -293,6 +336,7 @@ private fun <R> KotlinToCCallBuilder.handleArgumentForVarargParameter(
 private fun KotlinToCCallBuilder.emitCBridge() {
     val cLines = mutableListOf<String>()
 
+    cLines += scopedCStringSupportLines()
     cLines += "${bridgeBuilder.buildCSignature(cBridgeName)} {"
     cLines += cBridgeBodyLines
     cLines += "}"
@@ -304,7 +348,7 @@ private fun KotlinToCCallBuilder.buildCall(
         targetFunctionName: String,
         returnValuePassing: ValueReturning
 ): IrExpression = with(returnValuePassing) {
-    returnValue(cCallBuilder.build(targetFunctionName))
+    returnValue(wrapScopedCStringCall(cCallBuilder.build(targetFunctionName), cType))
 }
 
 internal sealed class ObjCCallReceiver {
@@ -652,7 +696,19 @@ private fun KotlinToCCallBuilder.mapCalleeFunctionParameter(
         classifier == symbols.string && (variadic || parameter?.isCStringParameter() == true) -> {
             require(!variadic || !isObjCMethod) { stubs.renderCompilerError(argument) }
             // C varargs carry no pointee-const contract and may mutate the temporary copy.
-            CStringArgumentPassing(allowStaticAsciiCString = !variadic && stubs.memoryModel == MemoryModel.ARC)
+            val fixedCString = !variadic
+            CStringArgumentPassing(
+                    kotlinType = type,
+                    allowStaticAsciiCString = fixedCString && stubs.memoryModel == MemoryModel.ARC,
+                    // The bridge must remain in Runnable state while the converter borrows the
+                    // Kotlin String. Authenticated no-callback C functions cannot re-enter Kotlin;
+                    // cleanup attributes balance every successfully created buffer on normal and
+                    // native-unwind exits. Keep debug and diagnostics builds on the legacy path.
+                    allowScopedCString = fixedCString && noCallback &&
+                            stubs.memoryModel == MemoryModel.ARC && stubs.target == KonanTarget.LINUX_X64 &&
+                            stubs.language == "C" && stubs.optimizationsEnabled &&
+                            !stubs.debugInfoEnabled && !stubs.arcDiagnosticsEnabled
+            )
         }
 
         classifier == symbols.string && parameter?.isWCStringParameter() == true ->
@@ -1327,7 +1383,9 @@ private class WCStringArgumentPassing : KotlinToCArgumentPassing {
 }
 
 private class CStringArgumentPassing(
-        private val allowStaticAsciiCString: Boolean
+        private val kotlinType: IrType,
+        private val allowStaticAsciiCString: Boolean,
+        private val allowScopedCString: Boolean
 ) : KotlinToCArgumentPassing {
 
     override fun KotlinToCCallBuilder.passValue(expression: IrExpression): CExpression {
@@ -1340,6 +1398,10 @@ private class CStringArgumentPassing(
             expression.asStaticAsciiCString()?.let {
                 return CExpression(it, CTypes.pointer(CTypes.char))
             }
+        }
+
+        if (allowScopedCString) {
+            return passScopedCString(expression, kotlinType)
         }
 
         val cstr = irBuilder.irSafeTransform(expression) {

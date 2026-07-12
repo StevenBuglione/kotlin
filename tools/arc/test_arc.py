@@ -56,9 +56,23 @@ class ArcProfileTest(unittest.TestCase):
             self.assertEqual("/home/olfa/codex-kotlin-arc-primary-bench", os.environ["ARC_REMOTE_DIR"])
             self.assertEqual(16, arc.workers())
 
+    def test_ci2_cstring_machine_is_an_isolated_benchmark_lane(self):
+        with patch.dict(os.environ, {}, clear=True):
+            arc.select_machine("ci2-cstring")
+            self.assertEqual("olfa@10.10.10.12", os.environ["ARC_REMOTE"])
+            self.assertEqual("/home/olfa/codex-kotlin-arc-ci2-cstring", os.environ["ARC_REMOTE_DIR"])
+            self.assertEqual("/home/olfa/codex-kotlin-rust", os.environ["ARC_REMOTE_GIT"])
+            self.assertEqual(
+                "/home/olfa/codex-kotlin-arc-ci2-bench-baseline-v1.9.10",
+                os.environ["ARC_BENCH_BASELINE_SOURCE"],
+            )
+            self.assertEqual(16, arc.workers())
+        script = (Path(__file__).parent / "remote.sh").read_text()
+        self.assertIn("/home/olfa/codex-kotlin-arc-ci2-cstring", script)
+
     def test_parallel_compiler_runtime_and_ssa_lanes_have_distinct_worktrees(self):
         configurations = {}
-        for machine in ("ci2", "ci2-bench", "ci2-runtime", "primary-bench", "primary-ssa", "primary-interop"):
+        for machine in ("ci2", "ci2-bench", "ci2-cstring", "ci2-runtime", "primary-bench", "primary-ssa", "primary-interop"):
             with patch.dict(os.environ, {}, clear=True):
                 arc.select_machine(machine)
                 configurations[machine] = (
@@ -66,7 +80,7 @@ class ArcProfileTest(unittest.TestCase):
                     os.environ["ARC_REMOTE_DIR"],
                     arc.workers(),
                 )
-        self.assertEqual(6, len({value[1] for value in configurations.values()}))
+        self.assertEqual(7, len({value[1] for value in configurations.values()}))
         self.assertEqual(("olfa@10.10.10.12", "/home/olfa/codex-kotlin-arc-ci2-runtime", 8), configurations["ci2-runtime"])
         self.assertEqual(("olfa@10.10.10.8", "/home/olfa/codex-kotlin-arc-ssa", 14), configurations["primary-ssa"])
         self.assertEqual(("olfa@10.10.10.8", "/home/olfa/codex-kotlin-arc-interop", 12), configurations["primary-interop"])
@@ -496,7 +510,10 @@ class ArcProfileTest(unittest.TestCase):
         self.assertIn('__attribute__((noinline)) size_t arc_benchmark_strlen_ptr', header)
         self.assertIn('__attribute__((noinline)) size_t arc_benchmark_strlen_string', header)
         self.assertIn('noStringConversion = arc_benchmark_strlen_ptr', definition)
-        self.assertIn('noCallbackFunctions = arc_benchmark_strlen_ptr', definition)
+        self.assertIn(
+            'noCallbackFunctions = arc_benchmark_strlen_ptr arc_benchmark_strlen_string',
+            definition,
+        )
         self.assertIn('val phase = getpid() and 7', fixture)
         self.assertIn('val address = pinned.addressOf(0)', fixture)
         self.assertIn('arc_benchmark_strlen_ptr(address)', fixture)

@@ -106,6 +106,12 @@ private abstract class BaseInteropIrTransformer(
 
             override val isInteropStubsCompilation: Boolean
                 get() = context.config.isInteropStubs
+            override val optimizationsEnabled: Boolean
+                get() = context.config.optimizationsEnabled
+            override val debugInfoEnabled: Boolean
+                get() = context.shouldContainDebugInfo()
+            override val arcDiagnosticsEnabled: Boolean
+                get() = context.config.arcDiagnosticsEnabled
 
             override fun addKotlin(declaration: IrDeclaration) {
                 addTopLevel(declaration)

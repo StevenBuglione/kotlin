@@ -4889,7 +4889,16 @@ fileCheckTest("filecheck_cstring_argument_passing") {
             '--implicit-check-not=c"dynamic\\00"',
             '--implicit-check-not=c"mutable\\00"',
             '--implicit-check-not=c"\\C3\\A9\\00"',
+            '--implicit-check-not=call i8* @CreateCStringFromStringWithReplacement',
     ]
+}
+
+fileCheckTest("filecheck_cstring_scoped_argument_passing") {
+    enabled = enabled && isArcMM && cacheTesting == null && project.target.name == 'linux_x64'
+    annotatedSource = project.file('interop/basics/4.kt')
+    interop = 'cstdio'
+    checkPrefix = 'CSTRING-SCOPED'
+    extraOpts = ['-opt']
 }
 
 fileCheckTest("filecheck_cstring_argument_passing_strict") {
@@ -4901,6 +4910,7 @@ fileCheckTest("filecheck_cstring_argument_passing_strict") {
     additionalFileCheckFlags = [
             '--implicit-check-not=c"ascii\\00"',
             '--implicit-check-not=c"static\\00"',
+            '--implicit-check-not=call i8* @CreateCStringFromStringWithReplacement',
     ]
 }
 

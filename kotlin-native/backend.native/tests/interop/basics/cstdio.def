@@ -1,5 +1,7 @@
 headers = stdio.h
 compilerOpts.osx = -D_ANSI_SOURCE
+noCallbackFunctions = fixedCStringLength fixedCStringBytesHash fixedCStringPairHash consumeCStringPair
+noStringConversion = fixedCStringBytesHashRaw fixedCStringPairHashRaw
 
 ---
 
@@ -13,6 +15,39 @@ static inline int fixedCStringLength(const char* value) {
     int length = 0;
     while (value[length] != '\0') ++length;
     return length;
+}
+
+static inline unsigned int fixedCStringBytesHashImpl(const char* value) {
+    unsigned int hash = 2166136261u;
+    while (*value != '\0') {
+        hash = (hash ^ (unsigned char)*value++) * 16777619u;
+    }
+    return hash;
+}
+
+static inline unsigned int fixedCStringBytesHash(const char* value) {
+    return fixedCStringBytesHashImpl(value);
+}
+
+static inline unsigned int fixedCStringBytesHashRaw(const char* value) {
+    return fixedCStringBytesHashImpl(value);
+}
+
+static inline unsigned int fixedCStringPairHashImpl(const char* first, const char* second) {
+    return fixedCStringBytesHashImpl(first) * 31u + fixedCStringBytesHashImpl(second);
+}
+
+static inline unsigned int fixedCStringPairHash(const char* first, const char* second) {
+    return fixedCStringPairHashImpl(first, second);
+}
+
+static inline unsigned int fixedCStringPairHashRaw(const char* first, const char* second) {
+    return fixedCStringPairHashImpl(first, second);
+}
+
+static inline void consumeCStringPair(const char* first, const char* second) {
+    volatile unsigned int hash = fixedCStringPairHashImpl(first, second);
+    (void)hash;
 }
 
 static inline int mutateFirstVararg(int ignored, ...) {

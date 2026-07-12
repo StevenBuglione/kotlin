@@ -130,6 +130,18 @@ char* CreateCStringFromString(KConstRef kref) {
   return result;
 }
 
+char* CreateCStringFromStringWithReplacement(KConstRef kref) {
+  if (kref == nullptr) return nullptr;
+  KString kstring = kref->array();
+  const KChar* utf16 = CharArrayAddressOfElementAt(kstring, 0);
+  std_support::string utf8;
+  utf8.reserve(kstring->count_);
+  utf8::with_replacement::utf16to8(utf16, utf16 + kstring->count_, back_inserter(utf8));
+  char* result = reinterpret_cast<char*>(std_support::calloc(1, utf8.size() + 1));
+  ::memcpy(result, utf8.c_str(), utf8.size());
+  return result;
+}
+
 void DisposeCString(char* cstring) {
     if (cstring) std_support::free(cstring);
 }

@@ -1,5 +1,7 @@
 a b -1 2 3 9223372036854775807 0.1 0.2 1 0
 [a] [static] [dynamic] [é]
 fixed lengths: 5 6 7 2
+scoped CString parity: true
+scoped CString pair parity: true
 vararg writable: 1
 1 42

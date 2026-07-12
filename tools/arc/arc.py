@@ -45,6 +45,14 @@ MACHINE_PROFILES = {
         "ARC_REMOTE_GIT": "/home/olfa/codex-kotlin-rust",
         "ARC_MAX_WORKERS": "16",
     },
+    "ci2-cstring": {
+        "ARC_REMOTE": "olfa@10.10.10.12",
+        "ARC_REMOTE_DIR": "/home/olfa/codex-kotlin-arc-ci2-cstring",
+        "ARC_REMOTE_GIT": "/home/olfa/codex-kotlin-rust",
+        "ARC_MAX_WORKERS": "16",
+        "ARC_BENCH_BASELINE_SOURCE": "/home/olfa/codex-kotlin-arc-ci2-bench-baseline-v1.9.10",
+        "ARC_BENCH_BASELINE_DIST": "/home/olfa/codex-kotlin-arc-ci2-bench-baseline-v1.9.10/kotlin-native/dist",
+    },
     "ci2-runtime": {
         "ARC_REMOTE": "olfa@10.10.10.12",
         "ARC_REMOTE_DIR": "/home/olfa/codex-kotlin-arc-ci2-runtime",
@@ -83,6 +91,7 @@ BENCHMARK_ENVIRONMENT = (
     "ARC_BENCH_SCENARIO_REGRESSION_PERCENT", "ARC_BENCH_THROUGHPUT_FLOOR_PERCENT",
     "ARC_BENCH_RSS_LIMIT_PERCENT", "ARC_BENCH_SIZE_LIMIT_PERCENT", "ARC_BENCH_ENFORCE",
     "ARC_BENCH_OBJDUMP",
+    "ARC_BENCH_BASELINE_SOURCE", "ARC_BENCH_BASELINE_DIST",
 )
 BENCHMARK_PRESETS = {
     "coroutines": "coroutines",
