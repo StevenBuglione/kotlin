@@ -16,6 +16,32 @@ import org.junit.Test
 
 class ArcOwnershipPlanningTest {
     @Test
+    fun resultSlotForwardingAuthorizationRequiresEverySafetyGate() {
+        val eligible = ArcResultSlotForwardingEligibility(
+            arcEnabled = true,
+            debugInfoDisabled = true,
+            explicitResultSlot = true,
+            directKotlinCall = true,
+            nonExternalCall = true,
+            nonSuspendCall = true,
+            referenceResult = true,
+            nonUnitResult = true,
+            nonNothingResult = true,
+        )
+
+        assertTrue(eligible.isAuthorized())
+        assertFalse(eligible.copy(arcEnabled = false).isAuthorized())
+        assertFalse(eligible.copy(debugInfoDisabled = false).isAuthorized())
+        assertFalse(eligible.copy(explicitResultSlot = false).isAuthorized())
+        assertFalse(eligible.copy(directKotlinCall = false).isAuthorized())
+        assertFalse(eligible.copy(nonExternalCall = false).isAuthorized())
+        assertFalse(eligible.copy(nonSuspendCall = false).isAuthorized())
+        assertFalse(eligible.copy(referenceResult = false).isAuthorized())
+        assertFalse(eligible.copy(nonUnitResult = false).isAuthorized())
+        assertFalse(eligible.copy(nonNothingResult = false).isAuthorized())
+    }
+
+    @Test
     fun borrowedMutableReadAuthorizationRequiresEverySafetyGate() {
         val eligible = ArcBorrowedMutableReadEligibility(
             arcEnabled = true,

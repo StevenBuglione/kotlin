@@ -105,6 +105,23 @@ internal data class ArcOwnedResultForwarding(
     val returned: IrVariable,
 )
 
+/** Authorization for remembering that a direct object call initialized its exact ARC result slot. */
+internal data class ArcResultSlotForwardingEligibility(
+    val arcEnabled: Boolean,
+    val debugInfoDisabled: Boolean,
+    val explicitResultSlot: Boolean,
+    val directKotlinCall: Boolean,
+    val nonExternalCall: Boolean,
+    val nonSuspendCall: Boolean,
+    val referenceResult: Boolean,
+    val nonUnitResult: Boolean,
+    val nonNothingResult: Boolean,
+)
+
+internal fun ArcResultSlotForwardingEligibility.isAuthorized(): Boolean =
+    arcEnabled && debugInfoDisabled && explicitResultSlot && directKotlinCall && nonExternalCall &&
+            nonSuspendCall && referenceResult && nonUnitResult && nonNothingResult
+
 /**
  * A deliberately redundant checklist for each mutable read that ARC codegen may borrow.
  * Keeping this as a value object makes widening the authorization boundary an explicit change.

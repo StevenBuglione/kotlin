@@ -429,6 +429,11 @@ internal abstract class FunctionGenerationContext(
     var returnSlot: LLVMValueRef? = null
         private set
     private var slotsPhi: LLVMValueRef? = null
+    // ARC object-result calls initialize their explicit result slot with an owned (+1) reference.
+    // Remember that fact only inside the normal-success basic block where it was established. This
+    // lets codegen remove a later pointer-identical slot update without weakening exceptional cleanup
+    // or assuming that the fact holds on a different CFG edge.
+    private val arcOwnedResultsByBlock = mutableMapOf<LLVMBasicBlockRef, MutableMap<LLVMValueRef, LLVMValueRef>>()
     private val frameOverlaySlotCount =
             (LLVMStoreSizeOfType(llvmTargetData, runtime.frameOverlayType) / runtime.pointerSize).toInt()
     private var slotCount = frameOverlaySlotCount
@@ -560,12 +565,17 @@ internal abstract class FunctionGenerationContext(
         alignment?.let { LLVMSetAlignment(value, it) }
         if (isObjectRef(value) && isVar) {
             val slot = resultSlot ?: alloca(LLVMTypeOf(value), variableLocation = null)
-            storeStackRef(value, slot)
+            // Loading an owning slot back into that exact slot cannot change its ownership. This
+            // shape is produced by transparent inline aliases around an already-forwarded result.
+            if (context.memoryModel != MemoryModel.ARC || slot != address) {
+                storeStackRef(value, slot)
+            }
         }
         return value
     }
 
     fun store(value: LLVMValueRef, ptr: LLVMValueRef, memoryOrder: LLVMAtomicOrdering? = null, alignment: Int? = null) {
+        invalidateArcOwnedResultSlot(ptr)
         val store = LLVMBuildStore(builder, value, ptr)
         memoryOrder?.let { LLVMSetOrdering(store, it) }
         alignment?.let { LLVMSetAlignment(store, it) }
@@ -597,6 +607,8 @@ internal abstract class FunctionGenerationContext(
     }
 
     private fun updateReturnRef(value: LLVMValueRef, address: LLVMValueRef) {
+        if (arcResultIsAlreadyOwnedBySlot(value, address)) return
+        invalidateArcOwnedResultSlot(address)
         when (context.memoryModel) {
             MemoryModel.STRICT -> store(value, address)
             MemoryModel.RELAXED, MemoryModel.EXPERIMENTAL, MemoryModel.ARC ->
@@ -607,6 +619,8 @@ internal abstract class FunctionGenerationContext(
     private fun updateRef(value: LLVMValueRef, address: LLVMValueRef, onStack: Boolean,
                           isVolatile: Boolean = false, alignment: Int? = null) {
         require(alignment == null || alignment % runtime.pointerAlignment == 0)
+        if (onStack && arcResultIsAlreadyOwnedBySlot(value, address)) return
+        invalidateArcOwnedResultSlot(address)
         if (onStack) {
             require(!isVolatile) { "Stack ref update can't be volatile"}
             when (context.memoryModel) {
@@ -620,6 +634,25 @@ internal abstract class FunctionGenerationContext(
             } else {
                 call(llvm.updateHeapRefFunction, listOf(address, value))
             }
+        }
+    }
+
+    /**
+     * Records that [value] was returned owned (+1) directly into [resultSlot] on the current normal
+     * CFG edge. Callers must invoke this only for the Kotlin object-result ABI or allocation ABI.
+     */
+    fun markArcResultOwnedBySlot(value: LLVMValueRef, resultSlot: LLVMValueRef?) {
+        if (resultSlot == null || context.memoryModel != MemoryModel.ARC || context.shouldContainDebugInfo()) return
+        arcOwnedResultsByBlock.getOrPut(currentBlock) { mutableMapOf() }[resultSlot] = value
+    }
+
+    fun arcResultIsAlreadyOwnedBySlot(value: LLVMValueRef, resultSlot: LLVMValueRef): Boolean =
+            context.memoryModel == MemoryModel.ARC &&
+                    arcOwnedResultsByBlock[currentBlock]?.get(resultSlot) == value
+
+    fun invalidateArcOwnedResultSlot(resultSlot: LLVMValueRef) {
+        if (context.memoryModel == MemoryModel.ARC) {
+            arcOwnedResultsByBlock[currentBlock]?.remove(resultSlot)
         }
     }
 
@@ -644,12 +677,14 @@ internal abstract class FunctionGenerationContext(
         }
     }
 
-    fun memset(pointer: LLVMValueRef, value: Byte, size: Int, isVolatile: Boolean = false) =
-            call(llvm.memsetFunction,
+    fun memset(pointer: LLVMValueRef, value: Byte, size: Int, isVolatile: Boolean = false): LLVMValueRef {
+        invalidateArcOwnedResultSlot(pointer)
+        return call(llvm.memsetFunction,
                     listOf(pointer,
                             llvm.int8(value),
                             llvm.int32(size),
                             llvm.int1(isVolatile)))
+    }
 
     fun call(llvmCallable: LlvmCallable, args: List<LLVMValueRef>,
              resultLifetime: Lifetime = Lifetime.IRRELEVANT,
@@ -681,8 +716,17 @@ internal abstract class FunctionGenerationContext(
 
                 else -> throw Error("Incorrect slot type: ${resultLifetime.slotType}")
             }
+            // An explicit object-result ABI call may replace the slot even when the producer is
+            // external, virtual, suspending, or otherwise ineligible for forwarding. Forget the
+            // previous proof before emitting the call; eligible producers establish a new proof
+            // only in their normal-success block.
+            if (resultSlot != null) invalidateArcOwnedResultSlot(resultSlot)
             args + realResultSlot
         }
+        // Also cover verbatim/runtime calls that receive an owning slot through an ordinary pointer
+        // argument. Exact pointer identity keeps this conservative invalidation local to slots whose
+        // storage the call can actually observe.
+        callArgs.forEach { invalidateArcOwnedResultSlot(it) }
         return callRaw(llvmCallable, callArgs, exceptionHandler)
     }
 
@@ -691,6 +735,9 @@ internal abstract class FunctionGenerationContext(
         if (llvmCallable.isNoUnwind) {
             return llvmCallable.buildCall(builder, args)
         } else {
+            // The proof is valid on the normal edge of a call that cannot observe the slot. It must
+            // not leak to the unwind edge: ARC frame cleanup owns that path independently.
+            val arcResultsOnNormalSuccess = arcOwnedResultsByBlock[currentBlock]?.toMap()
             val unwind = when (exceptionHandler) {
                 ExceptionHandler.Caller -> cleanupLandingpad
                 is ExceptionHandler.Local -> exceptionHandler.unwind
@@ -716,6 +763,9 @@ internal abstract class FunctionGenerationContext(
             if (exceptionHandler == ExceptionHandler.Caller)
                 invokeInstructions.add(0, FunctionInvokeInformation(result, llvmCallable, args, success))
             positionAtEnd(success)
+            if (!arcResultsOnNormalSuccess.isNullOrEmpty()) {
+                arcOwnedResultsByBlock[success] = arcResultsOnNormalSuccess.toMutableMap()
+            }
 
             return result
         }
@@ -743,7 +793,9 @@ internal abstract class FunctionGenerationContext(
     }
 
     fun allocInstance(typeInfo: LLVMValueRef, lifetime: Lifetime, resultSlot: LLVMValueRef?) : LLVMValueRef =
-            call(llvm.allocInstanceFunction, listOf(typeInfo), lifetime, resultSlot = resultSlot)
+            call(llvm.allocInstanceFunction, listOf(typeInfo), lifetime, resultSlot = resultSlot).also {
+                if (lifetime != Lifetime.STACK) markArcResultOwnedBySlot(it, resultSlot)
+            }
 
     fun allocInstance(irClass: IrClass, lifetime: Lifetime, resultSlot: LLVMValueRef?) =
         if (lifetime == Lifetime.STACK)
@@ -762,7 +814,9 @@ internal abstract class FunctionGenerationContext(
         return if (lifetime == Lifetime.STACK) {
             stackLocalsManager.allocArray(irClass, count)
         } else {
-            call(llvm.allocArrayFunction, listOf(typeInfo, count), lifetime, exceptionHandler, resultSlot = resultSlot)
+            call(llvm.allocArrayFunction, listOf(typeInfo, count), lifetime, exceptionHandler, resultSlot = resultSlot).also {
+                markArcResultOwnedBySlot(it, resultSlot)
+            }
         }
     }
 

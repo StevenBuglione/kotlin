@@ -12,6 +12,7 @@ import org.jetbrains.kotlin.backend.common.ir.isUnconditional
 import org.jetbrains.kotlin.backend.common.lower.coroutines.getOrCreateFunctionWithContinuationStub
 import org.jetbrains.kotlin.backend.common.lower.inline.InlinerExpressionLocationHint
 import org.jetbrains.kotlin.backend.konan.*
+import org.jetbrains.kotlin.backend.konan.arc.isAuthorized
 import org.jetbrains.kotlin.backend.konan.cexport.CAdapterCodegen
 import org.jetbrains.kotlin.backend.konan.cexport.CAdapterExportedElements
 import org.jetbrains.kotlin.backend.konan.cgen.CBridgeOrigin
@@ -1269,6 +1270,7 @@ internal class CodeGeneratorVisitor(
     private inner class WhenEmittingContext(val expression: IrWhen, val lastBBOfWhenCases: LLVMBasicBlockRef) {
         val needsPhi = expression.branches.last().isUnconditional() && !expression.type.isUnit()
         val llvmType = expression.type.toLLVMType(llvm)
+        val arcResultsAlreadyOwnedByResultSlot = mutableListOf<Boolean>()
 
         val bbExit = lazy {
             // bbExit must be positioned after all blocks of WHEN construct
@@ -1313,8 +1315,14 @@ internal class CodeGeneratorVisitor(
 
         branchInfos.forEach { generateWhenCase(whenEmittingContext, it) }
 
-        if (whenEmittingContext.bbExit.isInitialized())
+        if (whenEmittingContext.bbExit.isInitialized()) {
             functionGenerationContext.positionAtEnd(whenEmittingContext.bbExit.value)
+            if (resultSlot != null && whenEmittingContext.resultPhi.isInitialized() &&
+                    whenEmittingContext.arcResultsAlreadyOwnedByResultSlot.isNotEmpty() &&
+                    whenEmittingContext.arcResultsAlreadyOwnedByResultSlot.all { it }) {
+                functionGenerationContext.markArcResultOwnedBySlot(whenEmittingContext.resultPhi.value, resultSlot)
+            }
+        }
 
         return when {
             expression.type.isUnit() -> codegen.theUnitInstanceRef.llvm
@@ -1345,6 +1353,10 @@ internal class CodeGeneratorVisitor(
             }
             val brResult = evaluateExpression(branch.result, resultSlot)
             if (!functionGenerationContext.isAfterTerminator()) {
+                if (whenEmittingContext.needsPhi) {
+                    whenEmittingContext.arcResultsAlreadyOwnedByResultSlot += resultSlot != null &&
+                            functionGenerationContext.arcResultIsAlreadyOwnedBySlot(brResult, resultSlot)
+                }
                 if (whenEmittingContext.needsPhi)
                     functionGenerationContext.assignPhis(whenEmittingContext.resultPhi.value to brResult)
                 functionGenerationContext.br(whenEmittingContext.bbExit.value)
@@ -2010,11 +2022,14 @@ internal class CodeGeneratorVisitor(
         val value = expression.value
         val target = expression.returnTargetSymbol.owner
 
-        val evaluated = evaluateExpression(value, currentCodeContext.getReturnSlot(target))
+        val targetReturnSlot = currentCodeContext.getReturnSlot(target)
+        val evaluated = evaluateExpression(value, targetReturnSlot)
         val forwardedReturn = currentArcOwnedResultForwarding
         if (target == (currentCodeContext.functionScope() as? FunctionScope)?.declaration &&
-                forwardedReturn != null &&
-                (value as? IrGetValue)?.symbol?.owner === forwardedReturn.returned) {
+                ((forwardedReturn != null &&
+                        (value as? IrGetValue)?.symbol?.owner === forwardedReturn.returned) ||
+                        (targetReturnSlot != null &&
+                                functionGenerationContext.arcResultIsAlreadyOwnedBySlot(evaluated, targetReturnSlot)))) {
             functionGenerationContext.markReturnValueAlreadyInReturnSlot()
         }
         currentCodeContext.genReturn(target, evaluated)
@@ -2031,6 +2046,7 @@ internal class CodeGeneratorVisitor(
 
         var bbExit : LLVMBasicBlockRef? = null
         var resultPhi : LLVMValueRef? = null
+        private val arcReturnsAlreadyOwnedByResultSlot = mutableListOf<Boolean>()
         private val functionScope by lazy {
             returnableBlock.inlineFunction?.let {
                 it.scope(file().fileEntry.line(generationState.inlineFunctionOrigins[it]?.startOffset ?: it.startOffset))
@@ -2063,10 +2079,22 @@ internal class CodeGeneratorVisitor(
                 return
             }
                                                                                 // It is local return from current function.
+            if (!returnableBlock.type.isUnit()) {
+                arcReturnsAlreadyOwnedByResultSlot += resultSlot != null && value != null &&
+                        functionGenerationContext.arcResultIsAlreadyOwnedBySlot(value, resultSlot)
+            }
             functionGenerationContext.br(getExit())                                               // Generate branch on exit block.
 
             if (!returnableBlock.type.isUnit()) {                               // If function returns more then "unit"
                 functionGenerationContext.assignPhis(getResult() to value!!)                      // Assign return value to result PHI node.
+            }
+        }
+
+        fun markResultPhiOwnedByResultSlot() {
+            val slot = resultSlot ?: return
+            val phi = resultPhi ?: return
+            if (arcReturnsAlreadyOwnedByResultSlot.isNotEmpty() && arcReturnsAlreadyOwnedByResultSlot.all { it }) {
+                functionGenerationContext.markArcResultOwnedBySlot(phi, slot)
             }
         }
 
@@ -2155,6 +2183,7 @@ internal class CodeGeneratorVisitor(
                 functionGenerationContext.unreachable()
             }
             functionGenerationContext.positionAtEnd(bbExit)
+            returnableBlockScope.markResultPhiOwnedByResultSlot()
         }
 
         return returnableBlockScope.resultPhi ?: if (value.type.isUnit()) {
@@ -2741,7 +2770,22 @@ internal class CodeGeneratorVisitor(
 
     fun callDirect(function: IrFunction, args: List<LLVMValueRef>, resultLifetime: Lifetime, resultSlot: LLVMValueRef?): LLVMValueRef {
         val functionDeclarations = codegen.llvmFunction(function.target)
-        return call(function, functionDeclarations, args, resultLifetime, resultSlot)
+        return call(function, functionDeclarations, args, resultLifetime, resultSlot).also { result ->
+            val eligibility = org.jetbrains.kotlin.backend.konan.arc.ArcResultSlotForwardingEligibility(
+                    arcEnabled = context.memoryModel == MemoryModel.ARC,
+                    debugInfoDisabled = !context.shouldContainDebugInfo(),
+                    explicitResultSlot = resultSlot != null,
+                    directKotlinCall = true,
+                    nonExternalCall = !function.isExternal && !function.isBuiltInOperator,
+                    nonSuspendCall = !function.isSuspend,
+                    referenceResult = function.returnType.binaryTypeIsReference(),
+                    nonUnitResult = !function.returnType.isUnit(),
+                    nonNothingResult = !function.returnType.isNothing(),
+            )
+            if (eligibility.isAuthorized()) {
+                functionGenerationContext.markArcResultOwnedBySlot(result, resultSlot)
+            }
+        }
     }
 
     //-------------------------------------------------------------------------//
