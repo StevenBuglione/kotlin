@@ -15,6 +15,7 @@ import org.jetbrains.kotlin.backend.konan.*
 import org.jetbrains.kotlin.backend.konan.arc.isAuthorized
 import org.jetbrains.kotlin.backend.konan.arc.isArcSuspendLike
 import org.jetbrains.kotlin.backend.konan.arc.ArcReturnedReceiverSlotReuseEligibility
+import org.jetbrains.kotlin.backend.konan.arc.unwrapExactArcCoroutineSpillRead
 import org.jetbrains.kotlin.backend.konan.cexport.CAdapterCodegen
 import org.jetbrains.kotlin.backend.konan.cexport.CAdapterExportedElements
 import org.jetbrains.kotlin.backend.konan.cgen.CBridgeOrigin
@@ -1573,11 +1574,13 @@ internal class CodeGeneratorVisitor(
     private fun generateVariable(variable: IrVariable) {
         context.log{"generateVariable               : ${ir2string(variable)}"}
         val joinedReferencePlan = arcOwnership.joinedReferenceSlots[variable]
-        require(joinedReferencePlan == null || variable !in arcOwnership.mutableConstructorInitializers) {
+        val coroutineSpillMove = arcOwnership.coroutineSpillMovesByVariable[variable]
+        require((joinedReferencePlan == null && coroutineSpillMove == null) ||
+                variable !in arcOwnership.mutableConstructorInitializers) {
             "ARC joined reference slot overlaps mutable constructor forwarding: ${ir2string(variable)}"
         }
         val preallocatedOwningSlot = if (variable in arcOwnership.mutableConstructorInitializers ||
-                joinedReferencePlan != null) {
+                joinedReferencePlan != null || coroutineSpillMove != null) {
             val index = this.currentCodeContext.genDeclareVariable(variable, null)
             functionGenerationContext.vars.addressOf(index)
         } else {
@@ -1602,6 +1605,13 @@ internal class CodeGeneratorVisitor(
                     preallocatedOwningSlot != null && value != null &&
                     functionGenerationContext.arcResultIsAlreadyOwnedBySlot(value, preallocatedOwningSlot)) {
                 "ARC joined reference initializer did not own its verified result slot: ${ir2string(variable)}"
+            }
+        }
+        if (coroutineSpillMove != null) {
+            require(variable.initializer === coroutineSpillMove.producer &&
+                    preallocatedOwningSlot != null && value != null &&
+                    functionGenerationContext.arcResultIsAlreadyOwnedBySlot(value, preallocatedOwningSlot)) {
+                "ARC coroutine producer did not initialize its verified spill slot: ${ir2string(variable)}"
             }
         }
         if (preallocatedOwningSlot == null) {
@@ -2147,7 +2157,22 @@ internal class CodeGeneratorVisitor(
         val containsSelectedCoroutineTailCall = value.containsSelectedCoroutineTailCall()
 
         val targetReturnSlot = currentCodeContext.getReturnSlot(target)
-        val evaluated = evaluateExpression(value, targetReturnSlot)
+        val coroutineSpillMove = arcOwnership.coroutineSpillMovesByReturn[expression]
+        val evaluated = evaluateExpression(value, if (coroutineSpillMove == null) targetReturnSlot else null)
+        if (coroutineSpillMove != null) {
+            require(target === coroutineSpillMove.function && targetReturnSlot != null &&
+                    coroutineSpillMove.returnExpression === expression &&
+                    (value.unwrapExactArcCoroutineSpillRead()?.symbol?.owner === coroutineSpillMove.spillVariable)) {
+                "ARC coroutine spill move escaped its verified return identity"
+            }
+            val spillIndex = currentCodeContext.getDeclaredValue(coroutineSpillMove.spillVariable)
+            require(spillIndex >= 0) { "ARC coroutine spill variable has no physical owning slot" }
+            val spillSlot = functionGenerationContext.vars.addressOf(spillIndex)
+            functionGenerationContext.moveArcOwnedReferenceIntoReturnSlot(evaluated, spillSlot, targetReturnSlot)
+            functionGenerationContext.markReturnValueAlreadyInReturnSlot()
+            currentCodeContext.genReturn(target, evaluated)
+            return codegen.kNothingFakeValue
+        }
         // Tail-suspend lowering wraps the real `return directCall()` in one synthetic outer
         // function return. The inner return has already branched to the epilogue and recorded the
         // exact result-slot ownership fact; emitting the outer return would add an unreachable

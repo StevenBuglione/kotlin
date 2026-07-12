@@ -659,6 +659,11 @@ internal abstract class FunctionGenerationContext(
             context.memoryModel == MemoryModel.ARC &&
                     arcOwnedResultsByBlock[currentBlock]?.get(resultSlot) == value
 
+    /** Whether the exact physical slot owns one produced +1 result on this normal CFG edge. */
+    fun arcSlotOwnsProducedResult(resultSlot: LLVMValueRef): Boolean =
+            context.memoryModel == MemoryModel.ARC &&
+                    arcOwnedResultsByBlock[currentBlock]?.containsKey(resultSlot) == true
+
     /** Returns the unique owning slot for this exact SSA value on the current normal CFG edge. */
     fun arcOwningSlotForValue(value: LLVMValueRef): LLVMValueRef? =
             if (context.memoryModel == MemoryModel.ARC) {
@@ -666,6 +671,30 @@ internal abstract class FunctionGenerationContext(
             } else {
                 null
             }
+
+    /** Transfer one proven +1 stack-slot value into the exact function result slot. */
+    fun moveArcOwnedReferenceIntoReturnSlot(
+        value: LLVMValueRef,
+        spillSlot: LLVMValueRef,
+        resultSlot: LLVMValueRef,
+    ) {
+        require(context.memoryModel == MemoryModel.ARC && spillSlot != resultSlot &&
+                arcSlotOwnsProducedResult(spillSlot)) {
+            "ARC coroutine spill move requires one exact current-block owning spill fact"
+        }
+        val mover = llvm.externalNativeRuntimeFunction(
+            "MoveReferenceIntoReturnSlotArc",
+            LlvmRetType(llvm.voidType),
+            listOf(LlvmParamType(codegen.kObjHeaderPtrPtr), LlvmParamType(codegen.kObjHeaderPtr)),
+            functionAttributes = listOf(LlvmFunctionAttribute.NoUnwind),
+        )
+        call(mover, listOf(resultSlot, value))
+        // MoveReferenceIntoReturnSlotArc consumes the spill's +1 without observing its address.
+        // Clear the physical frame slot without a releasing barrier so unwind/LeaveFrame cannot
+        // consume the transferred ownership a second time.
+        store(codegen.kNullObjHeaderPtr, spillSlot)
+        markArcResultOwnedBySlot(value, resultSlot)
+    }
 
     fun invalidateArcOwnedResultSlot(resultSlot: LLVMValueRef) {
         if (context.memoryModel == MemoryModel.ARC) {

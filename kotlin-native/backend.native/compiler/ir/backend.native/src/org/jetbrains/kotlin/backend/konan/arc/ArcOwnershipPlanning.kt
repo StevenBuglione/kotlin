@@ -112,6 +112,8 @@ internal data class ArcCodegenOwnershipPlan(
     val ownedResultForwarding: Map<IrSimpleFunction, ArcOwnedResultForwarding>,
     val coroutineResultSlotForwardingCalls: Set<IrCall>,
     val returnedReceiverBorrowCalls: Set<IrCall>,
+    val coroutineSpillMovesByVariable: Map<IrVariable, ArcCoroutineSpillMovePlan>,
+    val coroutineSpillMovesByReturn: Map<IrReturn, ArcCoroutineSpillMovePlan>,
     val joinedReferenceSlots: Map<IrVariable, ArcJoinedReferenceSlotPlan>,
     val borrowedGuaranteedAliases: Set<IrVariable>,
     val borrowedMutableReads: Set<IrGetValue>,
@@ -137,6 +139,8 @@ internal data class ArcCodegenOwnershipPlan(
             ownedResultForwarding = emptyMap(),
             coroutineResultSlotForwardingCalls = emptySet(),
             returnedReceiverBorrowCalls = emptySet(),
+            coroutineSpillMovesByVariable = emptyMap(),
+            coroutineSpillMovesByReturn = emptyMap(),
             joinedReferenceSlots = emptyMap(),
             borrowedGuaranteedAliases = emptySet(),
             borrowedMutableReads = emptySet(),
@@ -158,6 +162,14 @@ internal data class ArcCodegenOwnershipPlan(
 internal data class ArcOwnedResultForwarding(
     val producer: IrVariable,
     val returned: IrVariable,
+)
+
+internal data class ArcCoroutineSpillMovePlan(
+    val function: IrSimpleFunction,
+    val producer: IrCall,
+    val spillVariable: IrVariable,
+    val returnExpression: IrReturn,
+    val ownership: ArcCoroutineOwnershipPlan,
 )
 
 internal data class ArcSuspendLikeMarkers(
@@ -504,6 +516,8 @@ internal fun runArcOwnershipPlanning(
     val ownedResultForwarding = linkedMapOf<IrSimpleFunction, ArcOwnedResultForwarding>()
     val coroutineResultSlotForwardingCalls = Collections.newSetFromMap(IdentityHashMap<IrCall, Boolean>())
     val returnedReceiverBorrowCalls = Collections.newSetFromMap(IdentityHashMap<IrCall, Boolean>())
+    val coroutineSpillMovesByVariable = linkedMapOf<IrVariable, ArcCoroutineSpillMovePlan>()
+    val coroutineSpillMovesByReturn = Collections.synchronizedMap(IdentityHashMap<IrReturn, ArcCoroutineSpillMovePlan>())
     val joinedReferenceSlots = linkedMapOf<IrVariable, ArcJoinedReferenceSlotPlan>()
     val borrowedGuaranteedAliases = linkedSetOf<IrVariable>()
     val borrowedMutableReads = linkedSetOf<IrGetValue>()
@@ -557,6 +571,10 @@ internal fun runArcOwnershipPlanning(
     input.module.files.forEach { file ->
         file.acceptChildrenVoid(object : IrElementVisitorVoid {
             override fun visitSimpleFunction(declaration: IrSimpleFunction) {
+                selectVerifiedCoroutineSpillMove(generationState, declaration, input.lifetimes)?.let { plan ->
+                    coroutineSpillMovesByVariable[plan.spillVariable] = plan
+                    coroutineSpillMovesByReturn[plan.returnExpression] = plan
+                }
                 joinedReferenceSlots += selectVerifiedJoinedReferenceSlots(
                     generationState,
                     declaration,
@@ -636,6 +654,8 @@ internal fun runArcOwnershipPlanning(
             ownedResultForwarding,
             coroutineResultSlotForwardingCalls,
             returnedReceiverBorrowCalls,
+            coroutineSpillMovesByVariable,
+            coroutineSpillMovesByReturn,
             joinedReferenceSlots,
             borrowedGuaranteedAliases,
             borrowedMutableReads,
@@ -2588,6 +2608,116 @@ private fun selectVerifiedCoroutineResultSlotForwardingCalls(
         }
     })
     return selected
+}
+
+/**
+ * First real lowered-coroutine spill slice: one owned direct producer initializes one immutable
+ * spill, whose sole read is the function's final return. The abstract coroutine plan is bound back
+ * to the exact IR call/variable/return identities consumed by codegen.
+ */
+private fun selectVerifiedCoroutineSpillMove(
+    generationState: NativeGenerationState,
+    function: IrSimpleFunction,
+    lifetimes: Map<IrElement, Lifetime>,
+): ArcCoroutineSpillMovePlan? {
+    if (generationState.context.memoryModel != MemoryModel.ARC ||
+        !generationState.context.config.optimizationsEnabled ||
+        generationState.context.shouldContainDebugInfo() || !function.isArcSuspendLike() ||
+        function.isExternal || !function.returnType.binaryTypeIsReference() ||
+        function.returnType.isUnit() || function.returnType.isNothing()
+    ) return null
+    val body = function.body as? IrBlockBody ?: return null
+    if (body.statements.size != 2) return null
+    val spill = body.statements[0] as? IrVariable ?: return null
+    val producer = spill.initializer as? IrCall ?: return null
+    val returned = body.statements[1] as? IrReturn ?: return null
+    val returnedRead = returned.value.unwrapExactArcCoroutineSpillRead() ?: return null
+    if (spill.isVar || !spill.type.binaryTypeIsReference() || returned.returnTargetSymbol != function.symbol ||
+        returnedRead.symbol != spill.symbol || spill.hasAnnotation(KonanFqNames.arcWeak) ||
+        spill.hasAnnotation(KonanFqNames.arcUnowned)
+    ) return null
+
+    val callee = producer.symbol.owner as? IrSimpleFunction ?: return null
+    val directOwnedProducer = callee.isReal && !callee.isExternal && !callee.isBuiltInOperator &&
+            !callee.isTypedIntrinsic && !callee.isObjCBridgeBased() && !callee.isArcSuspendLike() &&
+            (!callee.isOverridable || producer.superQualifierSymbol != null) &&
+            callee.returnType.binaryTypeIsReference() && !callee.returnType.isUnit() &&
+            !callee.returnType.isNothing() &&
+            classifyArcProducedReference(isPermanent = false, lifetime = lifetimes[producer]) == ArcOwnership.Owned &&
+            producer.symbol != generationState.context.ir.symbols.arcWeakReferenceLoad &&
+            producer.symbol != generationState.context.ir.symbols.arcUnownedReferenceLoad
+    if (!directOwnedProducer) return null
+
+    var exactReads = 0
+    var forbiddenBoundary = false
+    body.acceptVoid(object : IrElementVisitorVoid {
+        override fun visitElement(element: IrElement) {
+            element.acceptChildrenVoid(this)
+        }
+
+        override fun visitFunction(declaration: IrFunction) {
+            forbiddenBoundary = true
+        }
+
+        override fun visitTry(aTry: IrTry) {
+            forbiddenBoundary = true
+        }
+
+        override fun visitSuspendableExpression(expression: IrSuspendableExpression) {
+            forbiddenBoundary = true
+        }
+
+        override fun visitSuspensionPoint(expression: IrSuspensionPoint) {
+            forbiddenBoundary = true
+        }
+
+        override fun visitGetValue(expression: IrGetValue) {
+            if (expression.symbol == spill.symbol) exactReads++
+            expression.acceptChildrenVoid(this)
+        }
+    })
+    if (forbiddenBoundary || exactReads != 1) return null
+
+    val spillSlot = ArcCoroutineSlot("${function.name}.${spill.name}")
+    val resultSlot = ArcCoroutineSlot("${function.name}.return")
+    val ownership = ArcCoroutineOwnershipAnalysis.select(
+        ArcCoroutineOwnershipCandidate(
+            transferKind = ArcCoroutineTransferKind.MoveOwnedToResult,
+            spillSlot = spillSlot,
+            resultSlot = resultSlot,
+            arcEnabled = true,
+            optimizationsEnabled = true,
+            debugInfoDisabled = true,
+            loweredCoroutineFunction = true,
+            exactDirectKotlinCall = true,
+            nonExternalCall = true,
+            nonVirtualCall = true,
+            ownedReferenceResult = true,
+            exactSingleSpillSlot = true,
+            producerInitializesSpillOnNormalEdge = true,
+            producerLeavesSpillUninitializedOnExceptionalEdge = true,
+            noSuspensionBoundary = true,
+            noTryBoundary = true,
+            noForeignCall = true,
+            linearUnambiguousPath = true,
+            noAliasOrEscape = true,
+            exactResultSlotIdentity = true,
+            spillLastUseAtMove = true,
+        )
+    ) ?: return null
+    if (ownership.reduction != ArcCoroutineOwnershipReduction(updateStackRefs = 0, updateReturnRefs = 1)) return null
+    return ArcCoroutineSpillMovePlan(function, producer, spill, returned, ownership)
+}
+
+/** Exact grammar shared with coroutine spill codegen: one local read plus implicit ABI casts only. */
+internal fun IrExpression.unwrapExactArcCoroutineSpillRead(): IrGetValue? = when (this) {
+    is IrGetValue -> this
+    is IrTypeOperatorCall -> if (operator == IrTypeOperator.IMPLICIT_CAST) {
+        argument.unwrapExactArcCoroutineSpillRead()
+    } else {
+        null
+    }
+    else -> null
 }
 
 private fun IrExpression.unwrapExactCoroutineTailCall(): IrCall? = when (this) {

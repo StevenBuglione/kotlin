@@ -3394,6 +3394,13 @@ standaloneTest("arc_returned_receiver_borrow") {
     source = "codegen/arc/returnedReceiverBorrow.kt"
 }
 
+standaloneTest("arc_coroutine_spill_move") {
+    enabled = project.target.name == "linux_x64" && isArcMM
+    flags = ["-opt"]
+    useGoldenData = true
+    source = "codegen/arc/coroutineSpillMove.kt"
+}
+
 standaloneTest("arc_return_update_coalescing") {
     enabled = project.target.name == "linux_x64" && isArcMM
     flags = ["-opt"]
@@ -6720,6 +6727,21 @@ fileCheckTest("filecheck_arc_returned_receiver_borrow") {
     enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
     annotatedSource = project.file('codegen/arc/returnedReceiverBorrow.kt')
     extraOpts = ["-opt"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_coroutine_spill_move") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('codegen/arc/coroutineSpillMove.kt')
+    extraOpts = ["-opt"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_coroutine_spill_move_debug") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('codegen/arc/coroutineSpillMove.kt')
+    checkPrefix = "DEBUG"
+    extraOpts = ["-opt", "-g"]
     phaseToCheck = "Codegen"
 }
 
