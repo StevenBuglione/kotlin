@@ -46,8 +46,11 @@ constexpr const char* kLeaveShapeGuardCallMarker =
 
 struct FrameCandidate {
   AllocaInst* alloca = nullptr;
+  IntrinsicInst* lifetimeStart = nullptr;
+  MemSetInst* memset = nullptr;
   CallInst* enter = nullptr;
   CallInst* leave = nullptr;
+  IntrinsicInst* lifetimeEnd = nullptr;
   uint64_t parameters = 0;
   uint64_t count = 0;
 };
@@ -103,6 +106,15 @@ bool hasExactFrameStorage(const AllocaInst& root, uint64_t count) {
          arrayType->getElementType()->isPointerTy();
 }
 
+bool resolvesToFrameBase(
+    const Value* value,
+    const AllocaInst& root,
+    const DataLayout& dataLayout) {
+  if (value == nullptr || !value->getType()->isPointerTy()) return false;
+  int64_t offset = 0;
+  return GetPointerBaseWithConstantOffset(value, offset, dataLayout) == &root && offset == 0;
+}
+
 bool frameStorageBytes(
     const AllocaInst& root,
     const DataLayout& dataLayout,
@@ -122,6 +134,77 @@ bool frameStorageBytes(
   return true;
 }
 
+bool isZeroMemsetOfRoot(
+    const MemSetInst& memset,
+    const AllocaInst& root,
+    const DataLayout& dataLayout);
+
+Instruction* previousNonDebugInstruction(Instruction& instruction) {
+  Instruction* previous = instruction.getPrevNode();
+  while (previous != nullptr && isa<DbgInfoIntrinsic>(previous)) {
+    previous = previous->getPrevNode();
+  }
+  return previous;
+}
+
+Instruction* nextNonDebugInstruction(Instruction& instruction) {
+  Instruction* next = instruction.getNextNode();
+  while (next != nullptr && isa<DbgInfoIntrinsic>(next)) {
+    next = next->getNextNode();
+  }
+  return next;
+}
+
+bool isExactLifetimeMarker(
+    const IntrinsicInst& intrinsic,
+    Intrinsic::ID expectedId,
+    const AllocaInst& root,
+    const DataLayout& dataLayout) {
+  if (intrinsic.getIntrinsicID() != expectedId || intrinsic.arg_size() != 2) return false;
+  const auto* length = dyn_cast<ConstantInt>(intrinsic.getArgOperand(0));
+  if (length == nullptr || length->isNegative() ||
+      length->getValue().getActiveBits() > 64) {
+    return false;
+  }
+  int64_t offset = 0;
+  const Value* base = GetPointerBaseWithConstantOffset(
+      intrinsic.getArgOperand(1), offset, dataLayout);
+  uint64_t storageBytes = 0;
+  return base == &root && offset == 0 &&
+         frameStorageBytes(root, dataLayout, storageBytes) &&
+         length->getZExtValue() == storageBytes;
+}
+
+bool findExactScopedMarkers(
+    CallInst& enter,
+    CallInst& leave,
+    AllocaInst& root,
+    const DataLayout& dataLayout,
+    IntrinsicInst*& lifetimeStart,
+    MemSetInst*& memset,
+    IntrinsicInst*& lifetimeEnd) {
+  auto* candidateMemset = dyn_cast_or_null<MemSetInst>(previousNonDebugInstruction(enter));
+  auto* candidateStart = candidateMemset == nullptr
+      ? nullptr : dyn_cast_or_null<IntrinsicInst>(previousNonDebugInstruction(*candidateMemset));
+  auto* candidateEnd = dyn_cast_or_null<IntrinsicInst>(nextNonDebugInstruction(leave));
+  if (candidateStart == nullptr || candidateMemset == nullptr || candidateEnd == nullptr ||
+      candidateStart->getParent() != enter.getParent() ||
+      candidateMemset->getParent() != enter.getParent() ||
+      candidateEnd->getParent() != leave.getParent() ||
+      !isExactLifetimeMarker(*candidateStart, Intrinsic::lifetime_start, root, dataLayout) ||
+      !isZeroMemsetOfRoot(*candidateMemset, root, dataLayout) ||
+      candidateMemset->getNumOperandBundles() != 0 ||
+      !isExactLifetimeMarker(*candidateEnd, Intrinsic::lifetime_end, root, dataLayout) ||
+      candidateStart->getArgOperand(1) != candidateMemset->getRawDest() ||
+      candidateEnd->getArgOperand(1) != candidateMemset->getRawDest()) {
+    return false;
+  }
+  lifetimeStart = candidateStart;
+  memset = candidateMemset;
+  lifetimeEnd = candidateEnd;
+  return true;
+}
+
 bool isZeroMemsetOfRoot(const MemSetInst& memset, const AllocaInst& root, const DataLayout& dataLayout) {
   const auto* value = dyn_cast<ConstantInt>(memset.getValue());
   const auto* length = dyn_cast<ConstantInt>(memset.getLength());
@@ -135,62 +218,115 @@ bool isZeroMemsetOfRoot(const MemSetInst& memset, const AllocaInst& root, const 
          length->getZExtValue() == storageBytes;
 }
 
-bool auditFrameUses(
+bool argumentDoesNotCapture(const CallBase& call, unsigned argumentIndex) {
+  if (call.paramHasAttr(argumentIndex, Attribute::NoCapture)) return true;
+  const Function* callee = directCallee(call);
+  return callee != nullptr && argumentIndex < callee->arg_size() &&
+         callee->hasParamAttribute(argumentIndex, Attribute::NoCapture);
+}
+
+bool auditFrameAliases(
     Value& value,
     AllocaInst& root,
     const DataLayout& dataLayout,
     const Function* enterFunction,
     const Function* leaveFunction,
     const Function* setCurrentFrameFunction,
-    DenseSet<Value*>& visited,
-    SmallVectorImpl<CallInst*>& enters,
-    SmallVectorImpl<CallInst*>& leaves) {
+    DenseSet<Value*>& visited) {
   if (!visited.insert(&value).second) return true;
 
   for (User* user : value.users()) {
     if (auto* cast = dyn_cast<BitCastInst>(user)) {
       if (GetUnderlyingObject(cast, dataLayout) != &root ||
-          !auditFrameUses(*cast, root, dataLayout, enterFunction, leaveFunction,
-                          setCurrentFrameFunction, visited, enters, leaves)) {
+          !auditFrameAliases(*cast, root, dataLayout, enterFunction, leaveFunction,
+                             setCurrentFrameFunction, visited)) {
         return false;
       }
       continue;
     }
     if (auto* gep = dyn_cast<GetElementPtrInst>(user)) {
-      if (GetUnderlyingObject(gep, dataLayout) != &root ||
-          !auditFrameUses(*gep, root, dataLayout, enterFunction, leaveFunction,
-                          setCurrentFrameFunction, visited, enters, leaves)) {
+      APInt offset(dataLayout.getIndexSizeInBits(gep->getPointerAddressSpace()), 0);
+      uint64_t storageBytes = 0;
+      if (!gep->isInBounds() || !gep->accumulateConstantOffset(dataLayout, offset) ||
+          offset.isNegative() || offset.getActiveBits() > 64 ||
+          !frameStorageBytes(root, dataLayout, storageBytes) ||
+          offset.getZExtValue() >= storageBytes ||
+          GetUnderlyingObject(gep, dataLayout) != &root ||
+          !auditFrameAliases(*gep, root, dataLayout, enterFunction, leaveFunction,
+                             setCurrentFrameFunction, visited)) {
         return false;
       }
       continue;
     }
-    // Debug builds are excluded by the driver. Reject any unexpected debug
-    // storage use here so cleanup never erases an unverified leaf.
+    // Any merging, address-space change, ptr/int conversion, or non-instruction
+    // user makes interval ownership ambiguous. Debug builds are excluded by
+    // the driver, so debug aliases are rejected too.
     if (isa<DbgInfoIntrinsic>(user)) return false;
     if (auto* intrinsic = dyn_cast<IntrinsicInst>(user)) {
       const Intrinsic::ID id = intrinsic->getIntrinsicID();
-      if (id == Intrinsic::lifetime_start || id == Intrinsic::lifetime_end) continue;
+      if (id == Intrinsic::lifetime_start || id == Intrinsic::lifetime_end) {
+        if (intrinsic->getNumOperandBundles() != 0 ||
+            !isExactLifetimeMarker(*intrinsic, id, root, dataLayout)) {
+          return false;
+        }
+        continue;
+      }
     }
     if (auto* memset = dyn_cast<MemSetInst>(user)) {
-      if (!isZeroMemsetOfRoot(*memset, root, dataLayout)) return false;
+      if (memset->getNumOperandBundles() != 0 ||
+          !isZeroMemsetOfRoot(*memset, root, dataLayout)) {
+        return false;
+      }
       continue;
     }
-    auto* call = dyn_cast<CallInst>(user);
-    if (call == nullptr || call->arg_size() == 0 ||
-        GetUnderlyingObject(call->getArgOperand(0), dataLayout) != &root) {
+    if (auto* call = dyn_cast<CallBase>(user)) {
+      if ((isDirectCallTo(*call, enterFunction) ||
+           isDirectCallTo(*call, leaveFunction)) && call->arg_size() == 3 &&
+          GetUnderlyingObject(call->getArgOperand(0), dataLayout) == &root &&
+          call->getNumOperandBundles() == 0 &&
+          (!isa<CallInst>(call) || !cast<CallInst>(call)->isMustTailCall())) {
+        continue;
+      }
+      if (isDirectCallTo(*call, setCurrentFrameFunction) && call->arg_size() == 1 &&
+          GetUnderlyingObject(call->getArgOperand(0), dataLayout) == &root &&
+          call->getNumOperandBundles() == 0) {
+        continue;
+      }
+      // Other frame intervals may use a result slot in the stack-colored
+      // alloca. Permit only arguments proven nocapture; the use is preserved.
+      bool sawDerivedArgument = false;
+      for (unsigned index = 0; index < call->arg_size(); ++index) {
+        Value* argument = call->getArgOperand(index);
+        if (!argument->getType()->isPointerTy() ||
+            GetUnderlyingObject(argument, dataLayout) != &root) {
+          continue;
+        }
+        sawDerivedArgument = true;
+        if (!argumentDoesNotCapture(*call, index)) return false;
+      }
+      if (sawDerivedArgument && call->getNumOperandBundles() == 0) continue;
       return false;
     }
-    if (isDirectCallTo(*call, enterFunction)) {
-      enters.push_back(call);
-      continue;
+    if (auto* load = dyn_cast<LoadInst>(user)) {
+      if (GetUnderlyingObject(load->getPointerOperand(), dataLayout) == &root) continue;
+      return false;
     }
-    if (isDirectCallTo(*call, leaveFunction)) {
-      leaves.push_back(call);
-      continue;
+    if (auto* store = dyn_cast<StoreInst>(user)) {
+      if (store->getValueOperand()->getType()->isPointerTy() &&
+          GetUnderlyingObject(store->getValueOperand(), dataLayout) == &root) {
+        return false;
+      }
+      if (GetUnderlyingObject(store->getPointerOperand(), dataLayout) == &root) continue;
+      return false;
     }
-    // Slice one deliberately rejects all exceptional frame restoration and all
-    // unknown calls, including CheckCurrentFrame-style hooks.
-    if (isDirectCallTo(*call, setCurrentFrameFunction)) return false;
+    if (auto* atomic = dyn_cast<AtomicRMWInst>(user)) {
+      if (GetUnderlyingObject(atomic->getPointerOperand(), dataLayout) == &root) continue;
+      return false;
+    }
+    if (auto* compareExchange = dyn_cast<AtomicCmpXchgInst>(user)) {
+      if (GetUnderlyingObject(compareExchange->getPointerOperand(), dataLayout) == &root) continue;
+      return false;
+    }
     return false;
   }
   return true;
@@ -201,6 +337,7 @@ bool validateRegionFrom(
     Instruction* firstInstruction,
     CallInst& enter,
     CallInst& leave,
+    AllocaInst& frameRoot,
     DenseMap<BasicBlock*, RegionState>& states) {
   auto found = states.find(&block);
   if (found != states.end()) {
@@ -220,7 +357,10 @@ bool validateRegionFrom(
     if (isa<DbgInfoIntrinsic>(instruction)) continue;
     if (auto* intrinsic = dyn_cast<IntrinsicInst>(instruction)) {
       const Intrinsic::ID id = intrinsic->getIntrinsicID();
-      if (id == Intrinsic::lifetime_start || id == Intrinsic::lifetime_end) continue;
+      if (id == Intrinsic::lifetime_start || id == Intrinsic::lifetime_end) {
+        states[&block] = RegionState::Invalid;
+        return false;
+      }
     }
     if (isa<CallBase>(instruction) || instruction->isEHPad() ||
         isa<ResumeInst>(instruction) || isa<ReturnInst>(instruction)) {
@@ -236,7 +376,7 @@ bool validateRegionFrom(
                                               enter.getModule()->getDataLayout());
       if (load->isVolatile() || load->isAtomic() ||
           !(type->isIntegerTy() || type->isFloatingPointTy()) ||
-          root == nullptr || isa<GlobalValue>(root)) {
+          root == nullptr || root == &frameRoot || isa<GlobalValue>(root)) {
         states[&block] = RegionState::Invalid;
         return false;
       }
@@ -249,10 +389,8 @@ bool validateRegionFrom(
       return false;
     }
     if (isa<UnreachableInst>(instruction)) {
-      // LLVM unreachable terminates a path with no defined continuation. It
-      // therefore has no observable frame cleanup requirement.
-      states[&block] = RegionState::Valid;
-      return true;
+      states[&block] = RegionState::Invalid;
+      return false;
     }
     if (!instruction->isTerminator()) continue;
 
@@ -261,7 +399,8 @@ bool validateRegionFrom(
       return false;
     }
     for (BasicBlock* successor : successors(&block)) {
-      if (!validateRegionFrom(*successor, &*successor->begin(), enter, leave, states)) {
+      if (!validateRegionFrom(*successor, &*successor->begin(), enter, leave,
+                              frameRoot, states)) {
         states[&block] = RegionState::Invalid;
         return false;
       }
@@ -274,7 +413,7 @@ bool validateRegionFrom(
   return false;
 }
 
-bool validateDynamicRegion(CallInst& enter, CallInst& leave) {
+bool validateDynamicRegion(CallInst& enter, CallInst& leave, AllocaInst& frameRoot) {
   if (enter.getFunction() != leave.getFunction()) return false;
   DominatorTree dominators(*enter.getFunction());
   if (!dominators.dominates(&enter, &leave)) return false;
@@ -282,14 +421,49 @@ bool validateDynamicRegion(CallInst& enter, CallInst& leave) {
   DenseMap<BasicBlock*, RegionState> states;
   Instruction* first = enter.getNextNode();
   if (first == nullptr) return false;
-  return validateRegionFrom(*enter.getParent(), first, enter, leave, states);
+  return validateRegionFrom(*enter.getParent(), first, enter, leave, frameRoot, states);
+}
+
+bool isNotNestedInAnotherFrame(
+    CallInst& candidateEnter,
+    IntrinsicInst& candidateStart,
+    AllocaInst& root,
+    Function* enterFunction,
+    const DataLayout& dataLayout) {
+  Function* function = candidateEnter.getFunction();
+  DominatorTree dominators(*function);
+  for (User* user : enterFunction->users()) {
+    auto* otherEnter = dyn_cast<CallInst>(user);
+    if (otherEnter == nullptr || otherEnter == &candidateEnter ||
+        otherEnter->getFunction() != function ||
+        otherEnter->arg_size() != 3 ||
+        !resolvesToFrameBase(otherEnter->getArgOperand(0), root, dataLayout) ||
+        !dominators.dominates(otherEnter, &candidateEnter)) {
+      continue;
+    }
+    return false;
+  }
+
+  for (BasicBlock& block : *function) {
+    for (Instruction& instruction : block) {
+      auto* otherStart = dyn_cast<IntrinsicInst>(&instruction);
+      if (otherStart == nullptr || otherStart == &candidateStart ||
+          otherStart->getIntrinsicID() != Intrinsic::lifetime_start ||
+          !isExactLifetimeMarker(*otherStart, Intrinsic::lifetime_start, root, dataLayout) ||
+          !dominators.dominates(otherStart, &candidateStart)) {
+        continue;
+      }
+      return false;
+    }
+  }
+  return true;
 }
 
 bool findCandidate(
     CallInst& candidateEnter,
-    const Function* enterFunction,
-    const Function* leaveFunction,
-    const Function* setCurrentFrameFunction,
+    Function* enterFunction,
+    Function* leaveFunction,
+    Function* setCurrentFrameFunction,
     const DataLayout& dataLayout,
     FrameCandidate& result) {
   // Slice one is intentionally limited to compiler-generated Kotlin bodies.
@@ -301,29 +475,59 @@ bool findCandidate(
   }
   uint64_t parameters = 0;
   uint64_t count = 0;
+  if (!readFrameShape(candidateEnter, parameters, count) ||
+      candidateEnter.getNumOperandBundles() != 0 || candidateEnter.isMustTailCall()) {
+    return false;
+  }
   auto* root = dyn_cast<AllocaInst>(GetUnderlyingObject(candidateEnter.getArgOperand(0), dataLayout));
-  if (root == nullptr || !root->isStaticAlloca()) return false;
-  if (!readFrameShape(candidateEnter, parameters, count)) return false;
-  if (!hasExactFrameStorage(*root, count)) return false;
+  if (root == nullptr || !root->isStaticAlloca() ||
+      !resolvesToFrameBase(candidateEnter.getArgOperand(0), *root, dataLayout) ||
+      !hasExactFrameStorage(*root, count)) {
+    return false;
+  }
 
   DenseSet<Value*> visited;
-  SmallVector<CallInst*, 2> enters;
-  SmallVector<CallInst*, 2> leaves;
-  if (!auditFrameUses(*root, *root, dataLayout, enterFunction, leaveFunction,
-                      setCurrentFrameFunction, visited, enters, leaves) ||
-      enters.size() != 1 || leaves.size() != 1 || enters.front() != &candidateEnter) {
+  if (!auditFrameAliases(*root, *root, dataLayout, enterFunction, leaveFunction,
+                         setCurrentFrameFunction, visited)) {
     return false;
   }
 
-  uint64_t leaveParameters = 0;
-  uint64_t leaveCount = 0;
-  if (!readFrameShape(*leaves.front(), leaveParameters, leaveCount) ||
-      parameters != leaveParameters || count != leaveCount ||
-      !validateDynamicRegion(candidateEnter, *leaves.front())) {
+  SmallVector<FrameCandidate, 2> matches;
+  for (User* user : leaveFunction->users()) {
+    auto* leave = dyn_cast<CallInst>(user);
+    if (leave == nullptr || leave->getFunction() != candidateEnter.getFunction() ||
+        leave->getNumOperandBundles() != 0 || leave->isMustTailCall() ||
+        leave->arg_size() != 3 ||
+        !resolvesToFrameBase(leave->getArgOperand(0), *root, dataLayout)) {
+      continue;
+    }
+    uint64_t leaveParameters = 0;
+    uint64_t leaveCount = 0;
+    if (!readFrameShape(*leave, leaveParameters, leaveCount) ||
+        parameters != leaveParameters || count != leaveCount ||
+        !validateDynamicRegion(candidateEnter, *leave, *root)) {
+      continue;
+    }
+    IntrinsicInst* lifetimeStart = nullptr;
+    MemSetInst* memset = nullptr;
+    IntrinsicInst* lifetimeEnd = nullptr;
+    if (!findExactScopedMarkers(candidateEnter, *leave, *root, dataLayout,
+                                lifetimeStart, memset, lifetimeEnd)) {
+      continue;
+    }
+    if (!isNotNestedInAnotherFrame(candidateEnter, *lifetimeStart, *root,
+                                   enterFunction, dataLayout)) {
+      continue;
+    }
+    matches.push_back(FrameCandidate{
+        root, lifetimeStart, memset, &candidateEnter, leave, lifetimeEnd,
+        parameters, count});
+  }
+  if (matches.size() != 1) {
     return false;
   }
 
-  result = FrameCandidate{root, &candidateEnter, leaves.front(), parameters, count};
+  result = matches.front();
   return true;
 }
 
@@ -480,55 +684,28 @@ void restorePreparationState(Module& module) {
   for (Function& function : module) restorePreparedWrapper(&function);
 }
 
-void collectFrameStorageUsers(
+void collectFrameAliases(
     Value& value,
     DenseSet<Value*>& visited,
-    SmallVectorImpl<Instruction*>& leaves,
-    SmallVectorImpl<Instruction*>& structural) {
+    SmallVectorImpl<Instruction*>& aliases) {
   if (!visited.insert(&value).second) return;
   for (User* user : value.users()) {
-    if (auto* cast = dyn_cast<BitCastInst>(user)) {
-      collectFrameStorageUsers(*cast, visited, leaves, structural);
-      structural.push_back(cast);
-    } else if (auto* gep = dyn_cast<GetElementPtrInst>(user)) {
-      collectFrameStorageUsers(*gep, visited, leaves, structural);
-      structural.push_back(gep);
-    } else if (auto* instruction = dyn_cast<Instruction>(user)) {
-      // The candidate use audit has already proven that every remaining leaf
-      // is zero-initialization, lifetime, or debug-only frame setup.
-      leaves.push_back(instruction);
+    auto* instruction = dyn_cast<Instruction>(user);
+    if (instruction == nullptr ||
+        (!isa<BitCastInst>(instruction) && !isa<GetElementPtrInst>(instruction))) {
+      continue;
     }
+    collectFrameAliases(*instruction, visited, aliases);
+    aliases.push_back(instruction);
   }
 }
 
-void eraseDeadFrameStorage(FrameCandidate& candidate) {
+void eraseDeadFrameAliases(AllocaInst& root) {
   DenseSet<Value*> visited;
-  SmallVector<Instruction*, 16> leaves;
-  SmallVector<Instruction*, 16> structural;
-  collectFrameStorageUsers(*candidate.alloca, visited, leaves, structural);
-  for (Instruction* instruction : leaves) {
-    bool verified = false;
-    if (auto* memset = dyn_cast<MemSetInst>(instruction)) {
-      verified = isZeroMemsetOfRoot(*memset, *candidate.alloca,
-                                    candidate.alloca->getModule()->getDataLayout());
-    } else if (auto* intrinsic = dyn_cast<IntrinsicInst>(instruction)) {
-      const Intrinsic::ID id = intrinsic->getIntrinsicID();
-      verified = id == Intrinsic::lifetime_start || id == Intrinsic::lifetime_end;
-    }
-    if (!verified) {
-      report_fatal_error("unverified ARC frame storage cleanup instruction");
-    }
-    instruction->eraseFromParent();
-  }
-  // DFS records derived pointers after their users, so this order deletes
-  // children before parents without requiring another optimization pipeline.
-  for (Instruction* instruction : structural) {
-    if (instruction->getParent() != nullptr && instruction->use_empty()) {
-      instruction->eraseFromParent();
-    }
-  }
-  if (candidate.alloca->getParent() != nullptr && candidate.alloca->use_empty()) {
-    candidate.alloca->eraseFromParent();
+  SmallVector<Instruction*, 16> aliases;
+  collectFrameAliases(root, visited, aliases);
+  for (Instruction* alias : aliases) {
+    if (alias->getParent() != nullptr && alias->use_empty()) alias->eraseFromParent();
   }
 }
 
@@ -692,11 +869,19 @@ int LLVMKotlinRemoveEmptyArcFrames(LLVMModuleRef moduleRef) {
     }
   }
 
+  DenseMap<CallInst*, unsigned> leaveUses;
+  for (FrameCandidate& candidate : candidates) ++leaveUses[candidate.leave];
+  DenseSet<AllocaInst*> changedRoots;
+  int removedFrames = 0;
   for (FrameCandidate& candidate : candidates) {
+    if (leaveUses[candidate.leave] != 1) continue;
+    candidate.memset->eraseFromParent();
     candidate.enter->eraseFromParent();
     candidate.leave->eraseFromParent();
-    eraseDeadFrameStorage(candidate);
+    changedRoots.insert(candidate.alloca);
+    ++removedFrames;
   }
+  for (AllocaInst* root : changedRoots) eraseDeadFrameAliases(*root);
 
   // Never allow the temporary preservation mechanism to change retained-frame
   // ABI. Restore the original attributes before explicitly recreating LTO's
@@ -708,7 +893,7 @@ int LLVMKotlinRemoveEmptyArcFrames(LLVMModuleRef moduleRef) {
   (void)inlinePreparedWrapper(enterFunction);
   (void)inlinePreparedWrapper(leaveFunction);
   (void)inlinePreparedWrapper(setCurrentFrameFunction);
-  return static_cast<int>(candidates.size());
+  return removedFrames;
 }
 
 int LLVMKotlinCountDirectArcFrameWrapperCalls(LLVMModuleRef moduleRef) {

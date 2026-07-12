@@ -17,6 +17,8 @@
 #include <llvm/IR/GlobalVariable.h>
 #include <llvm/IR/InlineAsm.h>
 #include <llvm/IR/Instructions.h>
+#include <llvm/IR/IntrinsicInst.h>
+#include <llvm/IR/Intrinsics.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
@@ -58,7 +60,13 @@ define void @SetCurrentFrame(i8** %frame) {
 }
 )IR";
 
-constexpr const char* kMismatchedFrameModule = R"IR(
+constexpr const char* kBundledFrameModule = R"IR(
+target datalayout = "e-p:64:64"
+
+declare void @llvm.lifetime.start.p0i8(i64 immarg, i8* nocapture)
+declare void @llvm.lifetime.end.p0i8(i64 immarg, i8* nocapture)
+declare void @llvm.memset.p0i8.i64(i8* nocapture writeonly, i8, i64, i1 immarg)
+
 define void @EnterFrame(i8** %frame, i32 %parameters, i32 %count) {
   ret void
 }
@@ -71,13 +79,208 @@ define void @SetCurrentFrame(i8** %frame) {
   ret void
 }
 
+define void @"kfun:bundled#internal"() {
+entry:
+  %frame = alloca [5 x i8*]
+  %raw = bitcast [5 x i8*]* %frame to i8**
+  %bytes = bitcast [5 x i8*]* %frame to i8*
+  call void @llvm.lifetime.start.p0i8(i64 40, i8* %bytes)
+  call void @llvm.memset.p0i8.i64(i8* %bytes, i8 0, i64 40, i1 false)
+  call void @EnterFrame(i8** %raw, i32 0, i32 5) [ "arc.test.retained"() ]
+  call void @LeaveFrame(i8** %raw, i32 0, i32 5)
+  call void @llvm.lifetime.end.p0i8(i64 40, i8* %bytes)
+  ret void
+}
+)IR";
+
+constexpr const char* kSharedFrameModule = R"IR(
+target datalayout = "e-p:64:64"
+
+declare void @llvm.lifetime.start.p0i8(i64 immarg, i8* nocapture)
+declare void @llvm.lifetime.end.p0i8(i64 immarg, i8* nocapture)
+declare void @llvm.memset.p0i8.i64(i8* nocapture writeonly, i8, i64, i1 immarg)
+declare void @opaque(i8** nocapture)
+declare void @enter_effect()
+declare void @leave_effect()
+
+define void @EnterFrame(i8** %frame, i32 %parameters, i32 %count) {
+  call void @enter_effect()
+  ret void
+}
+
+define void @LeaveFrame(i8** %frame, i32 %parameters, i32 %count) {
+  call void @leave_effect()
+  ret void
+}
+
+define void @SetCurrentFrame(i8** %frame) {
+  ret void
+}
+
+define void @"kfun:shared#internal"(i2 %selector) {
+entry:
+  %frame = alloca [5 x i8*]
+  %raw = bitcast [5 x i8*]* %frame to i8**
+  %bytes = bitcast [5 x i8*]* %frame to i8*
+  switch i2 %selector, label %retained_after [
+    i2 0, label %retained_before
+    i2 1, label %empty_interval
+  ]
+
+retained_before:
+  call void @llvm.lifetime.start.p0i8(i64 40, i8* %bytes)
+  call void @llvm.memset.p0i8.i64(i8* %bytes, i8 0, i64 40, i1 false)
+  call void @EnterFrame(i8** %raw, i32 0, i32 5)
+  call void @opaque(i8** nocapture %raw)
+  call void @LeaveFrame(i8** %raw, i32 0, i32 5)
+  call void @llvm.lifetime.end.p0i8(i64 40, i8* %bytes)
+  br label %exit
+
+empty_interval:
+  call void @llvm.lifetime.start.p0i8(i64 40, i8* %bytes)
+  call void @llvm.memset.p0i8.i64(i8* %bytes, i8 0, i64 40, i1 false)
+  call void @EnterFrame(i8** %raw, i32 0, i32 5)
+  %value = add i32 40, 2
+  call void @LeaveFrame(i8** %raw, i32 0, i32 5)
+  call void @llvm.lifetime.end.p0i8(i64 40, i8* %bytes)
+  br label %exit
+
+retained_after:
+  call void @llvm.lifetime.start.p0i8(i64 40, i8* %bytes)
+  call void @llvm.memset.p0i8.i64(i8* %bytes, i8 0, i64 40, i1 false)
+  call void @EnterFrame(i8** %raw, i32 0, i32 5)
+  call void @opaque(i8** nocapture %raw)
+  call void @LeaveFrame(i8** %raw, i32 0, i32 5)
+  call void @llvm.lifetime.end.p0i8(i64 40, i8* %bytes)
+  br label %exit
+
+exit:
+  ret void
+}
+)IR";
+
+constexpr const char* kMismatchedFrameModule = R"IR(
+target datalayout = "e-p:64:64"
+
+declare void @llvm.lifetime.start.p0i8(i64 immarg, i8* nocapture)
+declare void @llvm.lifetime.end.p0i8(i64 immarg, i8* nocapture)
+declare void @llvm.memset.p0i8.i64(i8* nocapture writeonly, i8, i64, i1 immarg)
+
+define void @EnterFrame(i8** %frame, i32 %parameters, i32 %count) { ret void }
+define void @LeaveFrame(i8** %frame, i32 %parameters, i32 %count) { ret void }
+define void @SetCurrentFrame(i8** %frame) { ret void }
+
 define void @"kfun:mismatched#internal"() {
 entry:
   %frame = alloca [5 x i8*]
   %raw = bitcast [5 x i8*]* %frame to i8**
-  call void @EnterFrame(i8** %raw, i32 0, i32 5) [ "arc.test.retained"() ]
+  %bytes = bitcast [5 x i8*]* %frame to i8*
+  call void @llvm.lifetime.start.p0i8(i64 40, i8* %bytes)
+  call void @llvm.memset.p0i8.i64(i8* %bytes, i8 0, i64 40, i1 false)
+  call void @EnterFrame(i8** %raw, i32 0, i32 5)
   call void @LeaveFrame(i8** %raw, i32 1, i32 5)
+  call void @llvm.lifetime.end.p0i8(i64 40, i8* %bytes)
   ret void
+}
+)IR";
+
+constexpr const char* kRejectedScopedFramesModule = R"IR(
+target datalayout = "e-p:64:64"
+
+declare void @llvm.lifetime.start.p0i8(i64 immarg, i8* nocapture)
+declare void @llvm.lifetime.end.p0i8(i64 immarg, i8* nocapture)
+declare void @llvm.memset.p0i8.i64(i8* nocapture writeonly, i8, i64, i1 immarg)
+
+define void @EnterFrame(i8** %frame, i32 %parameters, i32 %count) { ret void }
+define void @LeaveFrame(i8** %frame, i32 %parameters, i32 %count) { ret void }
+define void @SetCurrentFrame(i8** %frame) { ret void }
+
+define void @"kfun:dynamicGep#internal"(i64 %index) {
+entry:
+  %frame = alloca [5 x i8*]
+  %raw = getelementptr inbounds [5 x i8*], [5 x i8*]* %frame, i64 0, i64 %index
+  %bytes = bitcast [5 x i8*]* %frame to i8*
+  call void @llvm.lifetime.start.p0i8(i64 40, i8* %bytes)
+  call void @llvm.memset.p0i8.i64(i8* %bytes, i8 0, i64 40, i1 false)
+  call void @EnterFrame(i8** %raw, i32 0, i32 5)
+  call void @LeaveFrame(i8** %raw, i32 0, i32 5)
+  call void @llvm.lifetime.end.p0i8(i64 40, i8* %bytes)
+  ret void
+}
+
+define void @"kfun:nonInboundsGep#internal"() {
+entry:
+  %frame = alloca [5 x i8*]
+  %raw = getelementptr [5 x i8*], [5 x i8*]* %frame, i64 0, i64 0
+  %bytes = bitcast [5 x i8*]* %frame to i8*
+  call void @llvm.lifetime.start.p0i8(i64 40, i8* %bytes)
+  call void @llvm.memset.p0i8.i64(i8* %bytes, i8 0, i64 40, i1 false)
+  call void @EnterFrame(i8** %raw, i32 0, i32 5)
+  call void @LeaveFrame(i8** %raw, i32 0, i32 5)
+  call void @llvm.lifetime.end.p0i8(i64 40, i8* %bytes)
+  ret void
+}
+
+define void @"kfun:partialLifetime#internal"() {
+entry:
+  %frame = alloca [5 x i8*]
+  %raw = bitcast [5 x i8*]* %frame to i8**
+  %bytes = bitcast [5 x i8*]* %frame to i8*
+  call void @llvm.lifetime.start.p0i8(i64 32, i8* %bytes)
+  call void @llvm.memset.p0i8.i64(i8* %bytes, i8 0, i64 40, i1 false)
+  call void @EnterFrame(i8** %raw, i32 0, i32 5)
+  call void @LeaveFrame(i8** %raw, i32 0, i32 5)
+  call void @llvm.lifetime.end.p0i8(i64 32, i8* %bytes)
+  ret void
+}
+
+define void @"kfun:duplicateMemset#internal"() {
+entry:
+  %frame = alloca [5 x i8*]
+  %raw = bitcast [5 x i8*]* %frame to i8**
+  %bytes = bitcast [5 x i8*]* %frame to i8*
+  call void @llvm.lifetime.start.p0i8(i64 40, i8* %bytes)
+  call void @llvm.memset.p0i8.i64(i8* %bytes, i8 0, i64 40, i1 false)
+  call void @llvm.memset.p0i8.i64(i8* %bytes, i8 0, i64 40, i1 false)
+  call void @EnterFrame(i8** %raw, i32 0, i32 5)
+  call void @LeaveFrame(i8** %raw, i32 0, i32 5)
+  call void @llvm.lifetime.end.p0i8(i64 40, i8* %bytes)
+  ret void
+}
+
+define void @"kfun:nested#internal"() {
+entry:
+  %frame = alloca [5 x i8*]
+  %raw = bitcast [5 x i8*]* %frame to i8**
+  %bytes = bitcast [5 x i8*]* %frame to i8*
+  call void @llvm.lifetime.start.p0i8(i64 40, i8* %bytes)
+  call void @llvm.memset.p0i8.i64(i8* %bytes, i8 0, i64 40, i1 false)
+  call void @EnterFrame(i8** %raw, i32 0, i32 5)
+  call void @llvm.lifetime.start.p0i8(i64 40, i8* %bytes)
+  call void @llvm.memset.p0i8.i64(i8* %bytes, i8 0, i64 40, i1 false)
+  call void @EnterFrame(i8** %raw, i32 0, i32 5)
+  call void @LeaveFrame(i8** %raw, i32 0, i32 5)
+  call void @llvm.lifetime.end.p0i8(i64 40, i8* %bytes)
+  call void @LeaveFrame(i8** %raw, i32 0, i32 5)
+  call void @llvm.lifetime.end.p0i8(i64 40, i8* %bytes)
+  ret void
+}
+
+define void @"kfun:unreachableBypass#internal"(i1 %takeExit) {
+entry:
+  %frame = alloca [5 x i8*]
+  %raw = bitcast [5 x i8*]* %frame to i8**
+  %bytes = bitcast [5 x i8*]* %frame to i8*
+  call void @llvm.lifetime.start.p0i8(i64 40, i8* %bytes)
+  call void @llvm.memset.p0i8.i64(i8* %bytes, i8 0, i64 40, i1 false)
+  call void @EnterFrame(i8** %raw, i32 0, i32 5)
+  br i1 %takeExit, label %exit, label %dead
+exit:
+  call void @LeaveFrame(i8** %raw, i32 0, i32 5)
+  call void @llvm.lifetime.end.p0i8(i64 40, i8* %bytes)
+  ret void
+dead:
+  unreachable
 }
 )IR";
 
@@ -132,6 +335,28 @@ CallInst* callTo(Function& caller, const Function& callee) {
         }
     }
     return nullptr;
+}
+
+unsigned countCallsTo(const Function& caller, const Function& callee) {
+    unsigned result = 0;
+    for (const BasicBlock& block : caller) {
+        for (const Instruction& instruction : block) {
+            const auto* call = dyn_cast<CallBase>(&instruction);
+            if (call != nullptr && call->getCalledOperand()->stripPointerCasts() == &callee) ++result;
+        }
+    }
+    return result;
+}
+
+unsigned countIntrinsics(const Function& function, Intrinsic::ID id) {
+    unsigned result = 0;
+    for (const BasicBlock& block : function) {
+        for (const Instruction& instruction : block) {
+            const auto* intrinsic = dyn_cast<IntrinsicInst>(&instruction);
+            if (intrinsic != nullptr && intrinsic->getIntrinsicID() == id) ++result;
+        }
+    }
+    return result;
 }
 
 void requireWrappersRestored(Module& module, bool allowSpoofedGuardCall = false) {
@@ -195,14 +420,14 @@ void testSpoofedGuardFailsClosed() {
     require(!verifyModule(*module, &errs()), "spoof-restored module did not verify");
 }
 
-void testMismatchAndRetainedNonInlineableCall() {
+void testExactBundledFrameIsRetained() {
     LLVMContext context;
-    std::unique_ptr<Module> module = parseModule(context, kMismatchedFrameModule);
-    Function* body = module->getFunction("kfun:mismatched#internal");
-    require(body != nullptr, "missing mismatched Kotlin body");
+    std::unique_ptr<Module> module = parseModule(context, kBundledFrameModule);
+    Function* body = module->getFunction("kfun:bundled#internal");
+    require(body != nullptr, "missing bundled Kotlin body");
 
-    require(LLVMKotlinPrepareArcFrameElision(wrap(module.get())) == 1, "mismatch prepare failed");
-    require(LLVMKotlinRemoveEmptyArcFrames(wrap(module.get())) == 0, "mismatched EnterFrame/LeaveFrame constants were elided");
+    require(LLVMKotlinPrepareArcFrameElision(wrap(module.get())) == 1, "bundle prepare failed");
+    require(LLVMKotlinRemoveEmptyArcFrames(wrap(module.get())) == 0, "exact bundled frame was elided");
     require(LLVMKotlinCountDirectArcFrameWrapperCalls(wrap(module.get())) == 1, "non-inlineable retained wrapper call was not reported");
     require(callTo(*body, *module->getFunction("EnterFrame")) != nullptr, "non-inlineable retained wrapper call was removed");
     bool hasFrameStorage = false;
@@ -211,9 +436,59 @@ void testMismatchAndRetainedNonInlineableCall() {
             hasFrameStorage = hasFrameStorage || alloca->getName() == "frame";
         }
     }
-    require(hasFrameStorage, "mismatched frame storage was removed");
+    require(hasFrameStorage, "bundled frame storage was removed");
+    requireWrappersRestored(*module);
+    require(!verifyModule(*module, &errs()), "bundle-restored module did not verify");
+}
+
+void testSharedAllocaElidesOnlyEmptyInterval() {
+    LLVMContext context;
+    std::unique_ptr<Module> module = parseModule(context, kSharedFrameModule);
+    Function* body = module->getFunction("kfun:shared#internal");
+    require(body != nullptr, "missing shared-allocation Kotlin body");
+
+    require(LLVMKotlinPrepareArcFrameElision(wrap(module.get())) == 1, "shared prepare failed");
+    require(LLVMKotlinRemoveEmptyArcFrames(wrap(module.get())) == 1,
+            "shared-allocation empty interval was not uniquely elided");
+    require(countCallsTo(*body, *module->getFunction("enter_effect")) == 2,
+            "empty or retained EnterFrame effect count is wrong");
+    require(countCallsTo(*body, *module->getFunction("leave_effect")) == 2,
+            "empty or retained LeaveFrame effect count is wrong");
+    require(countCallsTo(*body, *module->getFunction("opaque")) == 2,
+            "retained nonempty interval call was changed");
+    require(countIntrinsics(*body, Intrinsic::memset) == 2,
+            "scoped cleanup did not remove exactly the empty interval memset");
+    require(countIntrinsics(*body, Intrinsic::lifetime_start) == 3,
+            "shared lifetime.start markers were changed");
+    require(countIntrinsics(*body, Intrinsic::lifetime_end) == 3,
+            "shared lifetime.end markers were changed");
+    bool hasSharedStorage = false;
+    for (Instruction& instruction : body->getEntryBlock()) {
+        hasSharedStorage = hasSharedStorage || isa<AllocaInst>(instruction);
+    }
+    require(hasSharedStorage, "shared alloca was removed");
+    requireWrappersRestored(*module);
+    require(!verifyModule(*module, &errs()), "shared-allocation result did not verify");
+}
+
+void testMismatchedShapeIsRetained() {
+    LLVMContext context;
+    std::unique_ptr<Module> module = parseModule(context, kMismatchedFrameModule);
+    require(LLVMKotlinPrepareArcFrameElision(wrap(module.get())) == 1, "mismatch prepare failed");
+    require(LLVMKotlinRemoveEmptyArcFrames(wrap(module.get())) == 0,
+            "mismatched EnterFrame/LeaveFrame constants were elided");
     requireWrappersRestored(*module);
     require(!verifyModule(*module, &errs()), "mismatch-restored module did not verify");
+}
+
+void testAdversarialScopedFramesFailClosed() {
+    LLVMContext context;
+    std::unique_ptr<Module> module = parseModule(context, kRejectedScopedFramesModule);
+    require(LLVMKotlinPrepareArcFrameElision(wrap(module.get())) == 1, "adversarial prepare failed");
+    require(LLVMKotlinRemoveEmptyArcFrames(wrap(module.get())) == 0,
+            "an ambiguous or malformed scoped frame was elided");
+    requireWrappersRestored(*module);
+    require(!verifyModule(*module, &errs()), "adversarial result did not verify");
 }
 
 } // namespace
@@ -221,7 +496,10 @@ void testMismatchAndRetainedNonInlineableCall() {
 int main() {
     testPreexistingUsedAndRestoreOnly();
     testSpoofedGuardFailsClosed();
-    testMismatchAndRetainedNonInlineableCall();
+    testExactBundledFrameIsRetained();
+    testSharedAllocaElidesOnlyEmptyInterval();
+    testMismatchedShapeIsRetained();
+    testAdversarialScopedFramesFailClosed();
     outs() << "ArcFrameElisionTest: OK\n";
     return 0;
 }
