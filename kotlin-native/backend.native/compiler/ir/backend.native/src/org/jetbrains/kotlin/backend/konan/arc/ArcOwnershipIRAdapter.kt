@@ -21,6 +21,9 @@ import org.jetbrains.kotlin.ir.expressions.IrExpression
 import org.jetbrains.kotlin.ir.expressions.IrGetValue
 import org.jetbrains.kotlin.ir.expressions.IrReturn
 import org.jetbrains.kotlin.ir.expressions.IrStatementOrigin
+import org.jetbrains.kotlin.ir.expressions.IrTry
+import org.jetbrains.kotlin.ir.expressions.IrTypeOperator
+import org.jetbrains.kotlin.ir.expressions.IrTypeOperatorCall
 import org.jetbrains.kotlin.ir.expressions.IrWhen
 import org.jetbrains.kotlin.ir.types.isBoolean
 import org.jetbrains.kotlin.ir.types.isNothing
@@ -47,6 +50,129 @@ internal data class ArcJoinedReferenceSlotPlan(
     val ownershipWeb: ArcOwnershipSSAWeb,
     val joinedIdentity: ArcRCIdentity,
 )
+
+/** Exact direct calls whose result is proven to be the already-rooted dispatch receiver. */
+internal data class ArcReturnedReceiverBorrowEligibility(
+    val arcEnabled: Boolean,
+    val optimizationsEnabled: Boolean,
+    val debugInfoDisabled: Boolean,
+    val exactDispatchReceiverUse: Boolean,
+    val directNonExternalNonVirtualCall: Boolean,
+    val nonSuspendReferenceResult: Boolean,
+    val everyNormalReturnIsReceiver: Boolean,
+    val noTryOrNestedFunctionAmbiguity: Boolean,
+)
+
+internal fun ArcReturnedReceiverBorrowEligibility.isAuthorized(): Boolean =
+    arcEnabled && optimizationsEnabled && debugInfoDisabled && exactDispatchReceiverUse &&
+            directNonExternalNonVirtualCall && nonSuspendReferenceResult &&
+            everyNormalReturnIsReceiver && noTryOrNestedFunctionAmbiguity
+
+/** Codegen-side authorization for reusing an existing receiver slot. */
+internal data class ArcReturnedReceiverSlotReuseEligibility(
+    val arcEnabled: Boolean,
+    val optimizationsEnabled: Boolean,
+    val debugInfoDisabled: Boolean,
+    val exactCallIdentitySelected: Boolean,
+    val noRequestedResultSlot: Boolean,
+    val uniqueCurrentBlockOwningSlot: Boolean,
+    val pointerIdenticalReceiverFact: Boolean,
+)
+
+internal fun ArcReturnedReceiverSlotReuseEligibility.isAuthorized(): Boolean =
+    arcEnabled && optimizationsEnabled && debugInfoDisabled && exactCallIdentitySelected &&
+            noRequestedResultSlot && uniqueCurrentBlockOwningSlot && pointerIdenticalReceiverFact
+
+/**
+ * Select direct fluent calls whose complete callee body returns the dispatch receiver identity.
+ * Codegen separately requires a unique existing receiver slot and no requested result slot, so
+ * escaped/guaranteed receiver shapes fail closed even when this semantic summary is available.
+ */
+internal fun selectVerifiedReturnedReceiverBorrowCalls(
+    generationState: NativeGenerationState,
+    function: IrSimpleFunction,
+): Set<IrCall> {
+    if (generationState.context.memoryModel != MemoryModel.ARC ||
+        !generationState.context.config.optimizationsEnabled ||
+        generationState.context.shouldContainDebugInfo() || function.isArcSuspendLike()
+    ) return emptySet()
+    val selected = Collections.newSetFromMap(IdentityHashMap<IrCall, Boolean>())
+    function.body?.acceptVoid(object : IrElementVisitorVoid {
+        override fun visitElement(element: IrElement) {
+            element.acceptChildrenVoid(this)
+        }
+
+        override fun visitFunction(declaration: org.jetbrains.kotlin.ir.declarations.IrFunction) = Unit
+
+        // Keep the first slice out of local catch/finally CFGs. Their ownership edges are modeled
+        // separately and must not inherit a linear immediate-receiver fact accidentally.
+        override fun visitTry(aTry: IrTry) = Unit
+
+        override fun visitCall(expression: IrCall) {
+            expression.takeIf { it.dispatchReceiver != null }?.let { candidate ->
+                val callee = candidate.symbol.owner as? IrSimpleFunction
+                val proof = callee?.proveExactReturnedDispatchReceiver()
+                val eligibility = ArcReturnedReceiverBorrowEligibility(
+                    arcEnabled = true,
+                    optimizationsEnabled = true,
+                    debugInfoDisabled = true,
+                    exactDispatchReceiverUse = true,
+                    directNonExternalNonVirtualCall = callee != null && !callee.isExternal &&
+                            !callee.isBuiltInOperator && (!callee.isOverridable || candidate.superQualifierSymbol != null),
+                    nonSuspendReferenceResult = callee != null && !callee.isArcSuspendLike() &&
+                            callee.returnType.binaryTypeIsReference() && !callee.returnType.isUnit() &&
+                            !callee.returnType.isNothing(),
+                    everyNormalReturnIsReceiver = proof?.first == true,
+                    noTryOrNestedFunctionAmbiguity = proof?.second == true,
+                )
+                if (eligibility.isAuthorized()) {
+                    selected += candidate
+                }
+            }
+            expression.acceptChildrenVoid(this)
+        }
+    })
+    return selected
+}
+
+/** Pair of (all normal returns are receiver, no try/nested-function ambiguity). */
+private fun IrSimpleFunction.proveExactReturnedDispatchReceiver(): Pair<Boolean, Boolean> {
+    val receiver = dispatchReceiverParameter ?: return false to false
+    val body = body as? IrBlockBody ?: return false to false
+    val terminal = body.statements.lastOrNull() as? IrReturn ?: return false to false
+    if (terminal.returnTargetSymbol != symbol || !terminal.value.isExactReceiverRead(receiver)) return false to false
+    var sawReturn = false
+    var validReturns = true
+    var ambiguity = false
+    body.acceptVoid(object : IrElementVisitorVoid {
+        override fun visitElement(element: IrElement) {
+            element.acceptChildrenVoid(this)
+        }
+
+        override fun visitFunction(declaration: org.jetbrains.kotlin.ir.declarations.IrFunction) {
+            if (declaration !== this@proveExactReturnedDispatchReceiver) ambiguity = true
+        }
+
+        override fun visitTry(aTry: IrTry) {
+            ambiguity = true
+        }
+
+        override fun visitReturn(expression: IrReturn) {
+            if (expression.returnTargetSymbol == symbol) {
+                sawReturn = true
+                if (!expression.value.isExactReceiverRead(receiver)) validReturns = false
+            }
+            expression.acceptChildrenVoid(this)
+        }
+    })
+    return (sawReturn && validReturns) to !ambiguity
+}
+
+private fun IrExpression.isExactReceiverRead(receiver: org.jetbrains.kotlin.ir.declarations.IrValueParameter): Boolean = when (this) {
+    is IrGetValue -> symbol == receiver.symbol
+    is IrTypeOperatorCall -> operator == IrTypeOperator.IMPLICIT_CAST && argument.isExactReceiverRead(receiver)
+    else -> false
+}
 
 /** A deliberately redundant authorization boundary for the first real ownership-SSA adapter. */
 internal data class ArcCanonicalReferenceJoinEligibility(

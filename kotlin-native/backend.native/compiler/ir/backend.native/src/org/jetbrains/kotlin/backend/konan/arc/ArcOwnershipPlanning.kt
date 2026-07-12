@@ -111,6 +111,7 @@ internal data class ArcOwnershipPlanningReport(
 internal data class ArcCodegenOwnershipPlan(
     val ownedResultForwarding: Map<IrSimpleFunction, ArcOwnedResultForwarding>,
     val coroutineResultSlotForwardingCalls: Set<IrCall>,
+    val returnedReceiverBorrowCalls: Set<IrCall>,
     val joinedReferenceSlots: Map<IrVariable, ArcJoinedReferenceSlotPlan>,
     val borrowedGuaranteedAliases: Set<IrVariable>,
     val borrowedMutableReads: Set<IrGetValue>,
@@ -135,6 +136,7 @@ internal data class ArcCodegenOwnershipPlan(
         val Empty = ArcCodegenOwnershipPlan(
             ownedResultForwarding = emptyMap(),
             coroutineResultSlotForwardingCalls = emptySet(),
+            returnedReceiverBorrowCalls = emptySet(),
             joinedReferenceSlots = emptyMap(),
             borrowedGuaranteedAliases = emptySet(),
             borrowedMutableReads = emptySet(),
@@ -501,6 +503,7 @@ internal fun runArcOwnershipPlanning(
     var optimization = ArcOwnershipOptimizationMetrics()
     val ownedResultForwarding = linkedMapOf<IrSimpleFunction, ArcOwnedResultForwarding>()
     val coroutineResultSlotForwardingCalls = Collections.newSetFromMap(IdentityHashMap<IrCall, Boolean>())
+    val returnedReceiverBorrowCalls = Collections.newSetFromMap(IdentityHashMap<IrCall, Boolean>())
     val joinedReferenceSlots = linkedMapOf<IrVariable, ArcJoinedReferenceSlotPlan>()
     val borrowedGuaranteedAliases = linkedSetOf<IrVariable>()
     val borrowedMutableReads = linkedSetOf<IrGetValue>()
@@ -538,6 +541,7 @@ internal fun runArcOwnershipPlanning(
             }
 
             override fun visitSimpleFunction(declaration: IrSimpleFunction) {
+                returnedReceiverBorrowCalls += selectVerifiedReturnedReceiverBorrowCalls(generationState, declaration)
                 coroutineResultSlotForwardingCalls +=
                     selectVerifiedCoroutineResultSlotForwardingCalls(generationState, declaration)
                 borrowedCharArrayConsumerSymbols?.let { exactConsumers ->
@@ -631,6 +635,7 @@ internal fun runArcOwnershipPlanning(
         ArcCodegenOwnershipPlan(
             ownedResultForwarding,
             coroutineResultSlotForwardingCalls,
+            returnedReceiverBorrowCalls,
             joinedReferenceSlots,
             borrowedGuaranteedAliases,
             borrowedMutableReads,

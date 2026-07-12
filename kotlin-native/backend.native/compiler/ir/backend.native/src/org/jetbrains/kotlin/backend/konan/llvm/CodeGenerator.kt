@@ -659,6 +659,14 @@ internal abstract class FunctionGenerationContext(
             context.memoryModel == MemoryModel.ARC &&
                     arcOwnedResultsByBlock[currentBlock]?.get(resultSlot) == value
 
+    /** Returns the unique owning slot for this exact SSA value on the current normal CFG edge. */
+    fun arcOwningSlotForValue(value: LLVMValueRef): LLVMValueRef? =
+            if (context.memoryModel == MemoryModel.ARC) {
+                arcOwnedResultsByBlock[currentBlock]?.entries?.singleOrNull { it.value == value }?.key
+            } else {
+                null
+            }
+
     fun invalidateArcOwnedResultSlot(resultSlot: LLVMValueRef) {
         if (context.memoryModel == MemoryModel.ARC) {
             arcOwnedResultsByBlock[currentBlock]?.remove(resultSlot)

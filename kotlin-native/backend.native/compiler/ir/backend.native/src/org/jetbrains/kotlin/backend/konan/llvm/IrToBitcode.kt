@@ -14,6 +14,7 @@ import org.jetbrains.kotlin.backend.common.lower.inline.InlinerExpressionLocatio
 import org.jetbrains.kotlin.backend.konan.*
 import org.jetbrains.kotlin.backend.konan.arc.isAuthorized
 import org.jetbrains.kotlin.backend.konan.arc.isArcSuspendLike
+import org.jetbrains.kotlin.backend.konan.arc.ArcReturnedReceiverSlotReuseEligibility
 import org.jetbrains.kotlin.backend.konan.cexport.CAdapterCodegen
 import org.jetbrains.kotlin.backend.konan.cexport.CAdapterExportedElements
 import org.jetbrains.kotlin.backend.konan.cgen.CBridgeOrigin
@@ -2412,12 +2413,45 @@ internal class CodeGeneratorVisitor(
         }
 
         val args = evaluateExplicitArgs(value)
+        val returnedReceiverBorrow = value is IrCall && value in arcOwnership.returnedReceiverBorrowCalls
+        val returnedReceiverSlot = if (returnedReceiverBorrow) {
+            val receiverValue = args.firstOrNull()
+            val slot = receiverValue?.let { functionGenerationContext.arcOwningSlotForValue(it) }
+            val eligibility = ArcReturnedReceiverSlotReuseEligibility(
+                    arcEnabled = context.memoryModel == MemoryModel.ARC,
+                    optimizationsEnabled = context.config.optimizationsEnabled,
+                    debugInfoDisabled = !context.shouldContainDebugInfo(),
+                    exactCallIdentitySelected = true,
+                    noRequestedResultSlot = effectiveResultSlot == null,
+                    uniqueCurrentBlockOwningSlot = slot != null,
+                    pointerIdenticalReceiverFact = receiverValue != null && slot != null &&
+                            functionGenerationContext.arcResultIsAlreadyOwnedBySlot(receiverValue, slot),
+            )
+            // A summary can also be reached with a merely guaranteed receiver parameter. That
+            // caller has no owning slot to reuse, so fail closed to the ordinary result ABI.
+            slot.takeIf { eligibility.isAuthorized() && value.dispatchReceiver != null }
+        } else null
+        // The first call in a stack-promoted fluent chain has no ARC owning receiver slot yet.
+        // Make the ABI's otherwise-implicit anonymous slot explicit so callDirect records its
+        // normal-success ownership fact; later receiver-identical links can then reuse it. The
+        // fresh frame slot is zero initialized, and ordinary frame cleanup owns every unwind edge.
+        val returnedReceiverSeedSlot = if (returnedReceiverBorrow && effectiveResultSlot == null &&
+                returnedReceiverSlot == null) {
+            functionGenerationContext.vars.createAnonymousSlot()
+        } else null
+        val callResultSlot = returnedReceiverSlot ?: returnedReceiverSeedSlot ?: effectiveResultSlot
 
         updateBuilderDebugLocation(value)
         val result = when (value) {
             is IrDelegatingConstructorCall -> delegatingConstructorCall(value.symbol.owner, args)
             is IrConstructorCall -> evaluateConstructorCall(value, args, effectiveResultSlot)
-            else -> evaluateFunctionCall(value as IrCall, args, resultLifetime(value), effectiveResultSlot)
+            else -> evaluateFunctionCall(
+                    value as IrCall,
+                    args,
+                    resultLifetime(value),
+                    callResultSlot,
+                    returnedReceiverBorrow && returnedReceiverSlot != null,
+            )
         }
         recordScopedPromotion()
         return result
@@ -2707,7 +2741,8 @@ internal class CodeGeneratorVisitor(
     //-------------------------------------------------------------------------//
 
     private fun evaluateFunctionCall(callee: IrCall, args: List<LLVMValueRef>,
-                                     resultLifetime: Lifetime, resultSlot: LLVMValueRef?): LLVMValueRef {
+                                     resultLifetime: Lifetime, resultSlot: LLVMValueRef?,
+                                     verifiedReturnedReceiverBorrow: Boolean = false): LLVMValueRef {
         val function = callee.symbol.owner
         require(!function.isSuspend) { "Suspend functions should be lowered out at this point"}
 
@@ -2724,6 +2759,7 @@ internal class CodeGeneratorVisitor(
                     callee.superQualifierSymbol?.owner,
                     resultSlot,
                     callee in arcOwnership.coroutineResultSlotForwardingCalls,
+                    verifiedReturnedReceiverBorrow,
             )
         }
     }
@@ -2796,7 +2832,8 @@ internal class CodeGeneratorVisitor(
     private fun evaluateSimpleFunctionCall(
             function: IrFunction, args: List<LLVMValueRef>,
             resultLifetime: Lifetime, superClass: IrClass? = null, resultSlot: LLVMValueRef? = null,
-            verifiedCoroutineResultSlotForwarding: Boolean = false): LLVMValueRef {
+            verifiedCoroutineResultSlotForwarding: Boolean = false,
+            verifiedReturnedReceiverBorrow: Boolean = false): LLVMValueRef {
         //context.log{"evaluateSimpleFunctionCall : $tmpVariableName = ${ir2string(value)}"}
         if (superClass == null && function is IrSimpleFunction && function.isOverridable) {
             require(!verifiedCoroutineResultSlotForwarding) {
@@ -2804,7 +2841,10 @@ internal class CodeGeneratorVisitor(
             }
             return callVirtual(function, args, resultLifetime, resultSlot)
         } else {
-            return callDirect(function, args, resultLifetime, resultSlot, verifiedCoroutineResultSlotForwarding)
+            return callDirect(
+                    function, args, resultLifetime, resultSlot,
+                    verifiedCoroutineResultSlotForwarding, verifiedReturnedReceiverBorrow,
+            )
         }
     }
 
@@ -2966,7 +3006,14 @@ internal class CodeGeneratorVisitor(
             resultLifetime: Lifetime,
             resultSlot: LLVMValueRef?,
             verifiedCoroutineResultSlotForwarding: Boolean = false,
+            verifiedReturnedReceiverBorrow: Boolean = false,
     ): LLVMValueRef {
+        if (verifiedReturnedReceiverBorrow) {
+            require(context.memoryModel == MemoryModel.ARC && context.config.optimizationsEnabled &&
+                    !context.shouldContainDebugInfo() && resultSlot != null && args.isNotEmpty()) {
+                "ARC returned-receiver borrow escaped its codegen authorization boundary"
+            }
+        }
         val functionDeclarations = codegen.llvmFunction(function.target)
         return call(function, functionDeclarations, args, resultLifetime, resultSlot).also { result ->
             val exactCoroutineResultSlotIdentity =

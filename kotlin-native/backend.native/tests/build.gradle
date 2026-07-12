@@ -3025,7 +3025,7 @@ standaloneTest("args0") {
 standaloneTest("devirtualization_lateinitInterface") {
     disabled = (cacheTesting != null) // Cache is not compatible with -opt.
     useGoldenData = true
-    flags = ["-opt"]
+    flags = ["-opt", "-Xverbose-phases=ArcOwnershipAnalysis"]
     source = "codegen/devirtualization/lateinitInterface.kt"
 }
 
@@ -3385,6 +3385,13 @@ standaloneTest("arc_joined_reference_slot") {
     flags = ["-opt"]
     useGoldenData = true
     source = "codegen/arc/joinedReferenceSlot.kt"
+}
+
+standaloneTest("arc_returned_receiver_borrow") {
+    enabled = project.target.name == "linux_x64" && isArcMM
+    flags = ["-opt"]
+    useGoldenData = true
+    source = "codegen/arc/returnedReceiverBorrow.kt"
 }
 
 standaloneTest("arc_return_update_coalescing") {
@@ -6705,6 +6712,13 @@ fileCheckTest("filecheck_arc_owned_result_forwarding") {
 fileCheckTest("filecheck_arc_joined_reference_slot") {
     enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
     annotatedSource = project.file('codegen/arc/joinedReferenceSlot.kt')
+    extraOpts = ["-opt"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_returned_receiver_borrow") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('codegen/arc/returnedReceiverBorrow.kt')
     extraOpts = ["-opt"]
     phaseToCheck = "Codegen"
 }
