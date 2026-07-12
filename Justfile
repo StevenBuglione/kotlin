@@ -90,10 +90,25 @@ ci2-sanity: ci2-snapshot
 ci2-full: ci2-snapshot
     {{python}} tools/arc/arc.py --machine ci2 run full
 
-ci2-arc-bench wave: ci2-snapshot
-    {{python}} tools/arc/arc.py --machine ci2 run arc-bench-candidate
-    {{python}} tools/arc/arc.py --machine ci2 run arc-bench-baseline
-    status=0; {{python}} tools/arc/arc.py --machine ci2 run arc-bench || status=$?; {{python}} tools/arc/arc.py --machine ci2 benchmark-bundle {{wave}}; exit "$status"
+ci2-bench-doctor:
+    {{python}} tools/arc/arc.py --machine ci2-bench doctor
+
+ci2-bench-init:
+    {{python}} tools/arc/arc.py --machine ci2-bench remote-init
+
+ci2-bench-snapshot: ci2-bench-init
+    {{python}} tools/arc/arc.py --machine ci2-bench remote-snapshot
+
+ci2-arc-bench wave: ci2-bench-snapshot
+    {{python}} tools/arc/arc.py --machine ci2-bench run arc-bench-candidate
+    {{python}} tools/arc/arc.py --machine ci2-bench run arc-bench-baseline
+    status=0; {{python}} tools/arc/arc.py --machine ci2-bench run arc-bench || status=$?; {{python}} tools/arc/arc.py --machine ci2-bench benchmark-bundle {{wave}}; exit "$status"
+
+ci2-bench-status profile:
+    {{python}} tools/arc/arc.py --machine ci2-bench status {{profile}}
+
+ci2-bench-log profile:
+    {{python}} tools/arc/arc.py --machine ci2-bench log {{profile}}
 
 ci2-status profile:
     {{python}} tools/arc/arc.py --machine ci2 status {{profile}}

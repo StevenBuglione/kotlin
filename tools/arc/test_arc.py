@@ -34,6 +34,40 @@ class ArcProfileTest(unittest.TestCase):
             self.assertEqual("builder@example", os.environ["ARC_REMOTE"])
             self.assertEqual(16, arc.workers())
 
+    def test_ci2_benchmark_machine_has_a_distinct_managed_worktree(self):
+        with patch.dict(os.environ, {}, clear=True):
+            arc.select_machine("ci2")
+            compiler_host = os.environ["ARC_REMOTE"]
+            compiler_dir = os.environ["ARC_REMOTE_DIR"]
+            compiler_git = os.environ["ARC_REMOTE_GIT"]
+        with patch.dict(os.environ, {}, clear=True):
+            arc.select_machine("ci2-bench")
+            self.assertEqual(compiler_host, os.environ["ARC_REMOTE"])
+            self.assertEqual(compiler_git, os.environ["ARC_REMOTE_GIT"])
+            self.assertEqual("/home/olfa/codex-kotlin-arc-ci2-bench", os.environ["ARC_REMOTE_DIR"])
+            self.assertNotEqual(compiler_dir, os.environ["ARC_REMOTE_DIR"])
+            self.assertEqual(16, arc.workers())
+
+    def test_ci2_benchmark_recipe_uses_only_the_benchmark_machine(self):
+        justfile = (Path(__file__).parents[2] / "Justfile").read_text()
+        self.assertIn("ci2-arc-bench wave: ci2-bench-snapshot", justfile)
+        recipe = justfile.split("ci2-arc-bench wave: ci2-bench-snapshot", 1)[1].split(
+            "ci2-bench-status profile:", 1
+        )[0]
+        self.assertEqual(4, recipe.count("--machine ci2-bench"))
+        self.assertNotIn("--machine ci2 ", recipe)
+
+    def test_remote_runner_serializes_only_measurements_with_the_common_git_lock(self):
+        script = (Path(__file__).parent / "remote.sh").read_text()
+        self.assertIn("rev-parse --path-format=absolute --git-common-dir", script)
+        self.assertIn("codex-arc-host.lock", script)
+        self.assertIn("command -v flock", script)
+        self.assertIn("mode=-s", script)
+        self.assertIn('[[ "$profile" == arc-bench ]] && mode=-x', script)
+        self.assertIn("flock %q %q", script)
+        self.assertGreaterEqual(script.count("acquire_shared_host_lock"), 3)
+        self.assertIn("mv %q %q", script)
+
     def test_distribution_includes_linux_platform_libraries(self):
         with patch.dict(os.environ, {}, clear=True):
             command = arc.profile_command("dist")

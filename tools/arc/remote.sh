@@ -30,6 +30,20 @@ check_disk() {
     (( available >= required )) || fail "only $((available / 1024 / 1024)) GiB disk space is available; $min_available_gib GiB required"
 }
 
+host_lock_path() {
+    local common_dir
+    common_dir=$(git -C "$source_repo" rev-parse --path-format=absolute --git-common-dir) ||
+        fail "$source_repo has no Git common directory for host locking"
+    printf '%s/codex-arc-host.lock\n' "$common_dir"
+}
+
+acquire_shared_host_lock() {
+    local lock
+    lock=$(host_lock_path)
+    exec 9>"$lock"
+    flock -s 9
+}
+
 marker_path() {
     printf '%s/codex-arc-managed\n' "$(git -C "$repo" rev-parse --absolute-git-dir)"
 }
@@ -75,8 +89,14 @@ check_no_active_runs() {
 }
 
 write_runner() {
-    local state=$1 log=$2 status=$3 runner=$4
-    shift 4
+    local state=$1 log=$2 status=$3 runner=$4 profile=$5
+    local lock mode
+    shift 5
+    lock=$(host_lock_path)
+    # Only the measurement/comparison phase is exclusive. Candidate and baseline
+    # distribution preparation collect no timing data and remain ordinary shared jobs.
+    mode=-s
+    [[ "$profile" == arc-bench ]] && mode=-x
     {
         echo '#!/usr/bin/env bash'
         echo 'set +e'
@@ -84,6 +104,7 @@ write_runner() {
         printf 'export JAVA_HOME=%q\n' "$java_home"
         printf 'export PATH=%q:$PATH\n' "$java_home/bin"
         printf 'export ARC_RUN_STATE_DIR=%q\n' "$state"
+        printf 'flock %q %q ' "$mode" "$lock"
         printf '%q ' "$@"
         printf '>>%q 2>&1\n' "$log"
         echo 'result=$?'
@@ -101,6 +122,7 @@ case "$action" in
         command -v git >/dev/null || fail "git is unavailable"
         command -v bash >/dev/null || fail "bash is unavailable"
         command -v cmake >/dev/null || fail "cmake is unavailable"
+        command -v flock >/dev/null || fail "flock is unavailable"
         command -v ninja >/dev/null || fail "ninja is unavailable"
         git -C "$source_repo" rev-parse --is-inside-work-tree >/dev/null 2>&1 || fail "$source_repo is not the shared source repository"
         git -C "$source_repo" rev-parse --verify "$base_ref^{commit}" >/dev/null 2>&1 || fail "$source_repo has no $base_ref commit"
@@ -110,6 +132,7 @@ case "$action" in
     init)
         base_ref=$1
         check_java
+        acquire_shared_host_lock
         if [[ -e "$repo" ]]; then
             check_managed_clean_repo
         else
@@ -122,6 +145,7 @@ case "$action" in
     checkout)
         reference=$1
         expected=$2
+        acquire_shared_host_lock
         check_managed_clean_repo
         check_no_active_runs
         actual=$(git -C "$repo" rev-parse "$reference^{commit}")
@@ -154,7 +178,7 @@ case "$action" in
         date --iso-8601=seconds >"$state/started-at"
         printf '%q ' "$@" >"$state/command"
         printf '\n' >>"$state/command"
-        write_runner "$state" "$log" "$state/exit-status" "$runner" "$@"
+        write_runner "$state" "$log" "$state/exit-status" "$runner" "$profile" "$@"
         nohup bash "$runner" </dev/null >/dev/null 2>&1 &
         pid=$!
         printf '%s\n' "$pid" >"$state/pid"

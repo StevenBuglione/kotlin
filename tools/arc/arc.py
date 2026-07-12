@@ -32,6 +32,12 @@ MACHINE_PROFILES = {
         "ARC_REMOTE_GIT": "/home/olfa/codex-kotlin-rust",
         "ARC_MAX_WORKERS": "16",
     },
+    "ci2-bench": {
+        "ARC_REMOTE": "olfa@10.10.10.12",
+        "ARC_REMOTE_DIR": "/home/olfa/codex-kotlin-arc-ci2-bench",
+        "ARC_REMOTE_GIT": "/home/olfa/codex-kotlin-rust",
+        "ARC_MAX_WORKERS": "16",
+    },
 }
 EXCLUDED_PATHS = (
     ".arc-runs",
