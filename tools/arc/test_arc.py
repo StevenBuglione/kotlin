@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent))
 import arc
+import benchmark_cache
 import benchmark_report
 import no_collector_symbols
 
@@ -48,9 +49,16 @@ class ArcProfileTest(unittest.TestCase):
             self.assertNotEqual(compiler_dir, os.environ["ARC_REMOTE_DIR"])
             self.assertEqual(16, arc.workers())
 
+    def test_primary_benchmark_machine_is_isolated_on_primary_host(self):
+        with patch.dict(os.environ, {}, clear=True):
+            arc.select_machine("primary-bench")
+            self.assertEqual("olfa@10.10.10.8", os.environ["ARC_REMOTE"])
+            self.assertEqual("/home/olfa/codex-kotlin-arc-primary-bench", os.environ["ARC_REMOTE_DIR"])
+            self.assertEqual(16, arc.workers())
+
     def test_parallel_compiler_runtime_and_ssa_lanes_have_distinct_worktrees(self):
         configurations = {}
-        for machine in ("ci2", "ci2-bench", "ci2-runtime", "primary-ssa", "primary-interop"):
+        for machine in ("ci2", "ci2-bench", "ci2-runtime", "primary-bench", "primary-ssa", "primary-interop"):
             with patch.dict(os.environ, {}, clear=True):
                 arc.select_machine(machine)
                 configurations[machine] = (
@@ -58,7 +66,7 @@ class ArcProfileTest(unittest.TestCase):
                     os.environ["ARC_REMOTE_DIR"],
                     arc.workers(),
                 )
-        self.assertEqual(5, len({value[1] for value in configurations.values()}))
+        self.assertEqual(6, len({value[1] for value in configurations.values()}))
         self.assertEqual(("olfa@10.10.10.12", "/home/olfa/codex-kotlin-arc-ci2-runtime", 8), configurations["ci2-runtime"])
         self.assertEqual(("olfa@10.10.10.8", "/home/olfa/codex-kotlin-arc-ssa", 14), configurations["primary-ssa"])
         self.assertEqual(("olfa@10.10.10.8", "/home/olfa/codex-kotlin-arc-interop", 12), configurations["primary-interop"])
@@ -163,6 +171,7 @@ class ArcProfileTest(unittest.TestCase):
         self.assertIn('resolved_source=$(readlink -m -- "$source_repo")', script)
         for path in (
             "/home/olfa/codex-kotlin-arc",
+            "/home/olfa/codex-kotlin-arc-primary-bench",
             "/home/olfa/codex-kotlin-arc-ci2",
             "/home/olfa/codex-kotlin-arc-ci2-bench",
             "/home/olfa/codex-kotlin-arc-ci2-runtime",
@@ -384,6 +393,80 @@ class ArcProfileTest(unittest.TestCase):
         self.assertIn("ARC_BENCH_SCENARIOS=call-arguments,fields", command)
         self.assertNotIn("UNRELATED=no", command)
         self.assertEqual(["bash", "tools/arc/benchmark_compare.sh"], command[-2:])
+
+    def test_benchmark_build_profiles_ignore_measurement_selection(self):
+        with patch.dict(
+            os.environ,
+            {
+                "ARC_BENCH_BUILD_WORKERS": "6",
+                "ARC_BENCH_SCENARIOS": "strings",
+                "ARC_BENCH_QUICK": "1",
+            },
+            clear=True,
+        ):
+            candidate = arc.profile_command("arc-bench-candidate")
+            baseline = arc.profile_command("arc-bench-baseline")
+        for command in (candidate, baseline):
+            self.assertIn("ARC_BENCH_BUILD_WORKERS=6", command)
+            self.assertNotIn("ARC_BENCH_SCENARIOS=strings", command)
+            self.assertNotIn("ARC_BENCH_QUICK=1", command)
+
+    def test_named_benchmark_sets_are_stable_and_disjoint_lanes_are_wired(self):
+        self.assertEqual("coroutines", arc.BENCHMARK_PRESETS["coroutines"])
+        self.assertEqual("strings", arc.BENCHMARK_PRESETS["strings"])
+        self.assertEqual(
+            "platform-c-interop,platform-c-leaf,platform-c-dynamic-cstring",
+            arc.BENCHMARK_PRESETS["interop"],
+        )
+        self.assertIn("primary-bench", arc.MACHINE_PROFILES)
+        self.assertIn("ci2-bench", arc.MACHINE_PROFILES)
+        self.assertNotEqual(
+            arc.MACHINE_PROFILES["primary-bench"]["ARC_REMOTE"],
+            arc.MACHINE_PROFILES["ci2-bench"]["ARC_REMOTE"],
+        )
+        self.assertEqual(
+            "strings,coroutines,platform-c-dynamic-cstring",
+            arc.selected_benchmark_scenarios(None, "hotspots"),
+        )
+        self.assertEqual("fields,arrays", arc.selected_benchmark_scenarios("fields,arrays", None))
+        with self.assertRaisesRegex(SystemExit, "mutually exclusive"):
+            arc.selected_benchmark_scenarios("strings", "coroutines")
+
+    def test_baseline_cache_fingerprint_rejects_artifact_mutation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            dist = root / "dist"
+            dist.mkdir()
+            (dist / "compiler.jar").write_bytes(b"compiler")
+            (dist / "bin").mkdir()
+            (dist / "bin" / "konanc").write_text("launcher")
+            manifest = dist / ".arc-benchmark-baseline-cache.json"
+            benchmark_cache.write_manifest(manifest, dist, "commit", "tree", "/baseline")
+            self.assertTrue(
+                benchmark_cache.validate_manifest(manifest, dist, "commit", "tree", "/baseline")
+            )
+            (dist / ".arc-benchmark-provenance.json").write_text("updated metadata")
+            self.assertTrue(
+                benchmark_cache.validate_manifest(manifest, dist, "commit", "tree", "/baseline")
+            )
+            self.assertFalse(
+                benchmark_cache.validate_manifest(manifest, dist, "commit", "tree", "/other-host")
+            )
+            (dist / "compiler.jar").write_bytes(b"mutated")
+            self.assertFalse(
+                benchmark_cache.validate_manifest(manifest, dist, "commit", "tree", "/baseline")
+            )
+
+    def test_baseline_cache_is_exact_and_force_rebuild_is_explicit(self):
+        script = (Path(__file__).parent / "benchmark_baseline.sh").read_text()
+        self.assertIn("ARC_BENCH_REBUILD_BASELINE", script)
+        self.assertIn('valid_provenance &&', script)
+        self.assertIn('python3 "$cache_tool" validate', script)
+        self.assertIn("ARC_BENCH_BASELINE_CACHE_HIT", script)
+        self.assertIn("ARC_BENCH_BASELINE_CACHE_MISS", script)
+        compare = (Path(__file__).parent / "benchmark_compare.sh").read_text()
+        self.assertIn('benchmark_cache.py"', compare)
+        self.assertIn("baseline distribution fingerprint is missing, stale, or corrupt", compare)
 
     def test_benchmark_baseline_is_pinned_and_separate(self):
         script = (Path(__file__).parent / "benchmark_baseline.sh").read_text()

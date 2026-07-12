@@ -20,6 +20,7 @@ validate_managed_paths() {
     resolved_source=$(readlink -m -- "$source_repo")
     case "$resolved_repo" in
         /home/olfa/codex-kotlin-arc|\
+        /home/olfa/codex-kotlin-arc-primary-bench|\
         /home/olfa/codex-kotlin-arc-ci2|\
         /home/olfa/codex-kotlin-arc-ci2-bench|\
         /home/olfa/codex-kotlin-arc-ci2-runtime|\

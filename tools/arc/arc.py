@@ -27,6 +27,12 @@ MAX_WORKERS = 28
 MIN_AVAILABLE_GIB = 60
 MACHINE_PROFILES = {
     "primary": {},
+    "primary-bench": {
+        "ARC_REMOTE": "olfa@10.10.10.8",
+        "ARC_REMOTE_DIR": "/home/olfa/codex-kotlin-arc-primary-bench",
+        "ARC_REMOTE_GIT": "/home/olfa/codex-kotlin-rust",
+        "ARC_MAX_WORKERS": "16",
+    },
     "ci2": {
         "ARC_REMOTE": "olfa@10.10.10.12",
         "ARC_REMOTE_DIR": "/home/olfa/codex-kotlin-arc-ci2",
@@ -78,6 +84,12 @@ BENCHMARK_ENVIRONMENT = (
     "ARC_BENCH_RSS_LIMIT_PERCENT", "ARC_BENCH_SIZE_LIMIT_PERCENT", "ARC_BENCH_ENFORCE",
     "ARC_BENCH_OBJDUMP",
 )
+BENCHMARK_PRESETS = {
+    "coroutines": "coroutines",
+    "hotspots": "strings,coroutines,platform-c-dynamic-cstring",
+    "interop": "platform-c-interop,platform-c-leaf,platform-c-dynamic-cstring",
+    "strings": "strings",
+}
 
 
 def run(
@@ -120,6 +132,12 @@ def workers() -> int:
     if not 1 <= value <= MAX_WORKERS:
         raise SystemExit(f"ARC_MAX_WORKERS must be between 1 and {MAX_WORKERS}, got {value}")
     return value
+
+
+def selected_benchmark_scenarios(scenarios: str | None, benchmark_set: str | None) -> str | None:
+    if scenarios and benchmark_set:
+        raise SystemExit("--scenarios and --benchmark-set are mutually exclusive")
+    return BENCHMARK_PRESETS[benchmark_set] if benchmark_set else scenarios
 
 
 def remote(action: str, *arguments: str) -> None:
@@ -304,11 +322,19 @@ def profile_command(profile: str) -> list[str]:
         return ["bash", "tools/arc/sanitizer_probe.sh", sanitizer]
     if profile == "arc-bench-candidate":
         command = ["bash", "tools/arc/benchmark_candidate.sh"]
-        values = [f"{name}={os.environ[name]}" for name in BENCHMARK_ENVIRONMENT if name in os.environ]
+        values = (
+            [f"ARC_BENCH_BUILD_WORKERS={os.environ['ARC_BENCH_BUILD_WORKERS']}"]
+            if "ARC_BENCH_BUILD_WORKERS" in os.environ else []
+        )
         return ["env", *values, *command] if values else command
     if profile == "arc-bench-baseline":
         command = ["bash", "tools/arc/benchmark_baseline.sh"]
-        values = [f"{name}={os.environ[name]}" for name in BENCHMARK_ENVIRONMENT if name in os.environ]
+        values = (
+            [f"ARC_BENCH_BUILD_WORKERS={os.environ['ARC_BENCH_BUILD_WORKERS']}"]
+            if "ARC_BENCH_BUILD_WORKERS" in os.environ else []
+        )
+        if "ARC_BENCH_REBUILD_BASELINE" in os.environ:
+            values.append(f"ARC_BENCH_REBUILD_BASELINE={os.environ['ARC_BENCH_REBUILD_BASELINE']}")
         return ["env", *values, *command] if values else command
     if profile == "arc-bench":
         command = ["bash", "tools/arc/benchmark_compare.sh"]
@@ -388,6 +414,11 @@ def main() -> None:
     run_parser.add_argument("profile", choices=PROFILES)
     run_parser.add_argument("--quick", action="store_true", help="use the non-enforcing development benchmark preset")
     run_parser.add_argument("--scenarios", help="comma- or space-separated benchmark scenarios")
+    run_parser.add_argument(
+        "--benchmark-set",
+        choices=BENCHMARK_PRESETS,
+        help="stable named benchmark subset",
+    )
     status_parser = subparsers.add_parser("status")
     status_parser.add_argument("profile", choices=PROFILES)
     log_parser = subparsers.add_parser("log")
@@ -407,15 +438,16 @@ def main() -> None:
     elif arguments.command == "log":
         remote_log(arguments.profile)
     else:
+        scenarios = selected_benchmark_scenarios(arguments.scenarios, arguments.benchmark_set)
         if arguments.quick:
             if not arguments.profile.startswith("arc-bench"):
                 raise SystemExit("--quick is supported only for benchmark profiles")
             os.environ["ARC_BENCH_QUICK"] = "1"
             os.environ.setdefault("ARC_BENCH_ENFORCE", "0")
-        if arguments.scenarios:
+        if scenarios:
             if not arguments.profile.startswith("arc-bench"):
                 raise SystemExit("--scenarios is supported only for benchmark profiles")
-            os.environ["ARC_BENCH_SCENARIOS"] = arguments.scenarios
+            os.environ["ARC_BENCH_SCENARIOS"] = scenarios
         remote_run(arguments.profile)
 
 

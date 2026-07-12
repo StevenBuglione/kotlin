@@ -18,6 +18,27 @@ just remote-arc-bench wave-01
 just ci2-arc-bench wave-01-ci2
 ```
 
+For parallel diagnostics, use the isolated `primary-bench` lane on `10.10.10.8` and the
+`ci2-bench` lane on `10.10.10.12`. Each lane builds and measures both models locally, so binaries
+and provenance are never mixed across hosts. Stable subsets are selected with
+`--benchmark-set strings|coroutines|hotspots|interop`; for example:
+
+```text
+python tools/arc/arc.py --machine primary-bench remote-snapshot
+python tools/arc/arc.py --machine primary-bench run arc-bench-candidate --benchmark-set strings
+python tools/arc/arc.py --machine primary-bench run arc-bench-baseline --benchmark-set strings
+python tools/arc/arc.py --machine primary-bench run arc-bench --benchmark-set strings
+
+python tools/arc/arc.py --machine ci2-bench remote-snapshot
+python tools/arc/arc.py --machine ci2-bench run arc-bench-candidate --benchmark-set coroutines
+python tools/arc/arc.py --machine ci2-bench run arc-bench-baseline --benchmark-set coroutines
+python tools/arc/arc.py --machine ci2-bench run arc-bench --benchmark-set coroutines
+```
+
+The pinned baseline distribution is content-fingerprinted and reused after its exact commit, tree,
+source worktree, provenance, and complete distribution fingerprint validate. Set
+`ARC_BENCH_REBUILD_BASELINE=1` only when an explicit cache refresh is required.
+
 The durable remote run keeps binaries and verbose logs under `.arc-runs`. The final recipe exports
 only the commit-ready evidence bundle to `tools/arc/benchmark-results/<wave>`: input and hardware
 manifests, both provenance files, raw TSV/JSON, static metrics, summaries, and the Markdown report.
