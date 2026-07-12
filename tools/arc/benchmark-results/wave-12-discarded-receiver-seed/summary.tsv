@@ -1,0 +1,2 @@
+scenario	baseline_median_seconds	candidate_median_seconds	latency_delta_percent	throughput_ratio_percent	baseline_peak_rss_kib	candidate_peak_rss_kib	rss_delta_percent	logical_allocations	passed
+strings	0.15634359	0.192317852	23.010	81.294	4096	2688	-34.375	1800000	False
