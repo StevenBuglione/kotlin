@@ -14,6 +14,8 @@ import org.jetbrains.kotlin.backend.konan.ir.getSuperClassNotAny
 import org.jetbrains.kotlin.backend.konan.ir.KonanNameConventions
 import org.jetbrains.kotlin.backend.konan.isObjCBridgeBased
 import org.jetbrains.kotlin.backend.konan.llvm.Lifetime
+import org.jetbrains.kotlin.backend.konan.llvm.IntrinsicType
+import org.jetbrains.kotlin.backend.konan.llvm.tryGetIntrinsicType
 import org.jetbrains.kotlin.backend.konan.NativeGenerationState
 import org.jetbrains.kotlin.backend.konan.reportCompilationError
 import org.jetbrains.kotlin.ir.IrElement
@@ -22,9 +24,11 @@ import org.jetbrains.kotlin.ir.declarations.IrClass
 import org.jetbrains.kotlin.ir.declarations.IrDeclarationOrigin
 import org.jetbrains.kotlin.ir.declarations.IrFunction
 import org.jetbrains.kotlin.ir.declarations.IrSimpleFunction
+import org.jetbrains.kotlin.ir.declarations.IrValueParameter
 import org.jetbrains.kotlin.ir.declarations.IrVariable
 import org.jetbrains.kotlin.ir.expressions.IrCall
 import org.jetbrains.kotlin.ir.expressions.IrBlock
+import org.jetbrains.kotlin.ir.expressions.IrBlockBody
 import org.jetbrains.kotlin.ir.expressions.IrConst
 import org.jetbrains.kotlin.ir.expressions.IrConstructorCall
 import org.jetbrains.kotlin.ir.expressions.IrExpression
@@ -32,14 +36,23 @@ import org.jetbrains.kotlin.ir.expressions.IrGetField
 import org.jetbrains.kotlin.ir.expressions.IrGetObjectValue
 import org.jetbrains.kotlin.ir.expressions.IrGetValue
 import org.jetbrains.kotlin.ir.expressions.IrFunctionAccessExpression
+import org.jetbrains.kotlin.ir.expressions.IrFunctionReference
+import org.jetbrains.kotlin.ir.expressions.IrLoop
 import org.jetbrains.kotlin.ir.expressions.IrReturn
+import org.jetbrains.kotlin.ir.expressions.IrBreak
+import org.jetbrains.kotlin.ir.expressions.IrContinue
+import org.jetbrains.kotlin.ir.expressions.IrContainerExpression
 import org.jetbrains.kotlin.ir.expressions.IrSetField
 import org.jetbrains.kotlin.ir.expressions.IrSetValue
 import org.jetbrains.kotlin.ir.expressions.IrStatementOrigin
+import org.jetbrains.kotlin.ir.expressions.IrSuspendableExpression
+import org.jetbrains.kotlin.ir.expressions.IrSuspensionPoint
 import org.jetbrains.kotlin.ir.expressions.IrTry
+import org.jetbrains.kotlin.ir.expressions.IrThrow
 import org.jetbrains.kotlin.ir.expressions.IrTypeOperator
 import org.jetbrains.kotlin.ir.expressions.IrTypeOperatorCall
 import org.jetbrains.kotlin.ir.expressions.IrWhen
+import org.jetbrains.kotlin.ir.expressions.IrVararg
 import org.jetbrains.kotlin.ir.symbols.IrSimpleFunctionSymbol
 import org.jetbrains.kotlin.ir.types.getClass
 import org.jetbrains.kotlin.ir.types.isBoolean
@@ -97,6 +110,10 @@ internal data class ArcCodegenOwnershipPlan(
     val borrowedFieldReceivers: Set<IrGetValue>,
     val borrowedStrongFieldLoads: Set<IrGetField>,
     val borrowedStrongProjectionStores: Set<IrSetValue>,
+    val rootedProjectionVariables: Set<IrVariable>,
+    val rootedProjectionReads: Set<IrGetValue>,
+    val rootedProjectionFieldLoads: Set<IrGetField>,
+    val rootedProjectionStores: Set<IrSetValue>,
     val borrowedArrayElementCalls: Set<IrCall>,
     val mutableConstructorInitializers: Set<IrVariable>,
     val scopedArcReferenceLoads: Map<IrCall, IrExpression>,
@@ -108,7 +125,8 @@ internal data class ArcCodegenOwnershipPlan(
 
     companion object {
         val Empty = ArcCodegenOwnershipPlan(
-            emptyMap(), emptySet(), emptySet(), emptySet(), emptySet(), emptySet(), emptySet(), emptySet(), emptyMap()
+            emptyMap(), emptySet(), emptySet(), emptySet(), emptySet(), emptySet(), emptySet(), emptySet(),
+            emptySet(), emptySet(), emptySet(), emptySet(), emptyMap()
         )
     }
 }
@@ -235,6 +253,71 @@ internal fun ArcBorrowedStrongFieldProjectionEligibility.isAuthorized(): Boolean
             canonicalSelfReplacement && ownerUnchangedUntilFinalStore && noUnmodeledCallOrSuspension &&
             noTryReturnWriteOrEscape && exactMutableStrongReplacementStore
 
+/** Fail-closed authorization boundary for a non-owning cursor anchored by a live strong graph. */
+internal data class ArcRootedProjectionLoopEligibility(
+    val arcEnabled: Boolean,
+    val optimizationsEnabled: Boolean,
+    val debugInfoDisabled: Boolean,
+    val nonSuspendFunction: Boolean,
+    val mutableStrongLocalCursor: Boolean,
+    val cursorNotCaptured: Boolean,
+    val exactlyOneProjectionLoop: Boolean,
+    val directLiveAnchorInitializer: Boolean,
+    val anchorDominatesAndEnclosesLoop: Boolean,
+    val everyAssignmentCanonicalSelfProjection: Boolean,
+    val everyReadImmediateDirectFieldReceiver: Boolean,
+    val noUsesAfterRegion: Boolean,
+    val noUnknownOrUserCall: Boolean,
+    val noTryFinally: Boolean,
+    val noSuspension: Boolean,
+    val noNestedFunctionOrCallback: Boolean,
+    val noAllocation: Boolean,
+    val noFieldWrite: Boolean,
+    val noOtherReferenceOwnershipEffects: Boolean,
+    val noAlternateAssignment: Boolean,
+    val noReturnBreakOrContinue: Boolean,
+    val strongNonVolatileTransitionField: Boolean,
+    val transitionFieldNotWritten: Boolean,
+    val verifierProofAccepted: Boolean,
+)
+
+internal fun ArcRootedProjectionLoopEligibility.isAuthorized(): Boolean =
+    arcEnabled && optimizationsEnabled && debugInfoDisabled && nonSuspendFunction &&
+            mutableStrongLocalCursor && cursorNotCaptured && exactlyOneProjectionLoop &&
+            directLiveAnchorInitializer && anchorDominatesAndEnclosesLoop &&
+            everyAssignmentCanonicalSelfProjection && everyReadImmediateDirectFieldReceiver &&
+            noUsesAfterRegion && noUnknownOrUserCall && noTryFinally && noSuspension &&
+            noNestedFunctionOrCallback && noAllocation && noFieldWrite && noAlternateAssignment &&
+            noOtherReferenceOwnershipEffects && noReturnBreakOrContinue && strongNonVolatileTransitionField &&
+            transitionFieldNotWritten && verifierProofAccepted
+
+internal fun ArcRootedProjectionLoopEligibility.rejectedRequirements(): List<String> = listOf(
+    "arcEnabled" to arcEnabled,
+    "optimizationsEnabled" to optimizationsEnabled,
+    "debugInfoDisabled" to debugInfoDisabled,
+    "nonSuspendFunction" to nonSuspendFunction,
+    "mutableStrongLocalCursor" to mutableStrongLocalCursor,
+    "cursorNotCaptured" to cursorNotCaptured,
+    "exactlyOneProjectionLoop" to exactlyOneProjectionLoop,
+    "directLiveAnchorInitializer" to directLiveAnchorInitializer,
+    "anchorDominatesAndEnclosesLoop" to anchorDominatesAndEnclosesLoop,
+    "everyAssignmentCanonicalSelfProjection" to everyAssignmentCanonicalSelfProjection,
+    "everyReadImmediateDirectFieldReceiver" to everyReadImmediateDirectFieldReceiver,
+    "noUsesAfterRegion" to noUsesAfterRegion,
+    "noUnknownOrUserCall" to noUnknownOrUserCall,
+    "noTryFinally" to noTryFinally,
+    "noSuspension" to noSuspension,
+    "noNestedFunctionOrCallback" to noNestedFunctionOrCallback,
+    "noAllocation" to noAllocation,
+    "noFieldWrite" to noFieldWrite,
+    "noOtherReferenceOwnershipEffects" to noOtherReferenceOwnershipEffects,
+    "noAlternateAssignment" to noAlternateAssignment,
+    "noReturnBreakOrContinue" to noReturnBreakOrContinue,
+    "strongNonVolatileTransitionField" to strongNonVolatileTransitionField,
+    "transitionFieldNotWritten" to transitionFieldNotWritten,
+    "verifierProofAccepted" to verifierProofAccepted,
+).filterNot { it.second }.map { it.first }
+
 /**
  * Authorization for replacing the owning Array.get ABI with the ARC-only borrowed projection ABI.
  * Every item is intentionally explicit: widening one part of the projection lifetime must not
@@ -340,6 +423,10 @@ internal fun runArcOwnershipPlanning(
     val borrowedFieldReceivers = Collections.newSetFromMap(IdentityHashMap<IrGetValue, Boolean>())
     val borrowedStrongFieldLoads = Collections.newSetFromMap(IdentityHashMap<IrGetField, Boolean>())
     val borrowedStrongProjectionStores = Collections.newSetFromMap(IdentityHashMap<IrSetValue, Boolean>())
+    val rootedProjectionVariables = Collections.newSetFromMap(IdentityHashMap<IrVariable, Boolean>())
+    val rootedProjectionReads = Collections.newSetFromMap(IdentityHashMap<IrGetValue, Boolean>())
+    val rootedProjectionFieldLoads = Collections.newSetFromMap(IdentityHashMap<IrGetField, Boolean>())
+    val rootedProjectionStores = Collections.newSetFromMap(IdentityHashMap<IrSetValue, Boolean>())
     val borrowedArrayElementCalls = linkedSetOf<IrCall>()
     val mutableConstructorInitializers = linkedSetOf<IrVariable>()
     val scopedArcReferenceLoads = linkedMapOf<IrCall, IrExpression>()
@@ -370,6 +457,12 @@ internal fun runArcOwnershipPlanning(
                 selectVerifiedBorrowedStrongFieldProjections(generationState, declaration).let { selection ->
                     borrowedStrongFieldLoads += selection.fieldLoads
                     borrowedStrongProjectionStores += selection.replacementStores
+                }
+                selectVerifiedRootedProjectionLoops(generationState, declaration, input.lifetimes).let { selection ->
+                    rootedProjectionVariables += selection.variables
+                    rootedProjectionReads += selection.reads
+                    rootedProjectionFieldLoads += selection.fieldLoads
+                    rootedProjectionStores += selection.stores
                 }
                 borrowedArrayElementCalls += selectVerifiedBorrowedArrayElementCalls(
                     generationState,
@@ -430,6 +523,10 @@ internal fun runArcOwnershipPlanning(
             borrowedFieldReceivers,
             borrowedStrongFieldLoads,
             borrowedStrongProjectionStores,
+            rootedProjectionVariables,
+            rootedProjectionReads,
+            rootedProjectionFieldLoads,
+            rootedProjectionStores,
             borrowedArrayElementCalls,
             mutableConstructorInitializers,
             scopedArcReferenceLoads,
@@ -1541,6 +1638,505 @@ private fun verifyBorrowedStrongFieldProjectionProof(
                 unwind,
                 listOf(ArcOperation.EndBorrow(projected), ArcOperation.Destroy(owner)),
                 ArcTerminator.Throw,
+            ),
+        ),
+    )
+    return ArcOwnershipVerifier.verify(proof) === ArcOwnershipVerificationResult.Success
+}
+
+private data class ArcRootedProjectionLoopSelection(
+    val variables: Set<IrVariable>,
+    val reads: Set<IrGetValue>,
+    val fieldLoads: Set<IrGetField>,
+    val stores: Set<IrSetValue>,
+) {
+    companion object {
+        val Empty = ArcRootedProjectionLoopSelection(emptySet(), emptySet(), emptySet(), emptySet())
+    }
+}
+
+private data class ArcLexicalStatementPosition(val container: IrElement, val index: Int)
+
+/** A declaration in a synthetic outer statement dominates only a strictly nested use path. */
+internal fun arcStrictLexicalPrefixDominates(declarationPathSize: Int, usePathSize: Int): Boolean =
+    declarationPathSize < usePathSize
+
+internal fun arcNestedStructuralDominanceFallback(
+    targetAncestorDepth: Int,
+    declarationLoopPathMatches: Boolean,
+    declarationVisitedBeforeTarget: Boolean,
+): Boolean = targetAncestorDepth > 0 && declarationLoopPathMatches && declarationVisitedBeforeTarget
+
+private fun lexicallyDeclaredBefore(
+    declaration: IrElement,
+    use: IrElement,
+    positions: IdentityHashMap<IrElement, List<ArcLexicalStatementPosition>>,
+): Boolean {
+    val declarationPath = positions[declaration] ?: return false
+    val usePath = positions[use] ?: return false
+    val common = minOf(declarationPath.size, usePath.size)
+    for (index in 0 until common) {
+        val declarationPosition = declarationPath[index]
+        val usePosition = usePath[index]
+        if (declarationPosition.container !== usePosition.container) return false
+        if (declarationPosition.index != usePosition.index) {
+            return declarationPosition.index < usePosition.index
+        }
+    }
+    // Inline lowering may wrap a sequence of declarations and a nested loop in one synthetic
+    // statement. In that shape the declaration path is a strict prefix of the loop path even
+    // though the declaration executes before entering the nested container. A cursor cannot be
+    // referenced from its own initializer in valid IR, so only the strict-prefix direction is a
+    // lexical dominance relation; equal or reverse-prefix paths remain fail-closed.
+    return arcStrictLexicalPrefixDominates(declarationPath.size, usePath.size)
+}
+
+/**
+ * Select a cursor that may remain +0 because a separately live strong anchor owns the entire
+ * closed projection graph. This first slice is intentionally structural and loop-local: any
+ * unrecognized operation rejects the candidate rather than widening the rooted lifetime.
+ */
+private fun selectVerifiedRootedProjectionLoops(
+    generationState: NativeGenerationState,
+    function: IrSimpleFunction,
+    lifetimes: Map<IrElement, Lifetime>,
+): ArcRootedProjectionLoopSelection {
+    val nonSuspendFunction = !function.isArcSuspendLike()
+    if (generationState.context.memoryModel != MemoryModel.ARC ||
+        !generationState.context.config.optimizationsEnabled ||
+        generationState.context.shouldContainDebugInfo() || !nonSuspendFunction
+    ) return ArcRootedProjectionLoopSelection.Empty
+    val body = function.body ?: return ArcRootedProjectionLoopSelection.Empty
+    val capturedVariables = collectVariablesCapturedByNestedFunctions(function)
+    val variables = mutableListOf<IrVariable>()
+    val lexicalPositions = IdentityHashMap<IrElement, List<ArcLexicalStatementPosition>>()
+    val declarationLoopPaths = IdentityHashMap<IrVariable, List<IrLoop>>()
+    val structuralOrder = IdentityHashMap<IrElement, Int>()
+    body.acceptVoid(object : IrElementVisitorVoid {
+        val path = mutableListOf<ArcLexicalStatementPosition>()
+        val loops = mutableListOf<IrLoop>()
+        var nextStructuralOrder = 0
+
+        private fun recordStructuralOrder(element: IrElement) {
+            if (!structuralOrder.containsKey(element)) structuralOrder[element] = nextStructuralOrder++
+        }
+
+        private fun visitStatements(container: IrElement, statements: List<org.jetbrains.kotlin.ir.IrStatement>) {
+            statements.forEachIndexed { index, statement ->
+                path += ArcLexicalStatementPosition(container, index)
+                lexicalPositions[statement] = path.toList()
+                statement.acceptVoid(this)
+                path.removeAt(path.lastIndex)
+            }
+        }
+
+        override fun visitElement(element: IrElement) {
+            element.acceptChildrenVoid(this)
+        }
+
+        override fun visitFunction(declaration: IrFunction) = Unit
+
+        override fun visitLoop(loop: IrLoop) {
+            recordStructuralOrder(loop)
+            loops += loop
+            loop.acceptChildrenVoid(this)
+            loops.removeAt(loops.lastIndex)
+        }
+
+        override fun visitBlockBody(body: IrBlockBody) {
+            visitStatements(body, body.statements)
+        }
+
+        override fun visitContainerExpression(expression: IrContainerExpression) {
+            visitStatements(expression, expression.statements)
+        }
+
+        override fun visitVariable(declaration: IrVariable) {
+            recordStructuralOrder(declaration)
+            variables += declaration
+            declarationLoopPaths[declaration] = loops.toList()
+            declaration.acceptChildrenVoid(this)
+        }
+    })
+
+    val selectedVariables = Collections.newSetFromMap(IdentityHashMap<IrVariable, Boolean>())
+    val selectedReads = Collections.newSetFromMap(IdentityHashMap<IrGetValue, Boolean>())
+    val selectedFields = Collections.newSetFromMap(IdentityHashMap<IrGetField, Boolean>())
+    val selectedStores = Collections.newSetFromMap(IdentityHashMap<IrSetValue, Boolean>())
+
+    variables.forEach { cursor ->
+        val strongCursor = cursor.isVar && cursor.type.binaryTypeIsReference() &&
+                !cursor.hasAnnotation(KonanFqNames.arcWeak) &&
+                !cursor.hasAnnotation(KonanFqNames.arcUnowned) &&
+                !cursor.hasAnnotation(KonanFqNames.volatile)
+        val anchorRead = cursor.initializer as? IrGetValue
+        val anchor = anchorRead?.symbol?.owner
+        val parameterAnchor = anchor is IrValueParameter && anchor in function.allParameters &&
+                anchor.type.binaryTypeIsReference()
+        val variableAnchor = anchor as? IrVariable
+        val anchorAllocation = variableAnchor?.initializer as? IrConstructorCall
+        val stackAllocationAnchor = variableAnchor != null && !variableAnchor.isVar &&
+                variableAnchor.type.binaryTypeIsReference() && anchorAllocation != null &&
+                lifetimes[anchorAllocation] === Lifetime.STACK &&
+                variableAnchor !in capturedVariables &&
+                !variableAnchor.hasAnnotation(KonanFqNames.arcWeak) &&
+                !variableAnchor.hasAnnotation(KonanFqNames.arcUnowned) &&
+                !variableAnchor.hasAnnotation(KonanFqNames.volatile)
+        val directAnchor = parameterAnchor || stackAllocationAnchor
+        if (!strongCursor || !directAnchor || cursor in capturedVariables) return@forEach
+
+        val reads = mutableListOf<IrGetValue>()
+        val stores = mutableListOf<Pair<IrSetValue, List<IrLoop>>>()
+        val receiverFields = IdentityHashMap<IrGetValue, IrGetField>()
+        val readLoopPaths = IdentityHashMap<IrGetValue, List<IrLoop>>()
+        val loopPaths = IdentityHashMap<IrLoop, List<IrLoop>>()
+        val loopStack = mutableListOf<IrLoop>()
+        body.acceptVoid(object : IrElementVisitorVoid {
+            override fun visitElement(element: IrElement) {
+                element.acceptChildrenVoid(this)
+            }
+
+            override fun visitFunction(declaration: IrFunction) = Unit
+
+            override fun visitLoop(loop: IrLoop) {
+                loopStack += loop
+                loopPaths[loop] = loopStack.toList()
+                loop.acceptChildrenVoid(this)
+                loopStack.removeAt(loopStack.lastIndex)
+            }
+
+            override fun visitGetField(expression: IrGetField) {
+                val receiver = expression.receiver as? IrGetValue
+                if (receiver?.symbol == cursor.symbol) receiverFields[receiver] = expression
+                expression.acceptChildrenVoid(this)
+            }
+
+            override fun visitGetValue(expression: IrGetValue) {
+                if (expression.symbol == cursor.symbol) {
+                    reads += expression
+                    readLoopPaths[expression] = loopStack.toList()
+                }
+            }
+
+            override fun visitSetValue(expression: IrSetValue) {
+                if (expression.symbol == cursor.symbol) stores += expression to loopStack.toList()
+                expression.acceptChildrenVoid(this)
+            }
+        })
+
+        val storeLoops = stores.mapNotNull { it.second.lastOrNull() }.toSet()
+        val targetLoop = storeLoops.singleOrNull()
+        val targetPath = targetLoop?.let { loopPaths[it] }.orEmpty()
+        val exactlyOneLoop = targetLoop != null && stores.isNotEmpty() &&
+                stores.all { (_, path) ->
+                    path.size == targetPath.size && path.indices.all { path[it] === targetPath[it] }
+                } &&
+                reads.all { read ->
+                    val path = readLoopPaths[read].orEmpty()
+                    path.size == targetPath.size && path.indices.all { path[it] === targetPath[it] }
+                }
+
+        val transitionFields = stores.mapNotNull { (store, _) ->
+            store.value.unwrapCanonicalStrongFieldProjection(generationState)
+        }
+        val exactTransitionFields = Collections.newSetFromMap(IdentityHashMap<IrGetField, Boolean>()).apply {
+            addAll(transitionFields)
+        }
+        val canonicalCheckNotNullTemporaries = Collections.newSetFromMap(IdentityHashMap<IrVariable, Boolean>())
+        stores.forEach { (store, _) ->
+            val block = store.value as? IrBlock
+            if (block?.unwrapLoweredCheckNotNullInitializer(generationState) is IrGetField) {
+                (block.statements.firstOrNull() as? IrVariable)?.let { canonicalCheckNotNullTemporaries += it }
+            }
+        }
+        val transitionField = transitionFields.map { it.symbol }.toSet().singleOrNull()?.owner
+        val everyAssignmentCanonical = transitionFields.size == stores.size && stores.all { (store, _) ->
+            val field = store.value.unwrapCanonicalStrongFieldProjection(generationState)
+            val receiver = field?.receiver as? IrGetValue
+            receiver?.symbol == cursor.symbol && field.symbol.owner === transitionField
+        }
+        val strongTransition = transitionField != null && !transitionField.isStatic &&
+                transitionField.type.binaryTypeIsReference() &&
+                !transitionField.hasAnnotation(KonanFqNames.volatile) &&
+                !transitionField.hasAnnotation(KonanFqNames.arcWeak) &&
+                !transitionField.hasAnnotation(KonanFqNames.arcUnowned)
+        val everyReadDirectField = reads.isNotEmpty() && reads.all { read ->
+            val field = receiverFields[read]
+            field != null && field.receiver === read && !field.symbol.owner.isStatic &&
+                    !field.symbol.owner.hasAnnotation(KonanFqNames.volatile) &&
+                    !field.symbol.owner.hasAnnotation(KonanFqNames.arcWeak) &&
+                    !field.symbol.owner.hasAnnotation(KonanFqNames.arcUnowned) &&
+                    (!field.type.binaryTypeIsReference() || field in exactTransitionFields)
+        }
+
+        var seenTargetLoop = false
+        var afterTargetLoop = false
+        var useAfterRegion = false
+        if (targetLoop != null) {
+            body.acceptVoid(object : IrElementVisitorVoid {
+                override fun visitElement(element: IrElement) {
+                    element.acceptChildrenVoid(this)
+                }
+
+                override fun visitFunction(declaration: IrFunction) = Unit
+
+                override fun visitLoop(loop: IrLoop) {
+                    if (loop === targetLoop) {
+                        seenTargetLoop = true
+                        loop.acceptChildrenVoid(this)
+                        afterTargetLoop = true
+                    } else {
+                        loop.acceptChildrenVoid(this)
+                    }
+                }
+
+                override fun visitGetValue(expression: IrGetValue) {
+                    if (expression.symbol == cursor.symbol && afterTargetLoop) useAfterRegion = true
+                }
+
+                override fun visitSetValue(expression: IrSetValue) {
+                    if (expression.symbol == cursor.symbol && afterTargetLoop) useAfterRegion = true
+                    expression.acceptChildrenVoid(this)
+                }
+            })
+        }
+
+        var unknownCall = false
+        var tryFinally = false
+        var suspension = false
+        var nestedFunction = false
+        var allocation = false
+        var fieldWrite = false
+        var otherReferenceOwnershipEffect = false
+        var controlExit = false
+        var nestedLoop = false
+        val observedAllowedCallSymbols = linkedSetOf<String>()
+        val rejectedCallSymbols = linkedSetOf<String>()
+        val exactCursorStores = stores.mapTo(Collections.newSetFromMap(IdentityHashMap<IrSetValue, Boolean>())) { it.first }
+        if (targetLoop != null) {
+            fun inspectLoopPart(element: IrElement?) {
+                element?.acceptVoid(object : IrElementVisitorVoid {
+                    override fun visitElement(element: IrElement) {
+                        when (element) {
+                            is IrTry -> tryFinally = true
+                            is IrSuspendableExpression, is IrSuspensionPoint -> suspension = true
+                            // Inline lowering leaves returns to synthetic returnable blocks in the
+                            // bodies of ordinary `repeat` loops. They do not exit this function or
+                            // outlive the rooted cursor region. Real function returns, loop exits,
+                            // and throws remain fail-closed.
+                            is IrReturn -> if (element.returnTargetSymbol == function.symbol) controlExit = true
+                            is IrBreak, is IrContinue, is IrThrow -> controlExit = true
+                            is IrFunctionReference, is IrVararg -> allocation = true
+                        }
+                        element.acceptChildrenVoid(this)
+                    }
+
+                    override fun visitFunction(declaration: IrFunction) {
+                        nestedFunction = true
+                    }
+
+                    override fun visitVariable(declaration: IrVariable) {
+                        if (declaration.type.binaryTypeIsReference() &&
+                            declaration !in canonicalCheckNotNullTemporaries
+                        ) otherReferenceOwnershipEffect = true
+                        declaration.acceptChildrenVoid(this)
+                    }
+
+                    override fun visitGetValue(expression: IrGetValue) {
+                        if (expression.type.binaryTypeIsReference()) {
+                            val declaration = expression.symbol.owner
+                            val exactCursorRead = declaration === cursor
+                            val exactNullTempRead = declaration is IrVariable &&
+                                    declaration in canonicalCheckNotNullTemporaries
+                            if (!exactCursorRead && !exactNullTempRead) otherReferenceOwnershipEffect = true
+                        }
+                    }
+
+                    override fun visitSetValue(expression: IrSetValue) {
+                        if (expression.symbol.owner.type.binaryTypeIsReference()) {
+                            if (expression !in exactCursorStores) otherReferenceOwnershipEffect = true
+                        }
+                        expression.acceptChildrenVoid(this)
+                    }
+
+                    override fun visitGetField(expression: IrGetField) {
+                        if (expression.type.binaryTypeIsReference() &&
+                            expression !in exactTransitionFields
+                        ) otherReferenceOwnershipEffect = true
+                        expression.acceptChildrenVoid(this)
+                    }
+
+                    override fun visitLoop(loop: IrLoop) {
+                        nestedLoop = true
+                    }
+
+                    override fun visitSetField(expression: IrSetField) {
+                        fieldWrite = true
+                        expression.acceptChildrenVoid(this)
+                    }
+
+                    override fun visitFunctionAccess(expression: IrFunctionAccessExpression) {
+                        if (expression is IrConstructorCall) {
+                            allocation = true
+                        } else {
+                            val call = expression as? IrCall
+                            val explicitSafe = call != null &&
+                                    (call.symbol == generationState.context.irBuiltIns.eqeqeqSymbol ||
+                                            call.symbol == generationState.context.ir.symbols.throwNullPointerException ||
+                                            call.symbol == generationState.context.ir.symbols.reinterpret ||
+                                            call.symbol == generationState.context.ir.symbols.theUnitInstance)
+                            val purePrimitiveIntrinsic = when (call?.let(::tryGetIntrinsicType)) {
+                                IntrinsicType.PLUS, IntrinsicType.MINUS, IntrinsicType.TIMES,
+                                IntrinsicType.SIGNED_DIV, IntrinsicType.SIGNED_REM,
+                                IntrinsicType.UNSIGNED_DIV, IntrinsicType.UNSIGNED_REM,
+                                IntrinsicType.INC, IntrinsicType.DEC,
+                                IntrinsicType.UNARY_PLUS, IntrinsicType.UNARY_MINUS,
+                                IntrinsicType.SHL, IntrinsicType.SHR, IntrinsicType.USHR,
+                                IntrinsicType.AND, IntrinsicType.OR, IntrinsicType.XOR, IntrinsicType.INV,
+                                IntrinsicType.SIGN_EXTEND, IntrinsicType.ZERO_EXTEND,
+                                IntrinsicType.INT_TRUNCATE, IntrinsicType.FLOAT_TRUNCATE,
+                                IntrinsicType.FLOAT_EXTEND, IntrinsicType.SIGNED_TO_FLOAT,
+                                IntrinsicType.UNSIGNED_TO_FLOAT, IntrinsicType.FLOAT_TO_SIGNED,
+                                IntrinsicType.SIGNED_COMPARE_TO, IntrinsicType.UNSIGNED_COMPARE_TO,
+                                IntrinsicType.NOT, IntrinsicType.EXTRACT_ELEMENT,
+                                IntrinsicType.ARE_EQUAL_BY_VALUE, IntrinsicType.IEEE_754_EQUALS -> true
+                                else -> false
+                            }
+                            val primitiveBuiltin = call != null &&
+                                    (call.symbol.owner.isBuiltInOperator || purePrimitiveIntrinsic) &&
+                                    !call.type.binaryTypeIsReference() &&
+                                    call.getArgumentsWithIr().all { (_, argument) ->
+                                        !argument.type.binaryTypeIsReference()
+                                    }
+                            val allowed = explicitSafe || primitiveBuiltin
+                            val symbolName = call?.symbol?.owner?.fqNameForIrSerialization?.asString() ?: "<non-call>"
+                            if (allowed) {
+                                observedAllowedCallSymbols += symbolName
+                            } else {
+                                unknownCall = true
+                                rejectedCallSymbols += symbolName
+                            }
+                        }
+                        expression.acceptChildrenVoid(this)
+                    }
+                })
+            }
+            inspectLoopPart(targetLoop.body)
+            inspectLoopPart(targetLoop.condition)
+        }
+
+        val targetAncestors = targetPath.dropLast(1)
+        val cursorDeclarationLoops = declarationLoopPaths[cursor].orEmpty()
+        val anchorDeclarationLoops = variableAnchor?.let { declarationLoopPaths[it] }.orEmpty()
+        val cursorReentryPathMatches = cursorDeclarationLoops.size == targetAncestors.size &&
+                cursorDeclarationLoops.indices.all { cursorDeclarationLoops[it] === targetAncestors[it] }
+        val anchorReentryPathMatches = variableAnchor != null &&
+                anchorDeclarationLoops.size == targetAncestors.size &&
+                anchorDeclarationLoops.indices.all { anchorDeclarationLoops[it] === targetAncestors[it] }
+        val cursorVisitedBeforeTarget = targetLoop != null &&
+                structuralOrder[cursor]?.let { cursorOrder ->
+                    structuralOrder[targetLoop]?.let { targetOrder -> cursorOrder < targetOrder }
+                } == true
+        val anchorVisitedBeforeCursor = variableAnchor != null &&
+                structuralOrder[variableAnchor]?.let { anchorOrder ->
+                    structuralOrder[cursor]?.let { cursorOrder -> anchorOrder < cursorOrder }
+                } == true
+        val cursorDeclaredBeforeTarget = targetLoop != null &&
+                (lexicallyDeclaredBefore(cursor, targetLoop, lexicalPositions) ||
+                        arcNestedStructuralDominanceFallback(
+                            targetAncestors.size, cursorReentryPathMatches, cursorVisitedBeforeTarget
+                        ))
+        val anchorDeclaredBeforeCursor = variableAnchor != null &&
+                (lexicallyDeclaredBefore(variableAnchor, cursor, lexicalPositions) ||
+                        arcNestedStructuralDominanceFallback(
+                            targetAncestors.size, anchorReentryPathMatches, anchorVisitedBeforeCursor
+                        ))
+        val declarationsReexecuteBeforeNestedTarget = targetLoop != null &&
+                (targetAncestors.isEmpty() ||
+                        (cursorReentryPathMatches && cursorDeclaredBeforeTarget &&
+                                (parameterAnchor || (variableAnchor != null &&
+                                        anchorReentryPathMatches && anchorDeclaredBeforeCursor))))
+        val anchorDominates = directAnchor && targetLoop != null && declarationsReexecuteBeforeNestedTarget &&
+                cursorDeclaredBeforeTarget && (parameterAnchor || anchorDeclaredBeforeCursor)
+        val verifierAccepted = targetLoop != null && verifyRootedProjectionLoopProof(function, cursor)
+        val eligibility = ArcRootedProjectionLoopEligibility(
+            arcEnabled = generationState.context.memoryModel == MemoryModel.ARC,
+            optimizationsEnabled = generationState.context.config.optimizationsEnabled,
+            debugInfoDisabled = !generationState.context.shouldContainDebugInfo(),
+            nonSuspendFunction = nonSuspendFunction,
+            mutableStrongLocalCursor = strongCursor,
+            cursorNotCaptured = cursor !in capturedVariables,
+            exactlyOneProjectionLoop = exactlyOneLoop && !nestedLoop,
+            directLiveAnchorInitializer = directAnchor,
+            anchorDominatesAndEnclosesLoop = anchorDominates,
+            everyAssignmentCanonicalSelfProjection = everyAssignmentCanonical,
+            everyReadImmediateDirectFieldReceiver = everyReadDirectField,
+            noUsesAfterRegion = seenTargetLoop && !useAfterRegion,
+            noUnknownOrUserCall = !unknownCall,
+            noTryFinally = !tryFinally,
+            noSuspension = !suspension,
+            noNestedFunctionOrCallback = !nestedFunction,
+            noAllocation = !allocation,
+            noFieldWrite = !fieldWrite,
+            noOtherReferenceOwnershipEffects = !otherReferenceOwnershipEffect,
+            noAlternateAssignment = stores.isNotEmpty() && stores.size == transitionFields.size,
+            noReturnBreakOrContinue = !controlExit,
+            strongNonVolatileTransitionField = strongTransition,
+            transitionFieldNotWritten = transitionField != null && !fieldWrite,
+            verifierProofAccepted = verifierAccepted,
+        )
+        generationState.context.log {
+            "ARC rooted projection candidate ${function.fqNameForIrSerialization.asString()}::${cursor.name}: " +
+                    "authorized=${eligibility.isAuthorized()}, rejected=${eligibility.rejectedRequirements()}, " +
+                    "targetDepth=${targetPath.size}, reads=${reads.size}, stores=${stores.size}, " +
+                    "allowedCalls=$observedAllowedCallSymbols, rejectedCalls=$rejectedCallSymbols, " +
+                    "stackAnchor=$stackAllocationAnchor, parameterAnchor=$parameterAnchor, " +
+                    "targetAncestorDepth=${targetAncestors.size}, cursorLoopDepth=${cursorDeclarationLoops.size}, " +
+                    "anchorLoopDepth=${anchorDeclarationLoops.size}, cursorPathMatches=$cursorReentryPathMatches, " +
+                    "anchorPathMatches=$anchorReentryPathMatches, cursorBeforeTarget=$cursorDeclaredBeforeTarget, " +
+                    "anchorBeforeCursor=$anchorDeclaredBeforeCursor, cursorVisitedBeforeTarget=$cursorVisitedBeforeTarget, " +
+                    "anchorVisitedBeforeCursor=$anchorVisitedBeforeCursor"
+        }
+        if (eligibility.isAuthorized()) {
+            selectedVariables += cursor
+            selectedReads += reads
+            selectedFields += transitionFields
+            selectedStores += stores.map { it.first }
+        }
+    }
+
+    return ArcRootedProjectionLoopSelection(selectedVariables, selectedReads, selectedFields, selectedStores)
+}
+
+private fun verifyRootedProjectionLoopProof(function: IrSimpleFunction, cursorVariable: IrVariable): Boolean {
+    val anchor = ArcValue("root_anchor_${cursorVariable.name}")
+    val cursor = ArcStorage("rooted_cursor_${cursorVariable.name}")
+    val entry = ArcBlockId("entry")
+    val loop = ArcBlockId("loop")
+    val exit = ArcBlockId("exit")
+    val proof = ArcFunctionPlan(
+        functionName = "${function.fqNameForIrSerialization.asString()}#rooted-projection-${cursorVariable.name}",
+        entry = entry,
+        entryValues = emptyMap(),
+        entryInitializedStorage = emptySet(),
+        blocks = linkedMapOf(
+            entry to ArcBasicBlock(
+                entry,
+                listOf(
+                    ArcOperation.Define(anchor, ArcOwnership.Guaranteed),
+                    ArcOperation.BeginRootedProjection(cursor, anchor),
+                ),
+                ArcTerminator.Jump(loop),
+            ),
+            loop to ArcBasicBlock(
+                loop,
+                listOf(ArcOperation.AdvanceRootedProjection(cursor, anchor)),
+                ArcTerminator.Branch(loop, exit),
+            ),
+            exit to ArcBasicBlock(
+                exit,
+                listOf(ArcOperation.EndRootedProjection(cursor, anchor)),
+                ArcTerminator.Return(),
             ),
         ),
     )

@@ -537,6 +537,15 @@ internal abstract class FunctionGenerationContext(
         }
     }
 
+    /**
+     * Creates an addressable reference value solely for LLVM SSA promotion. Unlike [alloca], this
+     * deliberately bypasses Kotlin's object-root frame and must never escape or participate in an
+     * ownership operation. ArcOwnershipPlanning identity-authorizes every load and store.
+     */
+    fun allocaNonOwningReference(name: String): LLVMValueRef = appendingTo(prologueBb) {
+        LLVMBuildAlloca(builder, llvm.kObjHeaderPtr, name)!!
+    }
+
 
     abstract fun ret(value: LLVMValueRef?): LLVMValueRef
 

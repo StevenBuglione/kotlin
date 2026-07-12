@@ -45,6 +45,12 @@ remote-arc-no-collector: remote-snapshot
 remote-arc-frame-elision-unit: remote-snapshot
     {{python}} tools/arc/arc.py run arc-frame-elision-unit
 
+remote-arc-rooted-loop: remote-snapshot
+    {{python}} tools/arc/arc.py run arc-rooted-loop
+
+remote-arc-deinit-synthetic-root: remote-snapshot
+    {{python}} tools/arc/arc.py run arc-deinit-synthetic-root
+
 remote-arc-sanitize: remote-snapshot
     {{python}} tools/arc/arc.py run arc-sanitize
 
@@ -98,6 +104,12 @@ ci2-arc-frame-elision-unit: ci2-snapshot
 
 ci2-arc-field-projection: ci2-snapshot
     {{python}} tools/arc/arc.py --machine ci2 run arc-field-projection
+
+ci2-arc-rooted-loop: ci2-snapshot
+    {{python}} tools/arc/arc.py --machine ci2 run arc-rooted-loop
+
+ci2-arc-deinit-synthetic-root: ci2-snapshot
+    {{python}} tools/arc/arc.py --machine ci2 run arc-deinit-synthetic-root
 
 ci2-bench-doctor:
     {{python}} tools/arc/arc.py --machine ci2-bench doctor

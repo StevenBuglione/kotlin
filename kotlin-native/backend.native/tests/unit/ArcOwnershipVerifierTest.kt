@@ -9,6 +9,7 @@ package org.jetbrains.kotlin.backend.konan.arc
 
 import org.junit.Test
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 
@@ -423,6 +424,200 @@ class ArcOwnershipVerifierTest {
         }
 
         assertTrue(exception.failure.violations.any { it.code === ArcOwnershipViolationCode.LEAKED_OWNED_VALUE })
+    }
+
+    @Test
+    fun rootedProjectionLoopReachesStableBackedgeState() {
+        val anchor = ArcValue("anchor")
+        val cursor = ArcStorage("cursor")
+        val loop = ArcBlockId("loop")
+        val exit = ArcBlockId("exit")
+        val blocks = listOf(
+            ArcBasicBlock(
+                entry,
+                listOf(ArcOperation.BeginRootedProjection(cursor, anchor)),
+                ArcTerminator.Jump(loop),
+            ),
+            ArcBasicBlock(
+                loop,
+                listOf(ArcOperation.AdvanceRootedProjection(cursor, anchor)),
+                ArcTerminator.Branch(loop, exit),
+            ),
+            ArcBasicBlock(
+                exit,
+                listOf(ArcOperation.EndRootedProjection(cursor, anchor)),
+                ArcTerminator.Return(),
+            ),
+        ).associateBy(ArcBasicBlock::id)
+
+        val result = ArcOwnershipVerifier.verify(
+            ArcFunctionPlan("rootedLoop", entry, mapOf(anchor to ArcOwnership.Guaranteed), emptySet(), blocks)
+        )
+
+        assertSame(ArcOwnershipVerificationResult.Success, result)
+    }
+
+    @Test
+    fun advanceRequiresActiveRootedProjection() {
+        val anchor = ArcValue("anchor")
+        val cursor = ArcStorage("cursor")
+
+        val result = ArcOwnershipVerifier.verify(
+            plan(
+                ArcOperation.AdvanceRootedProjection(cursor, anchor),
+                entryValues = mapOf(anchor to ArcOwnership.Guaranteed),
+            )
+        )
+
+        assertFailureCode(result, ArcOwnershipViolationCode.ROOTED_PROJECTION_NOT_ACTIVE)
+    }
+
+    @Test
+    fun rootedProjectionCannotBeginTwiceForSameStorage() {
+        val anchor = ArcValue("anchor")
+        val cursor = ArcStorage("cursor")
+
+        val result = ArcOwnershipVerifier.verify(
+            plan(
+                ArcOperation.BeginRootedProjection(cursor, anchor),
+                ArcOperation.BeginRootedProjection(cursor, anchor),
+                ArcOperation.EndRootedProjection(cursor, anchor),
+                entryValues = mapOf(anchor to ArcOwnership.Guaranteed),
+            )
+        )
+
+        assertFailureCode(result, ArcOwnershipViolationCode.ROOTED_PROJECTION_STORAGE_ALREADY_ACTIVE)
+    }
+
+    @Test
+    fun strongStoreRejectsActiveRootedProjectionStorage() {
+        val anchor = ArcValue("anchor")
+        val stored = ArcValue("stored")
+        val cursor = ArcStorage("cursor")
+
+        val result = ArcOwnershipVerifier.verify(
+            plan(
+                ArcOperation.BeginRootedProjection(cursor, anchor),
+                ArcOperation.StrongStore(cursor, stored),
+                ArcOperation.EndRootedProjection(cursor, anchor),
+                entryValues = mapOf(
+                    anchor to ArcOwnership.Guaranteed,
+                    stored to ArcOwnership.Guaranteed,
+                ),
+            )
+        )
+
+        assertFailureCode(result, ArcOwnershipViolationCode.ROOTED_PROJECTION_STORAGE_ALREADY_ACTIVE)
+    }
+
+    @Test
+    fun rootedProjectionRequiresExactAnchor() {
+        val anchor = ArcValue("anchor")
+        val other = ArcValue("other")
+        val cursor = ArcStorage("cursor")
+
+        val result = ArcOwnershipVerifier.verify(
+            plan(
+                ArcOperation.BeginRootedProjection(cursor, anchor),
+                ArcOperation.AdvanceRootedProjection(cursor, other),
+                ArcOperation.EndRootedProjection(cursor, anchor),
+                entryValues = mapOf(
+                    anchor to ArcOwnership.Guaranteed,
+                    other to ArcOwnership.Guaranteed,
+                ),
+            )
+        )
+
+        assertFailureCode(result, ArcOwnershipViolationCode.ROOTED_PROJECTION_ANCHOR_MISMATCH)
+    }
+
+    @Test
+    fun rootedProjectionAnchorCannotBeDestroyedWhileActive() {
+        val anchor = ArcValue("anchor")
+        val cursor = ArcStorage("cursor")
+
+        val result = ArcOwnershipVerifier.verify(
+            plan(
+                ArcOperation.BeginRootedProjection(cursor, anchor),
+                ArcOperation.Destroy(anchor),
+                entryValues = mapOf(anchor to ArcOwnership.Owned),
+            )
+        )
+
+        assertFailureCode(result, ArcOwnershipViolationCode.ROOTED_PROJECTION_ANCHOR_ENDED)
+    }
+
+    @Test
+    fun rootedProjectionBorrowAnchorCannotEndWhileActive() {
+        val owner = ArcValue("owner")
+        val anchor = ArcValue("anchor")
+        val cursor = ArcStorage("cursor")
+
+        val result = ArcOwnershipVerifier.verify(
+            plan(
+                ArcOperation.Borrow(owner, anchor),
+                ArcOperation.BeginRootedProjection(cursor, anchor),
+                ArcOperation.EndBorrow(anchor),
+                ArcOperation.Destroy(owner),
+                entryValues = mapOf(owner to ArcOwnership.Owned),
+            )
+        )
+
+        assertFailureCode(result, ArcOwnershipViolationCode.ROOTED_PROJECTION_ANCHOR_ENDED)
+    }
+
+    @Test
+    fun rootedProjectionMustEndBeforeFunctionExit() {
+        val anchor = ArcValue("anchor")
+        val cursor = ArcStorage("cursor")
+
+        val result = ArcOwnershipVerifier.verify(
+            plan(
+                ArcOperation.BeginRootedProjection(cursor, anchor),
+                entryValues = mapOf(anchor to ArcOwnership.Guaranteed),
+            )
+        )
+
+        assertFailureCode(result, ArcOwnershipViolationCode.LIVE_ROOTED_PROJECTION_AT_EXIT)
+    }
+
+    @Test
+    fun rootedProjectionJoinRejectsDifferentAnchors() {
+        val leftAnchor = ArcValue("leftAnchor")
+        val rightAnchor = ArcValue("rightAnchor")
+        val cursor = ArcStorage("cursor")
+        val left = ArcBlockId("left")
+        val right = ArcBlockId("right")
+        val merge = ArcBlockId("merge")
+        val blocks = listOf(
+            ArcBasicBlock(entry, emptyList(), ArcTerminator.Branch(left, right)),
+            ArcBasicBlock(
+                left,
+                listOf(ArcOperation.BeginRootedProjection(cursor, leftAnchor)),
+                ArcTerminator.Jump(merge),
+            ),
+            ArcBasicBlock(
+                right,
+                listOf(ArcOperation.BeginRootedProjection(cursor, rightAnchor)),
+                ArcTerminator.Jump(merge),
+            ),
+            ArcBasicBlock(merge, emptyList(), ArcTerminator.Return()),
+        ).associateBy(ArcBasicBlock::id)
+
+        val result = ArcOwnershipVerifier.verify(
+            ArcFunctionPlan(
+                "rootedJoin",
+                entry,
+                mapOf(
+                    leftAnchor to ArcOwnership.Guaranteed,
+                    rightAnchor to ArcOwnership.Guaranteed,
+                ),
+                emptySet(),
+                blocks,
+            )
+        )
+
+        assertFailureCode(result, ArcOwnershipViolationCode.INCOMPATIBLE_PATH_STATES)
     }
 
     private fun plan(

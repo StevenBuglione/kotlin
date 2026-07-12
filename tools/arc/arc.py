@@ -47,7 +47,7 @@ EXCLUDED_PATHS = (
 PROFILES = (
     "dist", "runtime", "sanity", "full", "arc-smoke", "arc-stress", "arc-race", "arc-race-tsan",
     "arc-unowned-death", "arc-no-collector", "arc-frame-elision-unit",
-    "arc-field-projection",
+    "arc-field-projection", "arc-rooted-loop", "arc-deinit-synthetic-root",
     "arc-sanitize", "arc-sanitize-asan", "arc-sanitize-ubsan", "arc-sanitize-tsan",
     "arc-bench-candidate", "arc-bench-baseline", "arc-bench",
 )
@@ -241,6 +241,17 @@ def profile_command(profile: str) -> list[str]:
             ":kotlin-native:backend.native:tests:test",
             ":kotlin-native:backend.native:tests:arc_borrowed_field_projection",
             ":kotlin-native:backend.native:tests:filecheck_arc_borrowed_field_projection",
+        ]
+    if profile == "arc-rooted-loop":
+        return gradle + [
+            ":kotlin-native:backend.native:tests:test",
+            ":kotlin-native:backend.native:tests:arc_rooted_loop_borrowing",
+            ":kotlin-native:backend.native:tests:filecheck_arc_rooted_loop_codegen",
+            ":kotlin-native:backend.native:tests:filecheck_arc_rooted_loop_final",
+        ]
+    if profile == "arc-deinit-synthetic-root":
+        return gradle + [
+            ":kotlin-native:backend.native:tests:arc_deinit_synthetic_root",
         ]
     if profile == "arc-sanitize":
         return ["bash", "tools/arc/sanitizer_probe.sh", "all"]

@@ -1,0 +1,28 @@
+Kotlin/Native 1.9.10 strict baseline inner bounded-cycle loop, objdump addresses
+0x42058f..0x420605:
+
+42058f: mov    $0x2800,%eax
+420594: mov    %r12,%rcx
+420597: mov    %rcx,0x1f0(%rsp)
+42059f: mov    0x8(%rcx),%rcx
+4205a3: mov    %rcx,0x1f8(%rsp)
+4205ab: test   %rcx,%rcx
+4205b4: mov    %rcx,0x1e8(%rsp)
+4205bc: mov    %rcx,0x200(%rsp)
+4205c4: movslq 0x10(%rcx),%rdx
+4205c8: mov    %rcx,0x1f0(%rsp)
+4205d0: mov    0x8(%rcx),%rcx
+4205d4: mov    %rcx,0x1f8(%rsp)
+4205dc: test   %rcx,%rcx
+4205e5: mov    %r15,%rsi
+4205e8: add    %rdx,%rsi
+4205eb: mov    %rcx,0x1e8(%rsp)
+4205f3: mov    %rcx,0x200(%rsp)
+4205fb: movslq 0x10(%rcx),%r15
+4205ff: add    %rsi,%r15
+420602: add    $0xfffffffe,%eax
+420605: jne    0x420597
+
+The strict loop has no out-of-line ownership call after LLVM optimization, but it spills every
+projected cursor through four frame/root stack locations. It unrolls only two traversals per
+branch.

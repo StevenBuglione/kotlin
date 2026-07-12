@@ -1,0 +1,25 @@
+Candidate ARC inner bounded-cycle loop, objdump addresses 0x42a4bc..0x42a517:
+
+42a4bc: mov    $0x2800,%eax
+42a4c1: mov    %rbx,%rcx
+42a4c4: mov    0x8(%rcx),%rdx
+42a4c8: test   %rdx,%rdx
+42a4d1: mov    0x8(%rdx),%rsi
+42a4d5: test   %rsi,%rsi
+42a4de: mov    0x8(%rsi),%rdi
+42a4e2: test   %rdi,%rdi
+42a4eb: mov    0x8(%rdi),%rcx
+42a4ef: test   %rcx,%rcx
+42a4f8: movslq 0x10(%rdx),%rdx
+42a4fc: add    %rdx,%r15
+42a4ff: movslq 0x10(%rsi),%rdx
+42a503: add    %r15,%rdx
+42a506: movslq 0x10(%rdi),%rsi
+42a50a: add    %rdx,%rsi
+42a50d: movslq 0x10(%rcx),%r15
+42a511: add    %rsi,%r15
+42a514: add    $0xfffffffc,%eax
+42a517: jne    0x42a4c4
+
+Ownership calls in the inner loop: 0. Cursor root-slot loads/stores: 0. LLVM unrolled four
+edge traversals per branch.

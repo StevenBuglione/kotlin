@@ -82,6 +82,34 @@ internal sealed class ArcOperation(open val location: ArcPlanLocation?) {
         override val location: ArcPlanLocation? = null,
     ) : ArcOperation(location)
 
+    /**
+     * Begins a zero-RC projection region whose non-owning [storage] remains valid because [anchor]
+     * dominates the complete region. The planner is responsible for proving that every value
+     * placed in the storage remains transitively reachable through stable strong projections.
+     */
+    data class BeginRootedProjection(
+        val storage: ArcStorage,
+        val anchor: ArcValue,
+        override val location: ArcPlanLocation? = null,
+    ) : ArcOperation(location)
+
+    /**
+     * Advances a loop-carried rooted projection. This is an opaque lifetime use of [anchor], but
+     * performs no retain or release and deliberately leaves the verifier's path state unchanged.
+     */
+    data class AdvanceRootedProjection(
+        val storage: ArcStorage,
+        val anchor: ArcValue,
+        override val location: ArcPlanLocation? = null,
+    ) : ArcOperation(location)
+
+    /** Ends the rooted projection dependency associated with [storage]. */
+    data class EndRootedProjection(
+        val storage: ArcStorage,
+        val anchor: ArcValue,
+        override val location: ArcPlanLocation? = null,
+    ) : ArcOperation(location)
+
     data class StrongStore(
         val storage: ArcStorage,
         val value: ArcValue,

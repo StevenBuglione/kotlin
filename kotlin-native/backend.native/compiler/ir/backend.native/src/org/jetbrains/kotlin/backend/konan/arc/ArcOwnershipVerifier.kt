@@ -20,6 +20,12 @@ internal enum class ArcOwnershipViolationCode {
     STRONG_REPLACE_REQUIRES_OWNED_OLD_OWNER,
     STRONG_REPLACE_REQUIRES_PROJECTED_BORROW,
     STRONG_REPLACE_BORROW_OWNER_MISMATCH,
+    ROOTED_PROJECTION_REQUIRES_LIVE_ANCHOR,
+    ROOTED_PROJECTION_STORAGE_ALREADY_ACTIVE,
+    ROOTED_PROJECTION_NOT_ACTIVE,
+    ROOTED_PROJECTION_ANCHOR_MISMATCH,
+    ROOTED_PROJECTION_ANCHOR_ENDED,
+    LIVE_ROOTED_PROJECTION_AT_EXIT,
     INCOMPATIBLE_PATH_STATES,
     LEAKED_OWNED_VALUE,
     RETURN_OF_NON_OWNED_VALUE,
@@ -64,6 +70,7 @@ internal object ArcOwnershipVerifier {
     private data class PathState(
         val values: Map<ArcValue, ValueState>,
         val initializedStorage: Set<ArcStorage>,
+        val rootedProjectionStorage: Map<ArcStorage, ArcValue>,
     ) {
         /** Dead SSA values cannot affect any successor and must not poison otherwise compatible joins. */
         fun forSuccessor(): PathState = copy(values = values.filterValues { it.live })
@@ -101,6 +108,7 @@ internal object ArcOwnershipVerifier {
         val entryState = PathState(
             plan.entryValues.mapValues { ValueState(it.value, live = true) },
             plan.entryInitializedStorage,
+            emptyMap(),
         )
         val incoming = mutableMapOf(plan.entry to entryState)
         val worklist = ArrayDeque<ArcBlockId>().apply { add(plan.entry) }
@@ -170,6 +178,7 @@ internal object ArcOwnershipVerifier {
     ): PathState {
         val values = state.values.toMutableMap()
         val storage = state.initializedStorage.toMutableSet()
+        val rootedProjectionStorage = state.rootedProjectionStorage.toMutableMap()
 
         fun define(
             value: ArcValue,
@@ -208,6 +217,13 @@ internal object ArcOwnershipVerifier {
                 define(operation.result, if (source.ownership == ArcOwnership.Immortal) ArcOwnership.Immortal else ArcOwnership.Owned)
             }
             is ArcOperation.Destroy -> live(operation.value)?.let { value ->
+                if (operation.value in rootedProjectionStorage.values) {
+                    violations += violation(
+                        plan, ArcOwnershipViolationCode.ROOTED_PROJECTION_ANCHOR_ENDED,
+                        block, index, operation.location,
+                        "${operation.value} is destroyed while rooted projection storage remains active",
+                    )
+                }
                 if (value.ownership != ArcOwnership.Owned) {
                     violations += violation(
                         plan, ArcOwnershipViolationCode.DESTROY_OF_NON_OWNED, block, index, operation.location,
@@ -233,6 +249,13 @@ internal object ArcOwnershipVerifier {
                 )
             }
             is ArcOperation.EndBorrow -> live(operation.value)?.let { value ->
+                if (operation.value in rootedProjectionStorage.values) {
+                    violations += violation(
+                        plan, ArcOwnershipViolationCode.ROOTED_PROJECTION_ANCHOR_ENDED,
+                        block, index, operation.location,
+                        "${operation.value} ends while rooted projection storage remains active",
+                    )
+                }
                 if (value.borrowedFrom == null) {
                     violations += violation(
                         plan, ArcOwnershipViolationCode.END_BORROW_OF_NON_BORROWED,
@@ -253,7 +276,79 @@ internal object ArcOwnershipVerifier {
             is ArcOperation.Use -> {
                 live(operation.value)
             }
-            is ArcOperation.StrongStore -> live(operation.value)?.let { storage += operation.storage }
+            is ArcOperation.BeginRootedProjection -> {
+                val anchor = values[operation.anchor]
+                val liveAnchor = anchor?.takeIf { it.live }
+                if (liveAnchor == null) {
+                    violations += violation(
+                        plan, ArcOwnershipViolationCode.ROOTED_PROJECTION_REQUIRES_LIVE_ANCHOR,
+                        block, index, operation.location,
+                        "${operation.anchor} is not a live rooted projection anchor",
+                    )
+                }
+                if (operation.storage in rootedProjectionStorage || operation.storage in storage) {
+                    violations += violation(
+                        plan, ArcOwnershipViolationCode.ROOTED_PROJECTION_STORAGE_ALREADY_ACTIVE,
+                        block, index, operation.location,
+                        "${operation.storage} is already active strong or rooted storage",
+                    )
+                } else if (liveAnchor != null) {
+                    rootedProjectionStorage[operation.storage] = operation.anchor
+                }
+            }
+            is ArcOperation.AdvanceRootedProjection -> {
+                val activeAnchor = rootedProjectionStorage[operation.storage]
+                when {
+                    activeAnchor == null -> violations += violation(
+                        plan, ArcOwnershipViolationCode.ROOTED_PROJECTION_NOT_ACTIVE,
+                        block, index, operation.location,
+                        "${operation.storage} has no active rooted projection",
+                    )
+                    activeAnchor != operation.anchor -> violations += violation(
+                        plan, ArcOwnershipViolationCode.ROOTED_PROJECTION_ANCHOR_MISMATCH,
+                        block, index, operation.location,
+                        "${operation.storage} is rooted by $activeAnchor, not ${operation.anchor}",
+                    )
+                    values[operation.anchor]?.live != true -> violations += violation(
+                        plan, ArcOwnershipViolationCode.ROOTED_PROJECTION_REQUIRES_LIVE_ANCHOR,
+                        block, index, operation.location,
+                        "${operation.anchor} is not a live rooted projection anchor",
+                    )
+                    else -> Unit // A loop backedge reaches the same abstract rooted-storage state.
+                }
+            }
+            is ArcOperation.EndRootedProjection -> {
+                val activeAnchor = rootedProjectionStorage[operation.storage]
+                when {
+                    activeAnchor == null -> violations += violation(
+                        plan, ArcOwnershipViolationCode.ROOTED_PROJECTION_NOT_ACTIVE,
+                        block, index, operation.location,
+                        "${operation.storage} has no active rooted projection",
+                    )
+                    activeAnchor != operation.anchor -> violations += violation(
+                        plan, ArcOwnershipViolationCode.ROOTED_PROJECTION_ANCHOR_MISMATCH,
+                        block, index, operation.location,
+                        "${operation.storage} is rooted by $activeAnchor, not ${operation.anchor}",
+                    )
+                    values[operation.anchor]?.live != true -> violations += violation(
+                        plan, ArcOwnershipViolationCode.ROOTED_PROJECTION_REQUIRES_LIVE_ANCHOR,
+                        block, index, operation.location,
+                        "${operation.anchor} is not a live rooted projection anchor",
+                    )
+                    else -> rootedProjectionStorage.remove(operation.storage)
+                }
+            }
+            is ArcOperation.StrongStore -> live(operation.value)?.let {
+                if (operation.storage in rootedProjectionStorage) {
+                    violations += violation(
+                        plan, ArcOwnershipViolationCode.ROOTED_PROJECTION_STORAGE_ALREADY_ACTIVE,
+                        block, index, operation.location,
+                        "${operation.storage} is already active rooted projection storage",
+                    )
+                } else {
+                    storage += operation.storage
+                }
+            }
             is ArcOperation.StrongReplace -> {
                 val oldOwner = live(operation.oldOwner)
                 val newBorrow = live(operation.newBorrow)
@@ -338,6 +433,17 @@ internal object ArcOwnershipVerifier {
                 }
 
                 if (valid) {
+                    if (operation.oldOwner in rootedProjectionStorage.values) {
+                        violations += violation(
+                            plan, ArcOwnershipViolationCode.ROOTED_PROJECTION_ANCHOR_ENDED,
+                            block, index, operation.location,
+                            "${operation.oldOwner} is consumed while rooted projection storage remains active",
+                        )
+                        valid = false
+                    }
+                }
+
+                if (valid) {
                     // StrongReplace is one atomic ownership event: retain/publish the projected
                     // value first, then consume the old slot owner and end its projection borrow.
                     values[operation.newBorrow] = newBorrow!!.copy(live = false)
@@ -355,7 +461,7 @@ internal object ArcOwnershipVerifier {
                 }
             }
         }
-        return PathState(values, storage)
+        return PathState(values, storage, rootedProjectionStorage)
     }
 
     private fun checkExit(
@@ -374,6 +480,12 @@ internal object ArcOwnershipVerifier {
                     "$returned is not a live owned or immortal value"
                 )
             }
+        }
+        state.rootedProjectionStorage.forEach { (storage, anchor) ->
+            violations += violation(
+                plan, ArcOwnershipViolationCode.LIVE_ROOTED_PROJECTION_AT_EXIT, block, index, null,
+                "$storage rooted by $anchor remains active at exit",
+            )
         }
         state.values.forEach { (value, valueState) ->
             if (valueState.live && valueState.borrowedFrom != null) {
@@ -407,5 +519,7 @@ private fun ArcOperation.definedResult(): ArcValue? = when (this) {
     is ArcOperation.Borrow -> result
     is ArcOperation.StrongLoad -> result
     is ArcOperation.Destroy, is ArcOperation.EndBorrow, is ArcOperation.Use,
-    is ArcOperation.StrongStore, is ArcOperation.StrongReplace -> null
+    is ArcOperation.BeginRootedProjection, is ArcOperation.AdvanceRootedProjection,
+    is ArcOperation.EndRootedProjection, is ArcOperation.StrongStore,
+    is ArcOperation.StrongReplace -> null
 }

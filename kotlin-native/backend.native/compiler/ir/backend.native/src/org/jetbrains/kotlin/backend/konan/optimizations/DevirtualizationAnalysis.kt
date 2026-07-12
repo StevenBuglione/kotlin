@@ -87,9 +87,21 @@ internal object DevirtualizationAnalysis {
         // At this point all function references are lowered except those leaking to the native world.
         // Conservatively assume them belonging of the root set.
         val leakingThroughFunctionReferences = mutableListOf<DataFlowIR.FunctionSymbol>()
+        // ARC invokes these functions indirectly through the destroy hook stored in TypeInfo.
+        // They therefore have no ordinary IR call site from which reachability could be discovered.
+        val arcDeinitializers = mutableListOf<DataFlowIR.FunctionSymbol>()
         irModule.acceptChildrenVoid(object : IrElementVisitorVoid {
             override fun visitElement(element: IrElement) {
                 element.acceptChildrenVoid(this)
+            }
+
+            override fun visitFunction(declaration: IrFunction) {
+                declaration.acceptChildrenVoid(this)
+
+                if (context.config.memoryModel == MemoryModel.ARC &&
+                        declaration.annotations.hasAnnotation(KonanFqNames.arcDeinit)) {
+                    arcDeinitializers += moduleDFG.symbolTable.mapFunction(declaration)
+                }
             }
 
             override fun visitClass(declaration: IrClass) {
@@ -108,7 +120,8 @@ internal object DevirtualizationAnalysis {
             }
         })
 
-        return (exported + globalInitializers + explicitlyExported + associatedObjectConstructors + leakingThroughFunctionReferences).distinct()
+        return (exported + globalInitializers + explicitlyExported + associatedObjectConstructors +
+                leakingThroughFunctionReferences + arcDeinitializers).distinct()
     }
 
     fun BitSet.format(allTypes: Array<DataFlowIR.Type.Declared>): String {

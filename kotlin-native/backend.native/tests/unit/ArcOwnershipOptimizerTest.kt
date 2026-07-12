@@ -1035,6 +1035,63 @@ class ArcOwnershipOptimizerTest {
         }
     }
 
+    @Test
+    fun preservesRootedProjectionLoopAsZeroReferenceCountingOperations() {
+        val anchor = ArcValue("anchor")
+        val cursor = ArcStorage("cursor")
+        val loop = ArcBlockId("loop")
+        val exit = ArcBlockId("exit")
+        val input = cfgPlan(
+            ArcBasicBlock(
+                entry,
+                listOf(ArcOperation.BeginRootedProjection(cursor, anchor)),
+                ArcTerminator.Jump(loop),
+            ),
+            ArcBasicBlock(
+                loop,
+                listOf(ArcOperation.AdvanceRootedProjection(cursor, anchor)),
+                ArcTerminator.Branch(loop, exit),
+            ),
+            ArcBasicBlock(
+                exit,
+                listOf(ArcOperation.EndRootedProjection(cursor, anchor)),
+                ArcTerminator.Return(),
+            ),
+            entryValues = mapOf(anchor to ArcOwnership.Guaranteed),
+        )
+
+        val result = ArcOwnershipOptimizer.optimizeVerified(input)
+
+        assertSame(input, result.plan)
+        assertEquals(0, result.metrics.referenceCountingOperationsBefore)
+        assertEquals(0, result.metrics.referenceCountingOperationsAfter)
+    }
+
+    @Test
+    fun rootedProjectionAnchorUseBlocksCopyElimination() {
+        val source = ArcValue("source")
+        val anchor = ArcValue("anchor")
+        val cursor = ArcStorage("cursor")
+        val input = plan(
+            operations = listOf(
+                ArcOperation.Copy(source, anchor),
+                ArcOperation.BeginRootedProjection(cursor, anchor),
+                ArcOperation.AdvanceRootedProjection(cursor, anchor),
+                ArcOperation.EndRootedProjection(cursor, anchor),
+                ArcOperation.Destroy(anchor),
+            ),
+            entryValues = mapOf(source to ArcOwnership.Guaranteed),
+        )
+
+        val result = ArcOwnershipOptimizer.optimizeVerified(input)
+
+        assertSame(input, result.plan)
+        assertEquals(0, result.metrics.guaranteedEntryCopiesEliminated)
+        assertEquals(0, result.metrics.copyDestroyPairsEliminated)
+        assertEquals(2, result.metrics.referenceCountingOperationsBefore)
+        assertEquals(2, result.metrics.referenceCountingOperationsAfter)
+    }
+
     private fun cfgPlan(
         vararg blocks: ArcBasicBlock,
         entryValues: Map<ArcValue, ArcOwnership> = emptyMap(),

@@ -1,0 +1,12 @@
+Compiler snapshot: 08ee853dc3680be197dea5faac0a14982b9b480d
+Tree: acad6be33af6d1e9edd02de9f5add4a6e89b3f1f
+
+ARC rooted projection candidate boundedCyclesWork::cursor: authorized=true, rejected=[],
+targetDepth=2, reads=2, stores=1, stackAnchor=true, parameterAnchor=false,
+targetAncestorDepth=1, cursorLoopDepth=1, anchorLoopDepth=1,
+cursorPathMatches=true, anchorPathMatches=true, cursorBeforeTarget=true,
+anchorBeforeCursor=true, cursorVisitedBeforeTarget=true, anchorVisitedBeforeCursor=true
+
+The cursor and its direct constructor anchor are recreated in the exact ancestor loop. The
+inner traversal therefore uses the verified rooted projection path; the separate ancestor-reentry
+negative keeps a cursor declared outside that ancestor on ordinary owning replacement.

@@ -3394,6 +3394,20 @@ standaloneTest("arc_borrowed_field_projection") {
     source = "codegen/arc/borrowedFieldProjection.kt"
 }
 
+standaloneTest("arc_rooted_loop_borrowing") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    flags = ["-opt", "-Xverbose-phases=ArcOwnershipAnalysis"]
+    outputChecker = { it.contains("ARC_ROOTED_LOOP_OK checksum=210107\n") }
+    source = "codegen/arc/rootedLoopBorrowing.kt"
+}
+
+standaloneTest("arc_deinit_synthetic_root") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    flags = ["-opt"]
+    outputChecker = { it.contains("ARC_DEINIT_SYNTHETIC_ROOT_OK\n") }
+    source = "codegen/arc/arcDeinitSyntheticRoot.kt"
+}
+
 standaloneTest("arc_empty_frame_elision") {
     enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
     flags = ["-opt"]
@@ -6669,6 +6683,21 @@ fileCheckTest("filecheck_arc_borrowed_field_projection") {
     annotatedSource = project.file('filecheck/arc_borrowed_field_projection.kt')
     extraOpts = ["-opt"]
     phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_rooted_loop_codegen") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('filecheck/arc_rooted_loop_codegen.kt')
+    extraOpts = ["-opt", "-Xverbose-phases=ArcOwnershipAnalysis"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_rooted_loop_final") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('filecheck/arc_rooted_loop_final.kt')
+    checkPrefix = "FINAL"
+    extraOpts = ["-opt", "-Xverbose-phases=ArcOwnershipAnalysis"]
+    phaseToCheck = "RemoveEmptyArcFrames"
 }
 
 fileCheckTest("filecheck_arc_exceptional_frame_cleanup") {

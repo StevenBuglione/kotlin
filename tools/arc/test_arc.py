@@ -119,6 +119,41 @@ class ArcProfileTest(unittest.TestCase):
         )[0]
         self.assertIn("--machine ci2 run arc-field-projection", recipe)
 
+    def test_rooted_loop_profile_runs_behavior_codegen_and_final_ir_gates(self):
+        with patch.dict(os.environ, {}, clear=True):
+            command = arc.profile_command("arc-rooted-loop")
+        self.assertIn(":kotlin-native:backend.native:tests:test", command)
+        self.assertIn(":kotlin-native:backend.native:tests:arc_rooted_loop_borrowing", command)
+        self.assertIn(":kotlin-native:backend.native:tests:filecheck_arc_rooted_loop_codegen", command)
+        self.assertIn(":kotlin-native:backend.native:tests:filecheck_arc_rooted_loop_final", command)
+
+        justfile = (Path(__file__).parents[2] / "Justfile").read_text()
+        self.assertIn("remote-arc-rooted-loop: remote-snapshot", justfile)
+        self.assertIn("ci2-arc-rooted-loop: ci2-snapshot", justfile)
+        self.assertGreaterEqual(justfile.count("run arc-rooted-loop"), 2)
+
+    def test_deinit_synthetic_root_profile_is_reproducible_on_both_builders(self):
+        with patch.dict(os.environ, {}, clear=True):
+            command = arc.profile_command("arc-deinit-synthetic-root")
+        self.assertIn(
+            ":kotlin-native:backend.native:tests:arc_deinit_synthetic_root",
+            command,
+        )
+
+        justfile = (Path(__file__).parents[2] / "Justfile").read_text()
+        self.assertIn(
+            "remote-arc-deinit-synthetic-root: remote-snapshot",
+            justfile,
+        )
+        self.assertIn(
+            "ci2-arc-deinit-synthetic-root: ci2-snapshot",
+            justfile,
+        )
+        self.assertGreaterEqual(
+            justfile.count("run arc-deinit-synthetic-root"),
+            2,
+        )
+
     def test_arc_fixture_tasks_remain_overrideable(self):
         with patch.dict(os.environ, {"ARC_STRESS_TASKS": ":custom:arcStress"}, clear=True):
             command = arc.profile_command("arc-stress")

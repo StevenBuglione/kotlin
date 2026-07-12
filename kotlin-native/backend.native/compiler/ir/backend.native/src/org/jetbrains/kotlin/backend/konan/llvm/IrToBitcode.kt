@@ -646,6 +646,14 @@ internal class CodeGeneratorVisitor(
     private inner class VariableScope : InnerScopeImpl() {
 
         override fun genDeclareVariable(variable: IrVariable, value: LLVMValueRef?, variableLocation: VariableDebugLocation?): Int {
+            if (variable in arcOwnership.rootedProjectionVariables) {
+                require(context.memoryModel == MemoryModel.ARC && context.config.optimizationsEnabled &&
+                        !context.shouldContainDebugInfo() && value != null && variable.isVar &&
+                        variable.type.binaryTypeIsReference()) {
+                    "rooted projection cursor escaped its verified declaration boundary: ${ir2string(variable)}"
+                }
+                return functionGenerationContext.vars.createNonOwningReference(variable, value)
+            }
             if (variable in arcOwnership.borrowedGuaranteedAliases) {
                 require(value != null) { "Borrowed guaranteed alias must have an initializer: ${ir2string(variable)}" }
                 return functionGenerationContext.vars.createImmutable(variable, value)
@@ -1419,6 +1427,17 @@ internal class CodeGeneratorVisitor(
 
     private fun evaluateGetValue(value: IrGetValue, resultSlot: LLVMValueRef?): LLVMValueRef {
         context.log{"evaluateGetValue               : ${ir2string(value)}"}
+        if (value in arcOwnership.rootedProjectionReads) {
+            val variable = value.symbol.owner as? IrVariable
+            require(context.memoryModel == MemoryModel.ARC && context.config.optimizationsEnabled &&
+                    !context.shouldContainDebugInfo() && resultSlot == null &&
+                    variable in arcOwnership.rootedProjectionVariables) {
+                "rooted projection read escaped its verified field-receiver boundary: ${ir2string(value)}"
+            }
+            val index = currentCodeContext.getDeclaredValue(variable!!)
+            require(index >= 0) { "rooted projection cursor has no non-owning record: ${ir2string(value)}" }
+            return functionGenerationContext.vars.loadRootedProjection(index)
+        }
         if (resultSlot == null &&
             (value in arcOwnership.borrowedMutableReads || value in arcOwnership.borrowedFieldReceivers)
         ) {
@@ -1442,7 +1461,17 @@ internal class CodeGeneratorVisitor(
          */
         val result = evaluateExpression(value.value)
         val variable = currentCodeContext.getDeclaredValue(value.symbol.owner)
-        if (value in arcOwnership.borrowedStrongProjectionStores) {
+        if (value in arcOwnership.rootedProjectionStores) {
+            val cursor = value.symbol.owner as? IrVariable
+            val selectedProjection = value.value.selectedRootedProjectionField()
+            require(context.memoryModel == MemoryModel.ARC && context.config.optimizationsEnabled &&
+                    !context.shouldContainDebugInfo() && cursor in arcOwnership.rootedProjectionVariables &&
+                    selectedProjection != null &&
+                    selectedProjection in arcOwnership.rootedProjectionFieldLoads) {
+                "rooted projection advance escaped its verified loop boundary: ${ir2string(value)}"
+            }
+            functionGenerationContext.vars.storeRootedProjection(result, variable)
+        } else if (value in arcOwnership.borrowedStrongProjectionStores) {
             val selectedProjection = value.value.selectedBorrowedStrongFieldProjection()
             require(context.memoryModel == MemoryModel.ARC && context.config.optimizationsEnabled &&
                     !context.shouldContainDebugInfo() && selectedProjection != null) {
@@ -1470,6 +1499,23 @@ internal class CodeGeneratorVisitor(
 
             override fun visitGetField(expression: IrGetField) {
                 if (expression in arcOwnership.borrowedStrongFieldLoads) selected += expression
+                expression.acceptChildrenVoid(this)
+            }
+        })
+        return selected.singleOrNull()
+    }
+
+    private fun IrExpression.selectedRootedProjectionField(): IrGetField? {
+        val selected = mutableListOf<IrGetField>()
+        acceptVoid(object : IrElementVisitorVoid {
+            override fun visitElement(element: IrElement) {
+                element.acceptChildrenVoid(this)
+            }
+
+            override fun visitFunction(declaration: IrFunction) = Unit
+
+            override fun visitGetField(expression: IrGetField) {
+                if (expression in arcOwnership.rootedProjectionFieldLoads) selected += expression
                 expression.acceptChildrenVoid(this)
             }
         })
@@ -1797,10 +1843,10 @@ internal class CodeGeneratorVisitor(
                 alignment = generationState.llvmDeclarations.forStaticField(value.symbol.owner).alignment
             }
         }
-        if (value in arcOwnership.borrowedStrongFieldLoads) {
+        if (value in arcOwnership.borrowedStrongFieldLoads || value in arcOwnership.rootedProjectionFieldLoads) {
             require(context.memoryModel == MemoryModel.ARC && context.config.optimizationsEnabled &&
                     !context.shouldContainDebugInfo()) {
-                "ARC borrowed strong field load escaped its optimization boundary: ${ir2string(value)}"
+                "ARC borrowed/rooted strong field load escaped its optimization boundary: ${ir2string(value)}"
             }
             require(!value.symbol.owner.isStatic && order == null &&
                     value.type.binaryTypeIsReference() && resultSlot == null &&

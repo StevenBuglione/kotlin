@@ -46,6 +46,28 @@ internal class VariableManager(val functionGenerationContext: FunctionGeneration
         override fun toString() = "value of ${value} from ${name}"
     }
 
+    inner class NonOwningReferenceRecord(val rawAddress: LLVMValueRef, val name: Name) : Record {
+        override fun load(resultSlot: LLVMValueRef?): LLVMValueRef =
+            error("generic load of non-owning rooted projection cursor: $name")
+
+        override fun store(value: LLVMValueRef) =
+            error("generic store of non-owning rooted projection cursor: $name")
+
+        override fun address(): LLVMValueRef =
+            error("address escape of non-owning rooted projection cursor: $name")
+
+        fun loadNonOwning(): LLVMValueRef = functionGenerationContext.loadSlot(rawAddress, false, null)
+
+        fun storeNonOwning(value: LLVMValueRef) {
+            require(functionGenerationContext.isObjectRef(value)) {
+                "non-owning rooted projection cursor requires an object reference"
+            }
+            functionGenerationContext.store(value, rawAddress)
+        }
+
+        override fun toString() = "non-owning rooted projection cursor $name"
+    }
+
     val variables: ArrayList<Record> = arrayListOf()
     val contextVariablesToIndex: HashMap<IrValueDeclaration, Int> = hashMapOf()
 
@@ -127,6 +149,22 @@ internal class VariableManager(val functionGenerationContext: FunctionGeneration
         return index
     }
 
+    internal fun createNonOwningReference(valueDeclaration: IrVariable, value: LLVMValueRef): Int {
+        require(valueDeclaration.isVar && functionGenerationContext.isObjectRef(value)) {
+            "non-owning rooted projection cursor requires a mutable reference variable: ${valueDeclaration.render()}"
+        }
+        require(!contextVariablesToIndex.containsKey(valueDeclaration)) {
+            "${valueDeclaration.render()} is already defined"
+        }
+        val index = variables.size
+        val address = functionGenerationContext.allocaNonOwningReference(valueDeclaration.name.asString())
+        val record = NonOwningReferenceRecord(address, valueDeclaration.name)
+        record.storeNonOwning(value)
+        variables.add(record)
+        contextVariablesToIndex[valueDeclaration] = index
+        return index
+    }
+
     fun indexOf(valueDeclaration: IrValueDeclaration) : Int {
         return contextVariablesToIndex.getOrElse(valueDeclaration) { -1 }
     }
@@ -166,6 +204,22 @@ internal class VariableManager(val functionGenerationContext: FunctionGeneration
             "Borrowed strong projection replacement requires a mutable reference slot, got $record"
         }
         functionGenerationContext.storeStackRef(value, record.address)
+    }
+
+    fun loadRootedProjection(index: Int): LLVMValueRef {
+        val record = variables[index]
+        require(record is NonOwningReferenceRecord) {
+            "rooted projection load requires a non-owning cursor record, got $record"
+        }
+        return record.loadNonOwning()
+    }
+
+    fun storeRootedProjection(value: LLVMValueRef, index: Int) {
+        val record = variables[index]
+        require(record is NonOwningReferenceRecord) {
+            "rooted projection advance requires a non-owning cursor record, got $record"
+        }
+        record.storeNonOwning(value)
     }
 }
 

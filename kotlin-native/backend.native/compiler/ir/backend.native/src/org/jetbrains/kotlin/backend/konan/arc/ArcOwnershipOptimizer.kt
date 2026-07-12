@@ -399,7 +399,9 @@ private fun ArcFunctionPlan.valueOwnerships(topologicalOrder: List<ArcBlockId>):
                 is ArcOperation.Borrow -> result[operation.result] = ArcOwnership.Guaranteed
                 is ArcOperation.StrongLoad -> result[operation.result] = ArcOwnership.Owned
                 is ArcOperation.Destroy, is ArcOperation.EndBorrow, is ArcOperation.Use,
-                is ArcOperation.StrongStore, is ArcOperation.StrongReplace -> Unit
+                is ArcOperation.BeginRootedProjection, is ArcOperation.AdvanceRootedProjection,
+                is ArcOperation.EndRootedProjection, is ArcOperation.StrongStore,
+                is ArcOperation.StrongReplace -> Unit
             }
         }
     }
@@ -493,7 +495,9 @@ private fun ArcOperation.definedValue(ownerships: Map<ArcValue, ArcOwnership>): 
     is ArcOperation.StrongLoad -> result to ArcOwnership.Owned
     is ArcOperation.Borrow -> result to ArcOwnership.Guaranteed
     is ArcOperation.Destroy, is ArcOperation.EndBorrow, is ArcOperation.Use,
-    is ArcOperation.StrongStore, is ArcOperation.StrongReplace -> null
+    is ArcOperation.BeginRootedProjection, is ArcOperation.AdvanceRootedProjection,
+    is ArcOperation.EndRootedProjection, is ArcOperation.StrongStore,
+    is ArcOperation.StrongReplace -> null
 }
 
 private fun ArcOperation.replacingUse(from: ArcValue, to: ArcValue): ArcOperation = when (this) {
@@ -502,6 +506,9 @@ private fun ArcOperation.replacingUse(from: ArcValue, to: ArcValue): ArcOperatio
     is ArcOperation.StrongStore -> if (value == from) copy(value = to) else this
     // StrongReplace's old owner/projection dependency is an indivisible verified relation.
     is ArcOperation.StrongReplace -> this
+    // Rooted projection anchors are opaque lifetime dependencies, never rewrite targets.
+    is ArcOperation.BeginRootedProjection, is ArcOperation.AdvanceRootedProjection,
+    is ArcOperation.EndRootedProjection -> this
     else -> this
 }
 
@@ -512,6 +519,9 @@ private fun ArcOperation.uses(value: ArcValue): Boolean = when (this) {
     is ArcOperation.Borrow -> source == value
     is ArcOperation.EndBorrow -> this.value == value
     is ArcOperation.Use -> this.value == value
+    is ArcOperation.BeginRootedProjection -> anchor == value
+    is ArcOperation.AdvanceRootedProjection -> anchor == value
+    is ArcOperation.EndRootedProjection -> anchor == value
     is ArcOperation.StrongStore -> this.value == value
     is ArcOperation.StrongReplace -> oldOwner == value || newBorrow == value
     is ArcOperation.StrongLoad -> false
@@ -528,5 +538,7 @@ private fun ArcTerminator.successors(): List<ArcBlockId> = when (this) {
 private fun ArcOperation.isReferenceCountingOperation(): Boolean = when (this) {
     is ArcOperation.Copy, is ArcOperation.Destroy, is ArcOperation.StrongStore,
     is ArcOperation.StrongReplace, is ArcOperation.StrongLoad -> true
-    is ArcOperation.Define, is ArcOperation.Borrow, is ArcOperation.EndBorrow, is ArcOperation.Use -> false
+    is ArcOperation.Define, is ArcOperation.Borrow, is ArcOperation.EndBorrow, is ArcOperation.Use,
+    is ArcOperation.BeginRootedProjection, is ArcOperation.AdvanceRootedProjection,
+    is ArcOperation.EndRootedProjection -> false
 }
