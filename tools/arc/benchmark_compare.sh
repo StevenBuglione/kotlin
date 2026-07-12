@@ -9,6 +9,8 @@ baseline_source=${ARC_BENCH_BASELINE_SOURCE:-${root}-baseline-v1.9.10}
 baseline_dist=${ARC_BENCH_BASELINE_DIST:-$baseline_source/kotlin-native/dist}
 expected_baseline=3db61efe5e892bf27115f1ebcab957d903067ed4
 source="$root/tools/arc/fixtures/benchmark.kt"
+interop_def="$root/tools/arc/fixtures/benchmark_cinterop.def"
+interop_include="$root/tools/arc/fixtures"
 reporter="$root/tools/arc/benchmark_report.py"
 artifacts="$state/artifacts"
 quick=${ARC_BENCH_QUICK:-0}
@@ -34,7 +36,10 @@ minimum_compile_repetitions=3
     echo "ARC_BENCH_COMPILE_REPETITIONS must be an odd integer of at least $minimum_compile_repetitions" >&2
     exit 2
 }
-[[ -f "$source" && -x /usr/bin/time ]] || { echo "benchmark fixture and /usr/bin/time are required" >&2; exit 1; }
+[[ -f "$source" && -f "$interop_def" && -f "$interop_include/benchmark_cinterop.h" && -x /usr/bin/time ]] || {
+    echo "benchmark fixtures and /usr/bin/time are required" >&2
+    exit 1
+}
 command -v python3 >/dev/null || { echo "python3 is required" >&2; exit 1; }
 objdump=${ARC_BENCH_OBJDUMP:-objdump}
 command -v "$objdump" >/dev/null || { echo "$objdump is required for ownership callsite counts" >&2; exit 1; }
@@ -92,7 +97,7 @@ mkdir -p "$artifacts"
 rm -f "$artifacts"/raw.tsv "$artifacts"/raw.json "$artifacts"/static.tsv \
     "$artifacts"/summary.tsv "$artifacts"/summary.json "$artifacts"/comparison.md \
     "$artifacts"/*-benchmark "$artifacts"/*-benchmark.kexe "$artifacts"/*.time \
-    "$artifacts"/*.log "$artifacts"/*.disassembly
+    "$artifacts"/*.log "$artifacts"/*.disassembly "$artifacts"/*-benchmark-cinterop.klib
 printf 'model\tscenario\trepetition\telapsed_seconds\tthroughput_ops_per_second\tmax_rss_kib\toperations\tlogical_allocations\n' \
     >"$artifacts/raw.tsv"
 printf 'model\tcompile_seconds\tcompile_max_rss_kib\tbinary_bytes\tretain_callsites\trelease_callsites\tallocation_callsites\tcompiler_commit\tmemory_model\tcompiler\n' \
@@ -115,13 +120,30 @@ if command -v taskset >/dev/null; then
 fi
 
 common_flags=(-target linux_x64 -opt)
+prepare_interop() {
+    local label=$1 compiler=$2
+    local cinterop
+    cinterop="$(dirname "$compiler")/cinterop"
+    local output="$artifacts/$label-benchmark-cinterop"
+    local log="$artifacts/$label-cinterop.log"
+    [[ -x "$cinterop" ]] || { echo "$label dist is missing cinterop" >&2; exit 1; }
+    if ! "$cinterop" -def "$interop_def" -target linux_x64 \
+            -compiler-option "-I$interop_include" -o "$output" >"$log" 2>&1; then
+        cat "$log" >&2
+        echo "$label benchmark cinterop generation failed" >&2
+        exit 1
+    fi
+    [[ -f "$output.klib" ]] || { echo "$label cinterop produced no KLIB" >&2; exit 1; }
+}
+
 compile_one() {
     local label=$1 compiler=$2 memory_model=$3 repetition=$4
     local output="$artifacts/$label-benchmark"
     local timing="$artifacts/$label-compile.time"
     local log="$artifacts/$label-compiler.log"
     if ! /usr/bin/time -f $'%e\t%M' -o "$timing" \
-            "$compiler" "$source" "${common_flags[@]}" -memory-model "$memory_model" -o "$output" >"$log" 2>&1; then
+            "$compiler" "$source" "${common_flags[@]}" -memory-model "$memory_model" \
+            -library "$artifacts/$label-benchmark-cinterop.klib" -o "$output" >"$log" 2>&1; then
         cat "$log" >&2
         echo "$label benchmark compilation failed" >&2
         exit 1
@@ -157,6 +179,8 @@ finalize_compile() {
 
 # The only varying compiler flag is the memory model required by each independently built dist.
 # In particular, candidate strict is never compiled: the strict executable always comes from v1.9.10.
+prepare_interop baseline-strict "$baseline_compiler"
+prepare_interop candidate-arc "$candidate_compiler"
 for ((iteration = 1; iteration <= compile_repetitions; iteration++)); do
     if (( iteration % 2 == 1 )); then
         compile_one baseline-strict "$baseline_compiler" strict "$iteration"
@@ -169,7 +193,7 @@ done
 finalize_compile baseline-strict "$baseline_compiler" strict "$baseline_head"
 finalize_compile candidate-arc "$candidate_compiler" arc "$candidate_head"
 
-default_scenarios='allocation destruction fields arrays strings virtual-dispatch call-arguments closures exceptions coroutines workers atomics platform-c-interop bounded-cycles'
+default_scenarios='allocation destruction fields arrays strings virtual-dispatch call-arguments closures exceptions coroutines workers atomics platform-c-interop platform-c-leaf platform-c-dynamic-cstring bounded-cycles'
 scenario_selection=${ARC_BENCH_SCENARIOS:-$default_scenarios}
 read -r -a scenarios <<<"${scenario_selection//,/ }"
 [[ ${#scenarios[@]} -gt 0 ]] || { echo "ARC_BENCH_SCENARIOS selected no scenarios" >&2; exit 2; }
@@ -230,7 +254,8 @@ for scenario in "${scenarios[@]}"; do
     done
 done
 
-python3 - "$artifacts/inputs.json" "$artifacts/hardware.json" "$source" "$candidate_head" "$baseline_head" \
+python3 - "$artifacts/inputs.json" "$artifacts/hardware.json" "$source" "$interop_def" \
+    "$interop_include/benchmark_cinterop.h" "$candidate_head" "$baseline_head" \
     "$repetitions" "$warmups" "$compile_repetitions" "${run_prefix[*]}" "${common_flags[*]}" "${scenarios[*]}" <<'PY'
 import hashlib
 import json
@@ -239,8 +264,10 @@ from pathlib import Path
 import platform
 import sys
 
-inputs_path, hardware_path, source_path, candidate, baseline, repetitions, warmups, compile_repetitions, affinity, flags, scenarios = sys.argv[1:]
+inputs_path, hardware_path, source_path, interop_def_path, interop_header_path, candidate, baseline, repetitions, warmups, compile_repetitions, affinity, flags, scenarios = sys.argv[1:]
 source = Path(source_path)
+interop_def = Path(interop_def_path)
+interop_header = Path(interop_header_path)
 inputs = {
     "candidateCommit": candidate,
     "baselineCommit": baseline,
@@ -250,6 +277,10 @@ inputs = {
     "commonCompilerFlags": flags.split(),
     "fixture": "tools/arc/fixtures/benchmark.kt",
     "fixtureSha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+    "interopDefinition": "tools/arc/fixtures/benchmark_cinterop.def",
+    "interopDefinitionSha256": hashlib.sha256(interop_def.read_bytes()).hexdigest(),
+    "interopHeader": "tools/arc/fixtures/benchmark_cinterop.h",
+    "interopHeaderSha256": hashlib.sha256(interop_header.read_bytes()).hexdigest(),
     "repetitions": int(repetitions),
     "warmups": int(warmups),
     "compileRepetitions": int(compile_repetitions),

@@ -397,11 +397,43 @@ class ArcProfileTest(unittest.TestCase):
         for scenario in (
             "allocation", "destruction", "fields", "arrays", "strings", "virtual-dispatch",
             "call-arguments", "closures", "exceptions", "coroutines", "workers", "atomics",
-            "platform-c-interop", "bounded-cycles",
+            "platform-c-interop", "platform-c-leaf", "platform-c-dynamic-cstring", "bounded-cycles",
         ):
             self.assertIn(f'"{scenario}" ->', fixture)
         self.assertIn("operations=${result.operations}", fixture)
         self.assertIn("allocations=${result.allocations}", fixture)
+
+    def test_c_interop_benchmarks_separate_static_leaf_and_conversion_costs(self):
+        root = Path(__file__).parent
+        fixture = (root / "fixtures" / "benchmark.kt").read_text()
+        header = (root / "fixtures" / "benchmark_cinterop.h").read_text()
+        script = (root / "benchmark_compare.sh").read_text()
+
+        definition = (root / "fixtures" / "benchmark_cinterop.def").read_text()
+        self.assertIn('__attribute__((noinline)) size_t arc_benchmark_strlen_ptr', header)
+        self.assertIn('__attribute__((noinline)) size_t arc_benchmark_strlen_string', header)
+        self.assertIn('noStringConversion = arc_benchmark_strlen_ptr', definition)
+        self.assertIn('val phase = getpid() and 7', fixture)
+        self.assertIn('buffer[previousTerminator] = \'x\'.code.toByte()', fixture)
+        self.assertIn('buffer[terminator] = 0', fixture)
+        self.assertIn('arc_benchmark_strlen_ptr(pinned.addressOf(0))', fixture)
+        self.assertIn('check(checksum == 230_000_000L)', fixture)
+        self.assertIn('var value = "kotlin-native-arc-0"', fixture)
+        self.assertIn('if ((index and 1023) == 0) value =', fixture)
+        self.assertIn('arc_benchmark_strlen_string(value)', fixture)
+        self.assertIn('check(checksum == 34_200_000L)', fixture)
+        self.assertIn('prepare_interop baseline-strict "$baseline_compiler"', script)
+        self.assertIn('-library "$artifacts/$label-benchmark-cinterop.klib"', script)
+        self.assertIn('platform-c-interop platform-c-leaf platform-c-dynamic-cstring', script)
+        self.assertIn('"interopDefinitionSha256"', script)
+        self.assertIn('"interopHeaderSha256"', script)
+
+        count = 20_000_000
+        for phase in range(8):
+            full_cycles, remainder = divmod(count, 8)
+            checksum = full_cycles * sum(range(8, 16))
+            checksum += sum(8 + ((index + phase) & 7) for index in range(remainder))
+            self.assertEqual(230_000_000, checksum)
 
     def test_call_arguments_benchmark_exercises_stable_suffix_codegen(self):
         fixture = (Path(__file__).parent / "fixtures" / "benchmark.kt").read_text()
@@ -449,7 +481,9 @@ class ArcProfileTest(unittest.TestCase):
             "closuresWork": ("exceptionsWork", "600_000_000"),
             "coroutinesWork": ("workerLoop", "300_000"),
             "atomicsWork": ("platformCInteropWork", "40_000_000"),
-            "platformCInteropWork": ("boundedCyclesWork", "1_800_000"),
+            "platformCInteropWork": ("platformCLeafWork", "1_800_000"),
+            "platformCLeafWork": ("platformCDynamicCStringWork", "20_000_000"),
+            "platformCDynamicCStringWork": ("boundedCyclesWork", "1_800_000"),
         }
         for name, (next_name, count) in expected_counts.items():
             self.assertIn(f"val count = {count}", body(name, next_name), name)

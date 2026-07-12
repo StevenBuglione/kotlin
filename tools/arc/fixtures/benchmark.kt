@@ -12,6 +12,11 @@ import kotlin.coroutines.suspendCoroutine
 import kotlin.native.concurrent.AtomicInt
 import kotlin.native.concurrent.TransferMode
 import kotlin.native.concurrent.Worker
+import kotlinx.cinterop.addressOf
+import kotlinx.cinterop.usePinned
+import arc.benchmark.cinterop.arc_benchmark_strlen_ptr
+import arc.benchmark.cinterop.arc_benchmark_strlen_string
+import platform.posix.getpid
 import platform.posix.strlen
 
 private data class BenchResult(val checksum: Long, val operations: Long, val allocations: Long)
@@ -214,6 +219,41 @@ private fun platformCInteropWork(): BenchResult {
     return BenchResult(checksum, count.toLong(), 0)
 }
 
+private fun platformCLeafWork(): BenchResult {
+    val count = 20_000_000
+    val buffer = ByteArray(32) { 'x'.code.toByte() }
+    buffer[31] = 0
+    // Process identity is deliberately runtime-only, but it merely rotates eight equally
+    // frequent lengths. The checksum is therefore identical in every benchmark process.
+    val phase = getpid() and 7
+    var previousTerminator = 31
+    var checksum = 0L
+    buffer.usePinned { pinned ->
+        repeat(count) { index ->
+            buffer[previousTerminator] = 'x'.code.toByte()
+            val terminator = 8 + ((index + phase) and 7)
+            buffer[terminator] = 0
+            checksum += arc_benchmark_strlen_ptr(pinned.addressOf(0)).toLong()
+            previousTerminator = terminator
+        }
+    }
+    check(checksum == 230_000_000L)
+    return BenchResult(checksum, count.toLong(), 1)
+}
+
+private fun platformCDynamicCStringWork(): BenchResult {
+    val count = 1_800_000
+    var value = "kotlin-native-arc-0"
+    var checksum = 0L
+    repeat(count) { index ->
+        if ((index and 1023) == 0) value = "kotlin-native-arc-${index and 7}"
+        checksum += arc_benchmark_strlen_string(value).toLong()
+    }
+    check(checksum == 34_200_000L)
+    val replacements = (count + 1023) / 1024
+    return BenchResult(checksum, count.toLong(), count * 2L + replacements)
+}
+
 private fun boundedCyclesWork(): BenchResult {
     val count = 25_000
     val traversalsPerCycle = 10_240
@@ -249,6 +289,8 @@ fun main(args: Array<String>) {
         "workers" -> workersWork()
         "atomics" -> atomicsWork()
         "platform-c-interop" -> platformCInteropWork()
+        "platform-c-leaf" -> platformCLeafWork()
+        "platform-c-dynamic-cstring" -> platformCDynamicCStringWork()
         "bounded-cycles" -> boundedCyclesWork()
         else -> error("unknown scenario: $scenario")
     }

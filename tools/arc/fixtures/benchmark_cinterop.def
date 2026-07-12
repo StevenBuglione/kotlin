@@ -1,0 +1,4 @@
+package = arc.benchmark.cinterop
+headers = benchmark_cinterop.h
+headerFilter = benchmark_cinterop.h
+noStringConversion = arc_benchmark_strlen_ptr

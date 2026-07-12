@@ -61,8 +61,18 @@ The `workers` scenario launches four workers that each perform 40 million increm
 worker-local `AtomicInt`, for 160 million operations in total. Its logical allocation count is a
 conservative 16, including the four worker-local atomic objects.
 
+The C interop measurements are intentionally split so one compiler optimization cannot hide a
+different cost. `platform-c-interop` preserves the fixed ASCII Kotlin string case and measures
+static-CString lowering and folding. `platform-c-leaf` calls a no-inline C `strlen` pointer wrapper
+configured with cinterop's `noStringConversion`, using a
+single pinned byte buffer whose NUL terminator moves at runtime; a process-specific phase only
+rotates eight equally frequent lengths, so its checksum remains deterministic while the call cannot
+be constant-folded. `platform-c-dynamic-cstring` passes a periodically replaced mutable Kotlin
+String through a separate automatically converted no-inline wrapper and isolates repeated Kotlin
+String-to-CString conversion.
+
 For focused validation, `ARC_BENCH_SCENARIOS` accepts a comma-separated subset, for example
-`call-arguments,exceptions,platform-c-interop`. Commas keep the selection intact through the SSH
+`call-arguments,platform-c-leaf,platform-c-dynamic-cstring`. Commas keep the selection intact through the SSH
 command transport.
 
 Default hard gates are configurable through `ARC_BENCH_*` variables:
