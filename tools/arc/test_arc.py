@@ -224,6 +224,8 @@ class ArcProfileTest(unittest.TestCase):
         fixture = (Path(__file__).parent / "fixtures" / "benchmark.kt").read_text()
         script = (Path(__file__).parent / "benchmark_compare.sh").read_text()
         self.assertIn("private fun consumeArguments(first: Payload, marker: Int, second: Payload): Long", fixture)
+        self.assertIn("if (marker == Int.MIN_VALUE)", fixture)
+        self.assertNotIn("return consumeArguments(", fixture)
         self.assertIn("val count = 80_000_000", fixture)
         self.assertIn("var first = Payload(1)", fixture)
         self.assertIn("var second = Payload(7)", fixture)

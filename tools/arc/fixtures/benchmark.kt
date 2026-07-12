@@ -95,11 +95,14 @@ private fun virtualDispatchWork(): BenchResult {
     return BenchResult(checksum.toLong(), count.toLong(), 4)
 }
 
-// Deliberately large, with a cold recursive edge, so the optimized benchmark keeps a real direct
-// call boundary. The stable-suffix ARC optimization can then remove the owning argument copies
-// without the benchmark depending on a Kotlin inline function or a newer compiler annotation.
+// Deliberately large, with a cold nonrecursive edge, so the optimized benchmark keeps a real
+// direct call boundary while an otherwise call-free ARC frame remains eligible for elimination.
+// This input supersedes the recursive wave-02/wave-03 variant, whose frame was intentionally not
+// empty and therefore measured unavoidable frame cleanup rather than argument passing alone.
 private fun consumeArguments(first: Payload, marker: Int, second: Payload): Long {
-    if (marker == Int.MIN_VALUE) return consumeArguments(second, marker + 1, first)
+    if (marker == Int.MIN_VALUE) {
+        return second.value.toLong() - first.value.toLong() + marker.toLong()
+    }
     val left = first.value.toLong()
     val right = second.value.toLong()
     val position = marker.toLong()
