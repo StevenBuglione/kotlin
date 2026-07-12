@@ -1,0 +1,35 @@
+{
+  "baselineCommit": "3db61efe5e892bf27115f1ebcab957d903067ed4",
+  "baselineMemoryModel": "strict",
+  "baselineTag": "v1.9.10",
+  "candidateCommit": "57606354d5e6cefc02c60ee43b0abab19c0acff3",
+  "candidateMemoryModel": "arc",
+  "commonCompilerFlags": [
+    "-target",
+    "linux_x64",
+    "-opt"
+  ],
+  "compileRepetitions": 3,
+  "emittedCallsiteMethod": "Deterministic objdump -d -C call-target count for Update*Ref, Set/Zero/ReleaseHeapRef, LeaveFrame ownership operations, and Alloc*Instance operations; these are linked-binary callsites, not runtime event counts.",
+  "executionPrefix": [
+    "taskset",
+    "-c",
+    "0"
+  ],
+  "fixture": "tools/arc/fixtures/benchmark.kt",
+  "fixtureSha256": "1d981c3d860a20534c0660e80734bc18c036a060637239ec3a07cb5b0dfdc061",
+  "logicalAllocationDefinition": "Fixture-declared source-level object, array, closure, continuation, and exception creations per invocation.",
+  "optimizerEliminationGate": "Separate curated compiler corpus must eliminate at least 90%; linked-binary callsites are not used as its proxy.",
+  "repetitions": 9,
+  "scenarios": [
+    "call-arguments"
+  ],
+  "thresholdEnvironment": {
+    "ARC_BENCH_ENFORCE": "1",
+    "ARC_BENCH_RSS_LIMIT_PERCENT": "5",
+    "ARC_BENCH_SCENARIO_REGRESSION_PERCENT": "5",
+    "ARC_BENCH_SIZE_LIMIT_PERCENT": "5",
+    "ARC_BENCH_THROUGHPUT_FLOOR_PERCENT": "100"
+  },
+  "warmups": 1
+}
