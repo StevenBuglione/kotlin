@@ -20,23 +20,33 @@ class ArcOwnershipPlanningTest {
         val eligible = ArcBorrowedMutableReadEligibility(
             arcEnabled = true,
             debugInfoDisabled = true,
+            nonSuspendFunction = true,
             directKotlinCall = true,
-            lastExplicitArgument = true,
             mutableLocalReference = true,
             notCaptured = true,
             strongStorage = true,
             sideEffectFreeArgumentWrapper = true,
+            ownerNotAssignedInSuffix = true,
+            callFreeSuffix = true,
+            nonSuspendingSuffix = true,
+            nonThrowingSuffix = true,
+            linearControlFlowSuffix = true,
         )
 
         assertTrue(eligible.isAuthorized())
         assertFalse(eligible.copy(arcEnabled = false).isAuthorized())
         assertFalse(eligible.copy(debugInfoDisabled = false).isAuthorized())
+        assertFalse(eligible.copy(nonSuspendFunction = false).isAuthorized())
         assertFalse(eligible.copy(directKotlinCall = false).isAuthorized())
-        assertFalse(eligible.copy(lastExplicitArgument = false).isAuthorized())
         assertFalse(eligible.copy(mutableLocalReference = false).isAuthorized())
         assertFalse(eligible.copy(notCaptured = false).isAuthorized())
         assertFalse(eligible.copy(strongStorage = false).isAuthorized())
         assertFalse(eligible.copy(sideEffectFreeArgumentWrapper = false).isAuthorized())
+        assertFalse(eligible.copy(ownerNotAssignedInSuffix = false).isAuthorized())
+        assertFalse(eligible.copy(callFreeSuffix = false).isAuthorized())
+        assertFalse(eligible.copy(nonSuspendingSuffix = false).isAuthorized())
+        assertFalse(eligible.copy(nonThrowingSuffix = false).isAuthorized())
+        assertFalse(eligible.copy(linearControlFlowSuffix = false).isAuthorized())
     }
 
     @Test

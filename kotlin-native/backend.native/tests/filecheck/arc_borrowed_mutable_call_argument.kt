@@ -4,6 +4,22 @@ private class BorrowedPayload(val value: Int)
 
 private class BorrowedSink(val payload: BorrowedPayload)
 
+private class BorrowedReceiver {
+    fun consume(marker: Int, payload: BorrowedPayload): Int = marker + payload.value
+}
+
+private interface VirtualBorrowedReceiver {
+    fun consume(payload: BorrowedPayload, marker: Int): Int
+}
+
+private class VirtualBorrowedReceiverImpl : VirtualBorrowedReceiver {
+    override fun consume(payload: BorrowedPayload, marker: Int): Int = payload.value + marker
+}
+
+private class OtherVirtualBorrowedReceiverImpl : VirtualBorrowedReceiver {
+    override fun consume(payload: BorrowedPayload, marker: Int): Int = payload.value - marker
+}
+
 private class WeakPromotionHolder(owner: BorrowedPayload) {
     @ArcWeak
     var weak: BorrowedPayload? = owner
@@ -82,6 +98,128 @@ private fun borrowLoweredCheckNotNullArgument(): BorrowedSink {
     return sink
 }
 
+private fun consumeStablePrefix(first: BorrowedPayload, marker: Int, second: BorrowedPayload): Int =
+    first.value + marker + second.value
+
+private fun consumeThreeReferences(
+    first: BorrowedPayload,
+    second: BorrowedPayload,
+    third: BorrowedPayload,
+): Int = first.value + second.value + third.value
+
+// CHECK-LABEL: define internal i32 @"kfun:borrowStablePrefixArgument#internal"
+private fun borrowStablePrefixArgument(): Int {
+    var first = BorrowedPayload(10)
+    var second = BorrowedPayload(20)
+    // The first argument's suffix contains only a primitive constant and another local read. Both
+    // mutable slots remain +1 owners, so neither call argument needs an anonymous owning root.
+    // CHECK: [[PREFIX_FIRST:%[0-9]+]] = load %struct.ObjHeader*, %struct.ObjHeader** %first
+    // CHECK-NOT: call void @UpdateStackRef
+    // CHECK: [[PREFIX_SECOND:%[0-9]+]] = load %struct.ObjHeader*, %struct.ObjHeader** %second
+    // CHECK-NOT: call void @UpdateStackRef
+    // CHECK: {{call|invoke}} i32 @"kfun:consumeStablePrefix#internal"(%struct.ObjHeader* [[PREFIX_FIRST]], i32 7, %struct.ObjHeader* [[PREFIX_SECOND]])
+    val result = consumeStablePrefix(first, 7, second)
+    first = BorrowedPayload(30)
+    second = BorrowedPayload(40)
+    return result
+}
+
+// CHECK-LABEL: define internal i32 @"kfun:borrowStableMutableReceiver#internal"
+private fun borrowStableMutableReceiver(): Int {
+    var receiver = BorrowedReceiver()
+    var payload = BorrowedPayload(11)
+    // Dispatch receivers participate in the same documented argument evaluation order.
+    // CHECK: [[PREFIX_RECEIVER:%[0-9]+]] = load %struct.ObjHeader*, %struct.ObjHeader** %receiver
+    // CHECK-NOT: call void @UpdateStackRef
+    // CHECK: [[RECEIVER_PAYLOAD:%[0-9]+]] = load %struct.ObjHeader*, %struct.ObjHeader** %payload
+    // CHECK-NOT: call void @UpdateStackRef
+    // CHECK: {{call|invoke}} i32 @"kfun:BorrowedReceiver.consume#internal"(%struct.ObjHeader* [[PREFIX_RECEIVER]], i32 5, %struct.ObjHeader* [[RECEIVER_PAYLOAD]])
+    val result = receiver.consume(5, payload)
+    receiver = BorrowedReceiver()
+    payload = BorrowedPayload(12)
+    return result
+}
+
+// CHECK-LABEL: define internal i32 @"kfun:borrowAllStableReferenceArguments#internal"
+private fun borrowAllStableReferenceArguments(): Int {
+    var first = BorrowedPayload(1)
+    var second = BorrowedPayload(2)
+    var third = BorrowedPayload(3)
+    // CHECK: [[MULTI_FIRST:%[0-9]+]] = load %struct.ObjHeader*, %struct.ObjHeader** %first
+    // CHECK-NOT: call void @UpdateStackRef
+    // CHECK: [[MULTI_SECOND:%[0-9]+]] = load %struct.ObjHeader*, %struct.ObjHeader** %second
+    // CHECK-NOT: call void @UpdateStackRef
+    // CHECK: [[MULTI_THIRD:%[0-9]+]] = load %struct.ObjHeader*, %struct.ObjHeader** %third
+    // CHECK-NOT: call void @UpdateStackRef
+    // CHECK: {{call|invoke}} i32 @"kfun:consumeThreeReferences#internal"(%struct.ObjHeader* [[MULTI_FIRST]], %struct.ObjHeader* [[MULTI_SECOND]], %struct.ObjHeader* [[MULTI_THIRD]])
+    val result = consumeThreeReferences(first, second, third)
+    first = BorrowedPayload(4)
+    second = BorrowedPayload(5)
+    third = BorrowedPayload(6)
+    return result
+}
+
+// CHECK-LABEL: define internal i32 @"kfun:retainBeforeSuffixReassignment#internal"
+private fun retainBeforeSuffixReassignment(): Int {
+    var owner = BorrowedPayload(1)
+    var other = BorrowedPayload(3)
+    // Argument evaluation must preserve the old owner even though a later inline suffix replaces
+    // its owning slot before the target call.
+    // CHECK: [[REASSIGNED_OLD:%[0-9]+]] = load %struct.ObjHeader*, %struct.ObjHeader** %owner
+    // CHECK: call void @UpdateStackRef(%struct.ObjHeader** %{{[0-9]+}}, %struct.ObjHeader* [[REASSIGNED_OLD]])
+    // CHECK: {{call|invoke}} i32 @"kfun:consumeStablePrefix#internal"
+    val result = consumeStablePrefix(owner, run {
+        owner = BorrowedPayload(2)
+        7
+    }, other)
+    return result + owner.value
+}
+
+private fun consumeCapturedOwner(owner: BorrowedPayload, mutate: () -> Unit): Int {
+    mutate()
+    return owner.value
+}
+
+// CHECK-LABEL: define internal i32 @"kfun:retainCapturedMutableArgument#internal"
+private fun retainCapturedMutableArgument(): Int {
+    var owner = BorrowedPayload(1)
+    val mutate = { owner = BorrowedPayload(2) }
+    // The callee clears the captured owner before reading its +0 parameter. The ordinary argument
+    // promotion is therefore required to keep the old object alive.
+    // CHECK: [[CAPTURED_OLD:%[0-9]+]] = load %struct.ObjHeader*, %struct.ObjHeader** {{%[0-9]+}}
+    // CHECK: call void @UpdateStackRef(%struct.ObjHeader** %{{[0-9]+}}, %struct.ObjHeader* [[CAPTURED_OLD]])
+    // CHECK: {{call|invoke}} i32 @"kfun:consumeCapturedOwner#internal"
+    val oldValue = consumeCapturedOwner(owner, mutate)
+    return oldValue * 10 + owner.value
+}
+
+// CHECK-LABEL: define internal i32 @"kfun:retainVirtualPrefixArgument#internal"
+private fun retainVirtualPrefixArgument(receiver: VirtualBorrowedReceiver): Int {
+    var owner = BorrowedPayload(9)
+    // A virtual target has no fixed direct-call ownership boundary in this first slice.
+    // CHECK: [[VIRTUAL_OWNER:%[0-9]+]] = load %struct.ObjHeader*, %struct.ObjHeader** %owner
+    // CHECK: call void @UpdateStackRef(%struct.ObjHeader** %{{[0-9]+}}, %struct.ObjHeader* [[VIRTUAL_OWNER]])
+    val result = receiver.consume(owner, 4)
+    owner = BorrowedPayload(10)
+    return result
+}
+
+// CHECK-LABEL: define internal i32 @"kfun:retainAcrossThrowingSuffix#internal"
+private fun retainAcrossThrowingSuffix(shouldThrow: Boolean): Int {
+    var owner = BorrowedPayload(8)
+    var other = BorrowedPayload(2)
+    return try {
+        // Explicit exceptional control flow is a barrier until the ownership planner models every
+        // suffix edge explicitly.
+        // CHECK: [[THROW_OWNER:%[0-9]+]] = load %struct.ObjHeader*, %struct.ObjHeader** %owner
+        // CHECK: call void @UpdateStackRef(%struct.ObjHeader** %{{[0-9]+}}, %struct.ObjHeader* [[THROW_OWNER]])
+        // CHECK: {{call|invoke}} i32 @"kfun:consumeStablePrefix#internal"
+        consumeStablePrefix(owner, if (shouldThrow) throw IllegalStateException("suffix") else 6, other)
+    } catch (_: IllegalStateException) {
+        owner.value
+    }
+}
+
 // CHECK-LABEL: define internal %struct.ObjHeader* @"kfun:retainForArbitraryArgumentBlock#internal"
 private fun retainForArbitraryArgumentBlock(): BorrowedSink {
     var owner = BorrowedPayload(1)
@@ -143,6 +281,15 @@ fun main() {
     check(retainReturnedGuaranteedAlias(guaranteedOwner) === guaranteedOwner)
     check(borrowLastMutableArgument().payload.value == 42)
     check(borrowLoweredCheckNotNullArgument().payload.value == 42)
+    check(borrowStablePrefixArgument() == 37)
+    check(borrowStableMutableReceiver() == 16)
+    check(borrowAllStableReferenceArguments() == 6)
+    check(retainBeforeSuffixReassignment() == 13)
+    check(retainCapturedMutableArgument() == 12)
+    check(retainVirtualPrefixArgument(VirtualBorrowedReceiverImpl()) == 13)
+    check(retainVirtualPrefixArgument(OtherVirtualBorrowedReceiverImpl()) == 5)
+    check(retainAcrossThrowingSuffix(false) == 16)
+    check(retainAcrossThrowingSuffix(true) == 8)
     check(retainForArbitraryArgumentBlock().payload.value == 2)
     val promotionOwner = BorrowedPayload(42)
     val promotionHolder = WeakPromotionHolder(promotionOwner)
