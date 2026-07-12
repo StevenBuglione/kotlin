@@ -101,6 +101,12 @@ profile_is_running() {
     [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null
 }
 
+canonical_command() {
+    # Persist a shell-escaped, single-line representation so repeated starts can
+    # prove they refer to the exact same argv, including environment assignments.
+    printf '%q ' "$@"
+}
+
 check_no_active_runs() {
     local state profile
     [[ -d "$repo/.arc-runs" ]] || return 0
@@ -191,7 +197,13 @@ case "$action" in
         (( workers >= 1 && workers <= 28 )) || fail "worker count must be between 1 and 28"
         [[ $# -gt 0 ]] || fail "no build command supplied"
         state=$(profile_dir "$profile")
+        requested_command=$(canonical_command "$@")
         if profile_is_running "$profile"; then
+            [[ -f "$state/command" ]] ||
+                fail "profile $profile is running without stored command identity; refusing to reuse it"
+            stored_command=$(<"$state/command")
+            [[ "$stored_command" == "$requested_command" ]] ||
+                fail "profile $profile is already running with a different command; stored command: $stored_command; requested command: $requested_command"
             echo "profile=$profile state=running pid=$(cat "$state/pid")"
             exit 0
         fi
@@ -205,8 +217,7 @@ case "$action" in
         runner="$state/runner.sh"
         : >"$log"
         date --iso-8601=seconds >"$state/started-at"
-        printf '%q ' "$@" >"$state/command"
-        printf '\n' >>"$state/command"
+        printf '%s\n' "$requested_command" >"$state/command"
         write_runner "$state" "$log" "$state/exit-status" "$runner" "$profile" "$@"
         nohup bash "$runner" </dev/null >/dev/null 2>&1 &
         pid=$!

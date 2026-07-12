@@ -128,6 +128,35 @@ class ArcProfileTest(unittest.TestCase):
         self.assertGreaterEqual(script.count("acquire_shared_host_lock"), 3)
         self.assertIn("mv %q %q", script)
 
+    def test_active_remote_profile_reuse_requires_exact_canonical_command(self):
+        script = (Path(__file__).parent / "remote.sh").read_text()
+        canonicalization = "requested_command=$(canonical_command \"$@\")"
+        running_check = 'if profile_is_running "$profile"; then'
+        identity_check = '[[ "$stored_command" == "$requested_command" ]] ||'
+
+        self.assertIn("canonical_command()", script)
+        self.assertIn("printf '%q ' \"$@\"", script)
+        self.assertIn(canonicalization, script)
+        self.assertIn('stored_command=$(<"$state/command")', script)
+        self.assertIn(identity_check, script)
+        self.assertIn(
+            "profile $profile is already running with a different command; "
+            "stored command: $stored_command; requested command: $requested_command",
+            script,
+        )
+        self.assertLess(script.index(canonicalization), script.index(running_check, script.index('    start)')))
+        self.assertLess(script.index(identity_check), script.index('echo "profile=$profile state=running'))
+        self.assertIn("printf '%s\\n' \"$requested_command\" >\"$state/command\"", script)
+
+    def test_finished_remote_profile_still_resets_command_identity(self):
+        script = (Path(__file__).parent / "remote.sh").read_text()
+        start_case = script.split("    start)", 1)[1].split("    follow)", 1)[0]
+        self.assertIn('if [[ -f "$state/pid" && ! -f "$state/exit-status" ]]; then', start_case)
+        reset_start = 'rm -f "$state/build.log" "$state/pid" "$state/exit-status" "$state/exit-status.tmp"'
+        self.assertIn(reset_start, start_case)
+        self.assertIn('"$state/started-at" "$state/command" "$state/runner.sh"', start_case)
+        self.assertLess(start_case.index(reset_start), start_case.index("printf '%s\\n' \"$requested_command\""))
+
     def test_remote_runner_allows_only_exact_managed_paths(self):
         script = (Path(__file__).parent / "remote.sh").read_text()
         self.assertIn('resolved_repo=$(readlink -m -- "$repo")', script)
