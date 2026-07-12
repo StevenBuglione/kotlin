@@ -95,6 +95,49 @@ private fun virtualDispatchWork(): BenchResult {
     return BenchResult(checksum.toLong(), count.toLong(), 4)
 }
 
+// Deliberately large, with a cold recursive edge, so the optimized benchmark keeps a real direct
+// call boundary. The stable-suffix ARC optimization can then remove the owning argument copies
+// without the benchmark depending on a Kotlin inline function or a newer compiler annotation.
+private fun consumeArguments(first: Payload, marker: Int, second: Payload): Long {
+    if (marker == Int.MIN_VALUE) return consumeArguments(second, marker + 1, first)
+    val left = first.value.toLong()
+    val right = second.value.toLong()
+    val position = marker.toLong()
+    return when (marker and 15) {
+        0 -> left + position + right
+        1 -> left * 2 + position + right
+        2 -> left * 3 + position + right
+        3 -> left * 4 + position + right
+        4 -> left * 5 + position + right
+        5 -> left * 6 + position + right
+        6 -> left * 7 + position + right
+        7 -> left * 8 + position + right
+        8 -> left * 9 + position + right
+        9 -> left * 10 + position + right
+        10 -> left * 11 + position + right
+        11 -> left * 12 + position + right
+        12 -> left * 13 + position + right
+        13 -> left * 14 + position + right
+        14 -> left * 15 + position + right
+        15 -> left * 16 + position + right
+        else -> error("unreachable argument selector")
+    }
+}
+
+private fun callArgumentsWork(): BenchResult {
+    val count = 20_000_000
+    var first = Payload(1)
+    var second = Payload(7)
+    var checksum = 0L
+    repeat(count) { index ->
+        if ((index and 0x3fff) == 0) first = Payload(index)
+        checksum += consumeArguments(first, index, second)
+    }
+    check(checksum == 1_898_607_728_141_440L)
+    val replacements = (count + 0x3fff) / 0x4000
+    return BenchResult(checksum, count.toLong(), 2L + replacements)
+}
+
 private fun closuresWork(): BenchResult {
     val count = 1_000_000
     var checksum = 0L
@@ -189,6 +232,7 @@ fun main(args: Array<String>) {
         "arrays" -> arraysWork()
         "strings" -> stringsWork()
         "virtual-dispatch" -> virtualDispatchWork()
+        "call-arguments" -> callArgumentsWork()
         "closures" -> closuresWork()
         "exceptions" -> exceptionsWork()
         "coroutines" -> coroutinesWork()

@@ -161,10 +161,10 @@ class ArcProfileTest(unittest.TestCase):
         self.assertIn('validate_provenance "$baseline_dist/.arc-benchmark-provenance.json"', script)
 
     def test_benchmark_profile_forwards_only_declared_measurement_settings(self):
-        with patch.dict(os.environ, {"ARC_BENCH_SCENARIOS": "allocation,fields", "UNRELATED": "no"}, clear=True):
+        with patch.dict(os.environ, {"ARC_BENCH_SCENARIOS": "call-arguments,fields", "UNRELATED": "no"}, clear=True):
             command = arc.profile_command("arc-bench")
         self.assertEqual("env", command[0])
-        self.assertIn("ARC_BENCH_SCENARIOS=allocation,fields", command)
+        self.assertIn("ARC_BENCH_SCENARIOS=call-arguments,fields", command)
         self.assertNotIn("UNRELATED=no", command)
         self.assertEqual(["bash", "tools/arc/benchmark_compare.sh"], command[-2:])
 
@@ -179,12 +179,38 @@ class ArcProfileTest(unittest.TestCase):
         fixture = (Path(__file__).parent / "fixtures" / "benchmark.kt").read_text()
         for scenario in (
             "allocation", "destruction", "fields", "arrays", "strings", "virtual-dispatch",
-            "closures", "exceptions", "coroutines", "workers", "atomics", "platform-c-interop",
-            "bounded-cycles",
+            "call-arguments", "closures", "exceptions", "coroutines", "workers", "atomics",
+            "platform-c-interop", "bounded-cycles",
         ):
             self.assertIn(f'"{scenario}" ->', fixture)
         self.assertIn("operations=${result.operations}", fixture)
         self.assertIn("allocations=${result.allocations}", fixture)
+
+    def test_call_arguments_benchmark_exercises_stable_suffix_codegen(self):
+        fixture = (Path(__file__).parent / "fixtures" / "benchmark.kt").read_text()
+        script = (Path(__file__).parent / "benchmark_compare.sh").read_text()
+        self.assertIn("private fun consumeArguments(first: Payload, marker: Int, second: Payload): Long", fixture)
+        self.assertIn("val count = 20_000_000", fixture)
+        self.assertIn("var first = Payload(1)", fixture)
+        self.assertIn("var second = Payload(7)", fixture)
+        self.assertIn("if ((index and 0x3fff) == 0) first = Payload(index)", fixture)
+        self.assertIn("checksum += consumeArguments(first, index, second)", fixture)
+        self.assertIn("check(checksum == 1_898_607_728_141_440L)", fixture)
+        self.assertIn("2L + replacements", fixture)
+        self.assertIn("virtual-dispatch call-arguments closures", script)
+        self.assertIn('${scenario_selection//,/ }', script)
+
+        count = 20_000_000
+        block = 0x4000
+        full_blocks, remainder = divmod(count, block)
+        full_coefficients = sum(range(1, 17)) * (block // 16)
+        remainder_coefficients = sum((index & 15) + 1 for index in range(remainder))
+        payload_component = sum(
+            (block_index * block) * full_coefficients for block_index in range(full_blocks)
+        ) + (full_blocks * block) * remainder_coefficients
+        checksum = count * (count - 1) // 2 + 7 * count + payload_component
+        self.assertEqual(1_898_607_728_141_440, checksum)
+        self.assertEqual(1_223, 2 + (count + block - 1) // block)
 
     def test_benchmark_callsite_counter_counts_only_emitted_calls(self):
         disassembly = """

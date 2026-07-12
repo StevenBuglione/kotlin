@@ -159,7 +159,7 @@ done
 finalize_compile baseline-strict "$baseline_compiler" strict "$baseline_head"
 finalize_compile candidate-arc "$candidate_compiler" arc "$candidate_head"
 
-default_scenarios='allocation destruction fields arrays strings virtual-dispatch closures exceptions coroutines workers atomics platform-c-interop bounded-cycles'
+default_scenarios='allocation destruction fields arrays strings virtual-dispatch call-arguments closures exceptions coroutines workers atomics platform-c-interop bounded-cycles'
 scenario_selection=${ARC_BENCH_SCENARIOS:-$default_scenarios}
 read -r -a scenarios <<<"${scenario_selection//,/ }"
 [[ ${#scenarios[@]} -gt 0 ]] || { echo "ARC_BENCH_SCENARIOS selected no scenarios" >&2; exit 2; }

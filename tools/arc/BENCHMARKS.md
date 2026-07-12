@@ -39,9 +39,16 @@ Compilation order also alternates and the committed static metric is
 the median of three compile repetitions by default; raw compilation repetitions remain in
 `compile-raw.tsv`.
 
+The `call-arguments` scenario is the focused emitted-code benchmark for stable-suffix borrowing.
+It performs 20 million direct calls with two mutable `Payload` references around a primitive index,
+replacing the first reference every 16,384 iterations. Its deliberately large consumer and cold
+recursive edge keep a meaningful call boundary without compiler-version-specific annotations. The
+checksum covers both object values and the argument position; the logical allocation count is the
+two initial payloads plus the exact number of periodic replacements.
+
 For focused validation, `ARC_BENCH_SCENARIOS` accepts a comma-separated subset, for example
-`allocation,exceptions,platform-c-interop`. Commas keep the selection intact through the SSH command
-transport.
+`call-arguments,exceptions,platform-c-interop`. Commas keep the selection intact through the SSH
+command transport.
 
 Default hard gates are configurable through `ARC_BENCH_*` variables:
 
