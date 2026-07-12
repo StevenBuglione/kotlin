@@ -75,10 +75,22 @@ if [[ -n "${ARC_FIXTURE_SANITIZER:-}" ]]; then
     fi
 fi
 
+runtime_command=("$executable")
+if [[ "${ARC_FIXTURE_SANITIZER:-}" == thread && "$(uname -s)" == Linux ]]; then
+    # LLVM 11 TSan needs its fixed shadow-memory range kept clear on modern
+    # Linux kernels. Scope the ASLR change to the instrumented child process.
+    if ! command -v setarch >/dev/null || ! setarch "$(uname -m)" -R true; then
+        echo "LLVM 11 TSan requires setarch permission to reserve shadow memory" >&2
+        exit 1
+    fi
+    echo "TSAN_ASLR_WORKAROUND=setarch_$(uname -m)_-R"
+    runtime_command=(setarch "$(uname -m)" -R "$executable")
+fi
+
 if [[ "$profile" == unowned-death ]]; then
     expected_diagnostic='Uncaught Kotlin exception: kotlin.IllegalStateException: attempted to access an expired @ArcUnowned reference'
     set +e
-    "$executable" >"$artifacts/runtime.log" 2>&1
+    "${runtime_command[@]}" >"$artifacts/runtime.log" 2>&1
     exit_code=$?
     set -e
     cat "$artifacts/runtime.log"
@@ -95,7 +107,7 @@ if [[ "$profile" == unowned-death ]]; then
     echo "ARC_UNOWNED_DEATH_OK exitCode=$exit_code"
 elif [[ "$profile" == stress ]]; then
     command -v /usr/bin/time >/dev/null || { echo "/usr/bin/time is required for the ARC RSS bound" >&2; exit 1; }
-    /usr/bin/time -f '%M' -o "$artifacts/max-rss-kib" "$executable"
+    /usr/bin/time -f '%M' -o "$artifacts/max-rss-kib" "${runtime_command[@]}"
     max_rss_kib=$(cat "$artifacts/max-rss-kib")
     limit_kib=${ARC_STRESS_MAX_RSS_KIB:-524288}
     [[ "$max_rss_kib" =~ ^[0-9]+$ ]] || { echo "invalid maximum RSS: $max_rss_kib" >&2; exit 1; }
@@ -105,5 +117,5 @@ elif [[ "$profile" == stress ]]; then
     }
     echo "ARC_STRESS_MAX_RSS_KIB=$max_rss_kib"
 else
-    "$executable"
+    "${runtime_command[@]}"
 fi

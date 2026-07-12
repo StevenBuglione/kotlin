@@ -12,6 +12,7 @@ state=${ARC_RUN_STATE_DIR:?ARC_RUN_STATE_DIR is set by the durable remote runner
 dist=${ARC_DIST_DIR:-$root/kotlin-native/dist}
 compiler="$dist/bin/konanc"
 source="$root/tools/arc/fixtures/sanitizer.kt"
+race_source="$root/tools/arc/fixtures/tsan_race.kt"
 
 [[ -x "$compiler" ]] || {
     echo "ARC sanitizer probe requires a built Kotlin/Native distribution; run remote-dist first" >&2
@@ -114,6 +115,10 @@ if ! grep -Eq "$symbol_regex" "$symbols"; then
     publish_result UNSUPPORTED no_instrumentation_symbols
     exit 77
 fi
+if [[ "$requested" == tsan ]] && ! grep -Eq '__interceptor_(malloc|pthread_create)' "$symbols"; then
+    publish_result FAIL tsan_interceptors_missing_from_linked_executable
+    exit 1
+fi
 if [[ "$requested" == ubsan ]]; then
     if ! command -v objdump >/dev/null; then
         publish_result FAIL objdump_unavailable
@@ -126,7 +131,21 @@ if [[ "$requested" == ubsan ]]; then
     fi
 fi
 
-"${runtime_env[@]}" "$executable" >"$runtime_log" 2>&1
+runtime_command=("${runtime_env[@]}" "$executable")
+if [[ "$requested" == tsan && "$(uname -s)" == Linux ]]; then
+    # The LLVM 11 TSan runtime reserves a fixed shadow-memory range that can
+    # collide with high-entropy ASLR on modern Linux kernels. Disabling ASLR
+    # for this diagnostic process is the upstream-compatible workaround; it
+    # does not affect the compiler output or non-TSan programs.
+    if ! command -v setarch >/dev/null || ! setarch "$(uname -m)" -R true; then
+        publish_result FAIL tsan_aslr_compatibility_unavailable
+        exit 1
+    fi
+    echo "TSAN_ASLR_WORKAROUND=setarch_$(uname -m)_-R"
+    runtime_command=(setarch "$(uname -m)" -R "${runtime_command[@]}")
+fi
+
+"${runtime_command[@]}" >"$runtime_log" 2>&1
 runtime_status=$?
 cat "$runtime_log"
 if [[ $runtime_status -ne 0 ]]; then
@@ -138,5 +157,45 @@ if ! grep -Fq ARC_SANITIZER_OK "$runtime_log"; then
     exit 1
 fi
 
-publish_result PASS instrumented_compile_and_runtime_passed
+if [[ "$requested" == tsan ]]; then
+    race_output="$artifacts/arc-tsan-race"
+    race_executable="$race_output.kexe"
+    race_compiler_log="$artifacts/race-compiler.log"
+    race_runtime_log="$artifacts/race-runtime.log"
+    "$compiler" "$race_source" -target linux_x64 -memory-model arc -opt \
+        "$compiler_option" -o "$race_output" >"$race_compiler_log" 2>&1
+    race_compile_status=$?
+    cat "$race_compiler_log"
+    if [[ $race_compile_status -ne 0 ]]; then
+        publish_result FAIL intentional_race_fixture_compile_failed
+        exit 1
+    fi
+    if [[ ! -x "$race_executable" && -x "$race_output" ]]; then
+        race_executable=$race_output
+    fi
+    if [[ ! -x "$race_executable" ]]; then
+        publish_result FAIL intentional_race_fixture_missing
+        exit 1
+    fi
+
+    setarch "$(uname -m)" -R env \
+        'TSAN_OPTIONS=halt_on_error=1:history_size=7:second_deadlock_stack=1' \
+        "$race_executable" >"$race_runtime_log" 2>&1
+    race_runtime_status=$?
+    cat "$race_runtime_log"
+    if [[ $race_runtime_status -eq 0 ]]; then
+        publish_result FAIL intentional_data_race_was_not_detected
+        exit 1
+    fi
+    if ! grep -Fq 'WARNING: ThreadSanitizer: data race' "$race_runtime_log"; then
+        publish_result FAIL intentional_race_failed_without_tsan_report
+        exit 1
+    fi
+fi
+
+if [[ "$requested" == tsan ]]; then
+    publish_result PASS instrumented_runtime_and_race_detection_passed_with_aslr_disabled
+else
+    publish_result PASS instrumented_compile_and_runtime_passed
+fi
 exit 0

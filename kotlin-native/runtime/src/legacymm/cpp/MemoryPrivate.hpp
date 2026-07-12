@@ -100,12 +100,23 @@ struct ContainerHeader {
   }
 #endif
 
+  inline uint32_t refCountBits() const {
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+    // ARC objects may be retained and released concurrently even when their
+    // immutable container tag is all the caller needs. Reading the combined
+    // tag/count word non-atomically would race with those count updates.
+    return __atomic_load_n(&refCount_, __ATOMIC_RELAXED);
+#else
+    return refCount_;
+#endif
+  }
+
   inline bool local() const {
-      return (refCount_ & CONTAINER_TAG_MASK) == CONTAINER_TAG_LOCAL;
+      return (refCountBits() & CONTAINER_TAG_MASK) == CONTAINER_TAG_LOCAL;
   }
 
   inline bool frozen() const {
-    return (refCount_ & CONTAINER_TAG_MASK) == CONTAINER_TAG_FROZEN;
+    return (refCountBits() & CONTAINER_TAG_MASK) == CONTAINER_TAG_FROZEN;
   }
 
   inline void freeze() {
@@ -117,7 +128,7 @@ struct ContainerHeader {
   }
 
   inline bool shared() const {
-    return (refCount_ & CONTAINER_TAG_MASK) == CONTAINER_TAG_SHARED;
+    return (refCountBits() & CONTAINER_TAG_MASK) == CONTAINER_TAG_SHARED;
   }
 
   inline bool shareable() const {
@@ -125,12 +136,12 @@ struct ContainerHeader {
   }
 
   inline bool stack() const {
-    return (refCount_ & CONTAINER_TAG_MASK) == CONTAINER_TAG_STACK;
+    return (refCountBits() & CONTAINER_TAG_MASK) == CONTAINER_TAG_STACK;
   }
 
   inline int refCount() const {
 #if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
-    return static_cast<int>(refCount_ & CONTAINER_TAG_ARC_REFCOUNT_MASK) >> CONTAINER_TAG_SHIFT;
+    return static_cast<int>(refCountBits() & CONTAINER_TAG_ARC_REFCOUNT_MASK) >> CONTAINER_TAG_SHIFT;
 #else
     return (int)refCount_ >> CONTAINER_TAG_SHIFT;
 #endif
@@ -138,10 +149,13 @@ struct ContainerHeader {
 
   inline void setRefCount(unsigned refCount) {
 #if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
-    RuntimeCheck((refCount_ & CONTAINER_TAG_ARC_DEALLOCATING) == 0, "Cannot reset a deallocating ARC object");
+    uint32_t current = refCountBits();
+    RuntimeCheck((current & CONTAINER_TAG_ARC_DEALLOCATING) == 0, "Cannot reset a deallocating ARC object");
     RuntimeCheck(refCount <= (CONTAINER_TAG_ARC_REFCOUNT_MASK >> CONTAINER_TAG_SHIFT), "ARC reference count overflow");
-#endif
+    __atomic_store_n(&refCount_, (current & CONTAINER_TAG_MASK) | (refCount << CONTAINER_TAG_SHIFT), __ATOMIC_RELAXED);
+#else
     refCount_ = tag() | (refCount << CONTAINER_TAG_SHIFT);
+#endif
   }
 
 #if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
@@ -251,10 +265,11 @@ struct ContainerHeader {
         uint32_t desired = count == 1
                 ? ((current - CONTAINER_TAG_INCREMENT) | CONTAINER_TAG_ARC_DEALLOCATING)
                 : current - CONTAINER_TAG_INCREMENT;
-        if (__atomic_compare_exchange_n(&refCount_, &current, desired, false, __ATOMIC_RELEASE, __ATOMIC_RELAXED)) {
-          // The final releaser must observe all writes sequenced before earlier
-          // releases in this reference count's release sequence before teardown.
-          if (count == 1) __atomic_thread_fence(__ATOMIC_ACQUIRE);
+        // A final release consumes the release sequence directly. Besides making
+        // the destruction ordering explicit, using an acquire RMW lets race
+        // detectors see that earlier users of the object happen before free().
+        int successMemoryOrder = count == 1 ? __ATOMIC_ACQ_REL : __ATOMIC_RELEASE;
+        if (__atomic_compare_exchange_n(&refCount_, &current, desired, false, successMemoryOrder, __ATOMIC_RELAXED)) {
           return static_cast<int>(count - 1);
         }
       }
@@ -291,7 +306,7 @@ struct ContainerHeader {
   }
 
   inline unsigned tag() const {
-    return refCount_ & CONTAINER_TAG_MASK;
+    return refCountBits() & CONTAINER_TAG_MASK;
   }
 
   inline unsigned objectCount() const {

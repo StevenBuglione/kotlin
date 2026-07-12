@@ -17,4 +17,12 @@ class KonanTargetTest {
             KonanTarget.predefinedTargets.values.toSet()
         )
     }
+
+    @Test
+    fun linuxX64SupportsAddressAndThreadSanitizers() {
+        assertEquals(
+            listOf(SanitizerKind.ADDRESS, SanitizerKind.THREAD),
+            KonanTarget.LINUX_X64.supportedSanitizers()
+        )
+    }
 }
