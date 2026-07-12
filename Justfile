@@ -54,8 +54,10 @@ remote-arc-sanitize-ubsan: remote-snapshot
 remote-arc-sanitize-tsan: remote-snapshot
     {{python}} tools/arc/arc.py run arc-sanitize-tsan
 
-remote-arc-bench: remote-snapshot
-    {{python}} tools/arc/arc.py run arc-bench
+remote-arc-bench wave: remote-snapshot
+    {{python}} tools/arc/arc.py run arc-bench-candidate
+    {{python}} tools/arc/arc.py run arc-bench-baseline
+    status=0; {{python}} tools/arc/arc.py run arc-bench || status=$?; {{python}} tools/arc/arc.py benchmark-bundle {{wave}}; exit "$status"
 
 remote-status profile:
     {{python}} tools/arc/arc.py status {{profile}}
@@ -87,6 +89,11 @@ ci2-sanity: ci2-snapshot
 
 ci2-full: ci2-snapshot
     {{python}} tools/arc/arc.py --machine ci2 run full
+
+ci2-arc-bench wave: ci2-snapshot
+    {{python}} tools/arc/arc.py --machine ci2 run arc-bench-candidate
+    {{python}} tools/arc/arc.py --machine ci2 run arc-bench-baseline
+    status=0; {{python}} tools/arc/arc.py --machine ci2 run arc-bench || status=$?; {{python}} tools/arc/arc.py --machine ci2 benchmark-bundle {{wave}}; exit "$status"
 
 ci2-status profile:
     {{python}} tools/arc/arc.py --machine ci2 status {{profile}}

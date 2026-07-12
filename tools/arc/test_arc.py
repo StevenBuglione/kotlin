@@ -2,12 +2,16 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
+from contextlib import redirect_stderr, redirect_stdout
+import io
 import unittest
 from unittest.mock import patch
 
 
 sys.path.insert(0, str(Path(__file__).parent))
 import arc
+import benchmark_report
 import no_collector_symbols
 
 
@@ -135,9 +139,128 @@ class ArcProfileTest(unittest.TestCase):
                 arc.profile_command("arc-sanitize-tsan"),
             )
 
-    def test_benchmark_compares_arc_with_strict(self):
+    def test_benchmark_profiles_prepare_distinct_candidate_and_tag_baseline(self):
         with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(
+                ["bash", "tools/arc/benchmark_candidate.sh"],
+                arc.profile_command("arc-bench-candidate"),
+            )
+            self.assertEqual(
+                ["bash", "tools/arc/benchmark_baseline.sh"],
+                arc.profile_command("arc-bench-baseline"),
+            )
             self.assertEqual(["bash", "tools/arc/benchmark_compare.sh"], arc.profile_command("arc-bench"))
+
+    def test_benchmark_compiler_construction_never_uses_candidate_strict(self):
+        script = (Path(__file__).parent / "benchmark_compare.sh").read_text()
+        self.assertIn('finalize_compile baseline-strict "$baseline_compiler" strict "$baseline_head"', script)
+        self.assertIn('finalize_compile candidate-arc "$candidate_compiler" arc "$candidate_head"', script)
+        self.assertNotIn('compile_one candidate-arc "$candidate_compiler" strict', script)
+        self.assertIn('common_flags=(-target linux_x64 -opt)', script)
+        self.assertIn('validate_provenance "$candidate_dist/.arc-benchmark-provenance.json"', script)
+        self.assertIn('validate_provenance "$baseline_dist/.arc-benchmark-provenance.json"', script)
+
+    def test_benchmark_profile_forwards_only_declared_measurement_settings(self):
+        with patch.dict(os.environ, {"ARC_BENCH_SCENARIOS": "allocation,fields", "UNRELATED": "no"}, clear=True):
+            command = arc.profile_command("arc-bench")
+        self.assertEqual("env", command[0])
+        self.assertIn("ARC_BENCH_SCENARIOS=allocation,fields", command)
+        self.assertNotIn("UNRELATED=no", command)
+        self.assertEqual(["bash", "tools/arc/benchmark_compare.sh"], command[-2:])
+
+    def test_benchmark_baseline_is_pinned_and_separate(self):
+        script = (Path(__file__).parent / "benchmark_baseline.sh").read_text()
+        self.assertIn("3db61efe5e892bf27115f1ebcab957d903067ed4", script)
+        self.assertIn('[[ "$baseline" != "$root" ]]', script)
+        self.assertIn("worktree add --detach", script)
+        self.assertIn("codex-arc-benchmark-baseline-v1.9.10", script)
+
+    def test_benchmark_fixture_covers_required_scenarios(self):
+        fixture = (Path(__file__).parent / "fixtures" / "benchmark.kt").read_text()
+        for scenario in (
+            "allocation", "destruction", "fields", "arrays", "strings", "virtual-dispatch",
+            "closures", "exceptions", "coroutines", "workers", "atomics", "platform-c-interop",
+            "bounded-cycles",
+        ):
+            self.assertIn(f'"{scenario}" ->', fixture)
+        self.assertIn("operations=${result.operations}", fixture)
+        self.assertIn("allocations=${result.allocations}", fixture)
+
+    def test_benchmark_callsite_counter_counts_only_emitted_calls(self):
+        disassembly = """
+0000 <UpdateStackRef>:
+  10: callq 100 <UpdateStackRef>
+  20: call 200 <SetHeapRef>
+  30: call 300 <LeaveFrameArc>
+  40: lea 400 <ReleaseHeapRef>
+  50: call 500 <AllocArrayInstance>
+"""
+        self.assertEqual((2, 3), benchmark_report.ownership_calls(disassembly))
+        self.assertEqual((2, 3, 1), benchmark_report.emitted_calls(disassembly))
+
+    def test_benchmark_compile_and_callsites_are_reported_but_not_hard_gates(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "raw.tsv").write_text(
+                "model\tscenario\trepetition\telapsed_seconds\tthroughput_ops_per_second\tmax_rss_kib\toperations\tlogical_allocations\n"
+                "baseline-strict\tfields\t1\t1.0\t100.0\t100\t100\t1\n"
+                "candidate-arc\tfields\t1\t1.0\t100.0\t100\t100\t1\n"
+            )
+            (root / "compile.tsv").write_text(
+                "model\trepetition\tcompile_seconds\tcompile_max_rss_kib\n"
+                "baseline-strict\t1\t1.0\t100\n"
+                "candidate-arc\t1\t10.0\t1000\n"
+            )
+            (root / "static.tsv").write_text(
+                "model\tcompile_seconds\tcompile_max_rss_kib\tbinary_bytes\tretain_callsites\trelease_callsites\tallocation_callsites\tcompiler_commit\tmemory_model\tcompiler\n"
+                "baseline-strict\t1.0\t100\t1000\t1\t1\t1\tbase\tstrict\t/base/konanc\n"
+                "candidate-arc\t10.0\t1000\t1000\t100\t100\t100\tcandidate\tarc\t/candidate/konanc\n"
+            )
+            with patch.dict(os.environ, {}, clear=True):
+                with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                    result = benchmark_report.report(
+                        root / "raw.tsv", root / "compile.tsv", root / "static.tsv", root / "out"
+                    )
+            self.assertEqual(0, result)
+            summary = (root / "out" / "summary.json").read_text()
+            self.assertIn('"compileSecondsDeltaPercent": 900.0', summary)
+            self.assertIn('"retainCallsitesDeltaPercent": 9900.0', summary)
+
+    def test_benchmark_hard_defaults_reject_more_than_five_percent_latency(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "raw.tsv").write_text(
+                "model\tscenario\trepetition\telapsed_seconds\tthroughput_ops_per_second\tmax_rss_kib\toperations\tlogical_allocations\n"
+                "baseline-strict\tfields\t1\t1.0\t100.0\t100\t100\t1\n"
+                "candidate-arc\tfields\t1\t1.06\t94.34\t100\t100\t1\n"
+            )
+            (root / "compile.tsv").write_text(
+                "model\trepetition\tcompile_seconds\tcompile_max_rss_kib\n"
+                "baseline-strict\t1\t1.0\t100\n"
+                "candidate-arc\t1\t1.0\t100\n"
+            )
+            (root / "static.tsv").write_text(
+                "model\tcompile_seconds\tcompile_max_rss_kib\tbinary_bytes\tretain_callsites\trelease_callsites\tallocation_callsites\tcompiler_commit\tmemory_model\tcompiler\n"
+                "baseline-strict\t1.0\t100\t1000\t1\t1\t1\tbase\tstrict\t/base/konanc\n"
+                "candidate-arc\t1.0\t100\t1000\t1\t1\t1\tcandidate\tarc\t/candidate/konanc\n"
+            )
+            with patch.dict(os.environ, {}, clear=True):
+                with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                    result = benchmark_report.report(
+                        root / "raw.tsv", root / "compile.tsv", root / "static.tsv", root / "out"
+                    )
+            self.assertEqual(1, result)
+            self.assertIn("latency regression 6.000% > 5.000%", (root / "out" / "comparison.md").read_text())
+
+    def test_benchmark_recipe_exports_commit_ready_wave_even_on_gate_failure(self):
+        justfile = (Path(__file__).parents[2] / "Justfile").read_text()
+        self.assertIn("remote-arc-bench wave: remote-snapshot", justfile)
+        self.assertIn("run arc-bench-candidate", justfile)
+        self.assertIn("run arc-bench-baseline", justfile)
+        self.assertIn("benchmark-bundle {{wave}}", justfile)
+        script = (Path(__file__).parent / "benchmark_compare.sh").read_text()
+        for artifact in ("inputs.json", "hardware.json", "raw.tsv", "raw.json", "compile-raw.tsv", "comparison.md"):
+            self.assertIn(artifact, script)
 
     def test_sanitizer_probe_requires_binary_instrumentation_evidence(self):
         script = (Path(__file__).parent / "sanitizer_probe.sh").read_text()

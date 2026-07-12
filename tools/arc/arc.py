@@ -41,7 +41,15 @@ EXCLUDED_PATHS = (
 PROFILES = (
     "dist", "runtime", "sanity", "full", "arc-smoke", "arc-stress", "arc-race", "arc-race-tsan",
     "arc-unowned-death", "arc-no-collector",
-    "arc-sanitize", "arc-sanitize-asan", "arc-sanitize-ubsan", "arc-sanitize-tsan", "arc-bench",
+    "arc-sanitize", "arc-sanitize-asan", "arc-sanitize-ubsan", "arc-sanitize-tsan",
+    "arc-bench-candidate", "arc-bench-baseline", "arc-bench",
+)
+BENCHMARK_ENVIRONMENT = (
+    "ARC_BENCH_BUILD_WORKERS", "ARC_BENCH_REPETITIONS", "ARC_BENCH_WARMUPS",
+    "ARC_BENCH_COMPILE_REPETITIONS", "ARC_BENCH_SCENARIOS", "ARC_BENCH_CPU",
+    "ARC_BENCH_SCENARIO_REGRESSION_PERCENT", "ARC_BENCH_THROUGHPUT_FLOOR_PERCENT",
+    "ARC_BENCH_RSS_LIMIT_PERCENT", "ARC_BENCH_SIZE_LIMIT_PERCENT", "ARC_BENCH_ENFORCE",
+    "ARC_BENCH_OBJDUMP",
 )
 
 
@@ -224,8 +232,18 @@ def profile_command(profile: str) -> list[str]:
     if profile.startswith("arc-sanitize-"):
         sanitizer = profile.removeprefix("arc-sanitize-")
         return ["bash", "tools/arc/sanitizer_probe.sh", sanitizer]
+    if profile == "arc-bench-candidate":
+        command = ["bash", "tools/arc/benchmark_candidate.sh"]
+        values = [f"{name}={os.environ[name]}" for name in BENCHMARK_ENVIRONMENT if name in os.environ]
+        return ["env", *values, *command] if values else command
+    if profile == "arc-bench-baseline":
+        command = ["bash", "tools/arc/benchmark_baseline.sh"]
+        values = [f"{name}={os.environ[name]}" for name in BENCHMARK_ENVIRONMENT if name in os.environ]
+        return ["env", *values, *command] if values else command
     if profile == "arc-bench":
-        return ["bash", "tools/arc/benchmark_compare.sh"]
+        command = ["bash", "tools/arc/benchmark_compare.sh"]
+        values = [f"{name}={os.environ[name]}" for name in BENCHMARK_ENVIRONMENT if name in os.environ]
+        return ["env", *values, *command] if values else command
     raise SystemExit(f"Unknown remote profile: {profile}")
 
 
@@ -242,6 +260,45 @@ def remote_log(profile: str) -> None:
     remote("log", profile)
 
 
+def benchmark_bundle(wave: str) -> None:
+    if not wave or len(wave) > 64 or any(character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_" for character in wave):
+        raise SystemExit("benchmark wave must contain only letters, digits, '-' and '_'")
+    destination = ROOT / "tools" / "arc" / "benchmark-results" / wave
+    if destination.exists():
+        raise SystemExit(f"benchmark result destination already exists: {destination}")
+    remote_source = (
+        f"{setting('ARC_REMOTE', DEFAULT_HOST)}:"
+        f"{setting('ARC_REMOTE_DIR', DEFAULT_REMOTE_DIR)}/.arc-runs/arc-bench/artifacts/wave"
+    )
+    required = {
+        "inputs.json", "hardware.json", "candidate-provenance.json", "baseline-provenance.json",
+        "raw.tsv", "raw.json", "compile-raw.tsv", "static.tsv", "summary.tsv", "summary.json", "comparison.md",
+    }
+    with tempfile.TemporaryDirectory(prefix="arc-benchmark-bundle-") as temporary:
+        temporary_path = Path(temporary)
+        run(["scp", "-r", "--", remote_source, str(temporary_path)])
+        downloaded = temporary_path / "wave"
+        if not downloaded.is_dir():
+            raise SystemExit("remote benchmark bundle did not contain a wave directory")
+        entries = list(downloaded.iterdir())
+        unsafe = [path.name for path in entries if path.is_symlink() or not path.is_file()]
+        if unsafe:
+            raise SystemExit(f"invalid benchmark bundle entries: {sorted(unsafe)}")
+        names = {path.name for path in entries}
+        missing = required - names
+        unexpected = names - required
+        if missing or unexpected:
+            raise SystemExit(
+                f"invalid benchmark bundle: missing={sorted(missing)} unexpected={sorted(unexpected)}"
+            )
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix=f".{wave}-", dir=destination.parent) as staging_root:
+            staging = Path(staging_root) / "bundle"
+            shutil.copytree(downloaded, staging)
+            staging.replace(destination)
+    print(f"Benchmark wave bundle: {destination}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -254,6 +311,8 @@ def main() -> None:
     subparsers.add_parser("doctor")
     subparsers.add_parser("remote-init")
     subparsers.add_parser("remote-snapshot")
+    bundle_parser = subparsers.add_parser("benchmark-bundle")
+    bundle_parser.add_argument("wave")
     run_parser = subparsers.add_parser("run")
     run_parser.add_argument("profile", choices=PROFILES)
     status_parser = subparsers.add_parser("status")
@@ -268,6 +327,8 @@ def main() -> None:
         remote_init()
     elif arguments.command == "remote-snapshot":
         remote_snapshot()
+    elif arguments.command == "benchmark-bundle":
+        benchmark_bundle(arguments.wave)
     elif arguments.command == "status":
         remote_status(arguments.profile)
     elif arguments.command == "log":
