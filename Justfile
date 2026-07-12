@@ -42,6 +42,9 @@ remote-arc-unowned-death: remote-snapshot
 remote-arc-no-collector: remote-snapshot
     {{python}} tools/arc/arc.py run arc-no-collector
 
+remote-arc-frame-elision-unit: remote-snapshot
+    {{python}} tools/arc/arc.py run arc-frame-elision-unit
+
 remote-arc-sanitize: remote-snapshot
     {{python}} tools/arc/arc.py run arc-sanitize
 
@@ -89,6 +92,9 @@ ci2-sanity: ci2-snapshot
 
 ci2-full: ci2-snapshot
     {{python}} tools/arc/arc.py --machine ci2 run full
+
+ci2-arc-frame-elision-unit: ci2-snapshot
+    {{python}} tools/arc/arc.py --machine ci2 run arc-frame-elision-unit
 
 ci2-bench-doctor:
     {{python}} tools/arc/arc.py --machine ci2-bench doctor
