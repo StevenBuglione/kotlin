@@ -1,0 +1,2562 @@
+{
+  "compilation": [
+    {
+      "compileMaxRssKiB": 571296,
+      "compileSeconds": 10.18,
+      "model": "baseline-strict",
+      "repetition": 1
+    },
+    {
+      "compileMaxRssKiB": 559052,
+      "compileSeconds": 9.67,
+      "model": "candidate-arc",
+      "repetition": 1
+    },
+    {
+      "compileMaxRssKiB": 528260,
+      "compileSeconds": 9.7,
+      "model": "candidate-arc",
+      "repetition": 2
+    },
+    {
+      "compileMaxRssKiB": 648072,
+      "compileSeconds": 10.31,
+      "model": "baseline-strict",
+      "repetition": 2
+    },
+    {
+      "compileMaxRssKiB": 637356,
+      "compileSeconds": 10.3,
+      "model": "baseline-strict",
+      "repetition": 3
+    },
+    {
+      "compileMaxRssKiB": 581392,
+      "compileSeconds": 9.48,
+      "model": "candidate-arc",
+      "repetition": 3
+    }
+  ],
+  "runtime": [
+    {
+      "elapsedSeconds": 0.28273654,
+      "logicalAllocations": 6000001,
+      "maxRssKiB": 3840,
+      "model": "baseline-strict",
+      "operations": 6000000,
+      "repetition": 1,
+      "scenario": "allocation",
+      "throughputOpsPerSecond": 21221169.361413
+    },
+    {
+      "elapsedSeconds": 0.170361718,
+      "logicalAllocations": 6000001,
+      "maxRssKiB": 2816,
+      "model": "candidate-arc",
+      "operations": 6000000,
+      "repetition": 1,
+      "scenario": "allocation",
+      "throughputOpsPerSecond": 35219179.93337
+    },
+    {
+      "elapsedSeconds": 0.175421008,
+      "logicalAllocations": 6000001,
+      "maxRssKiB": 2816,
+      "model": "candidate-arc",
+      "operations": 6000000,
+      "repetition": 2,
+      "scenario": "allocation",
+      "throughputOpsPerSecond": 34203429.044257
+    },
+    {
+      "elapsedSeconds": 0.282773845,
+      "logicalAllocations": 6000001,
+      "maxRssKiB": 3840,
+      "model": "baseline-strict",
+      "operations": 6000000,
+      "repetition": 2,
+      "scenario": "allocation",
+      "throughputOpsPerSecond": 21218369.754105
+    },
+    {
+      "elapsedSeconds": 0.280225112,
+      "logicalAllocations": 6000001,
+      "maxRssKiB": 3840,
+      "model": "baseline-strict",
+      "operations": 6000000,
+      "repetition": 3,
+      "scenario": "allocation",
+      "throughputOpsPerSecond": 21411357.309048
+    },
+    {
+      "elapsedSeconds": 0.17325998,
+      "logicalAllocations": 6000001,
+      "maxRssKiB": 2816,
+      "model": "candidate-arc",
+      "operations": 6000000,
+      "repetition": 3,
+      "scenario": "allocation",
+      "throughputOpsPerSecond": 34630039.781835
+    },
+    {
+      "elapsedSeconds": 0.176380549,
+      "logicalAllocations": 6000001,
+      "maxRssKiB": 2944,
+      "model": "candidate-arc",
+      "operations": 6000000,
+      "repetition": 4,
+      "scenario": "allocation",
+      "throughputOpsPerSecond": 34017356.414964
+    },
+    {
+      "elapsedSeconds": 0.276710389,
+      "logicalAllocations": 6000001,
+      "maxRssKiB": 3840,
+      "model": "baseline-strict",
+      "operations": 6000000,
+      "repetition": 4,
+      "scenario": "allocation",
+      "throughputOpsPerSecond": 21683320.317981
+    },
+    {
+      "elapsedSeconds": 0.277033391,
+      "logicalAllocations": 6000001,
+      "maxRssKiB": 3840,
+      "model": "baseline-strict",
+      "operations": 6000000,
+      "repetition": 5,
+      "scenario": "allocation",
+      "throughputOpsPerSecond": 21658039.048441
+    },
+    {
+      "elapsedSeconds": 0.174662658,
+      "logicalAllocations": 6000001,
+      "maxRssKiB": 2816,
+      "model": "candidate-arc",
+      "operations": 6000000,
+      "repetition": 5,
+      "scenario": "allocation",
+      "throughputOpsPerSecond": 34351933.428152
+    },
+    {
+      "elapsedSeconds": 0.174621786,
+      "logicalAllocations": 6000001,
+      "maxRssKiB": 2816,
+      "model": "candidate-arc",
+      "operations": 6000000,
+      "repetition": 6,
+      "scenario": "allocation",
+      "throughputOpsPerSecond": 34359973.846562
+    },
+    {
+      "elapsedSeconds": 0.281607921,
+      "logicalAllocations": 6000001,
+      "maxRssKiB": 3840,
+      "model": "baseline-strict",
+      "operations": 6000000,
+      "repetition": 6,
+      "scenario": "allocation",
+      "throughputOpsPerSecond": 21306218.868751
+    },
+    {
+      "elapsedSeconds": 0.280898254,
+      "logicalAllocations": 6000001,
+      "maxRssKiB": 3840,
+      "model": "baseline-strict",
+      "operations": 6000000,
+      "repetition": 7,
+      "scenario": "allocation",
+      "throughputOpsPerSecond": 21360047.328738
+    },
+    {
+      "elapsedSeconds": 0.168729594,
+      "logicalAllocations": 6000001,
+      "maxRssKiB": 2816,
+      "model": "candidate-arc",
+      "operations": 6000000,
+      "repetition": 7,
+      "scenario": "allocation",
+      "throughputOpsPerSecond": 35559855.61134
+    },
+    {
+      "elapsedSeconds": 0.172729548,
+      "logicalAllocations": 6000001,
+      "maxRssKiB": 2816,
+      "model": "candidate-arc",
+      "operations": 6000000,
+      "repetition": 8,
+      "scenario": "allocation",
+      "throughputOpsPerSecond": 34736384.535667
+    },
+    {
+      "elapsedSeconds": 0.278691827,
+      "logicalAllocations": 6000001,
+      "maxRssKiB": 3840,
+      "model": "baseline-strict",
+      "operations": 6000000,
+      "repetition": 8,
+      "scenario": "allocation",
+      "throughputOpsPerSecond": 21529156.647999
+    },
+    {
+      "elapsedSeconds": 0.279355645,
+      "logicalAllocations": 6000001,
+      "maxRssKiB": 3840,
+      "model": "baseline-strict",
+      "operations": 6000000,
+      "repetition": 9,
+      "scenario": "allocation",
+      "throughputOpsPerSecond": 21477998.055131
+    },
+    {
+      "elapsedSeconds": 0.170222333,
+      "logicalAllocations": 6000001,
+      "maxRssKiB": 2816,
+      "model": "candidate-arc",
+      "operations": 6000000,
+      "repetition": 9,
+      "scenario": "allocation",
+      "throughputOpsPerSecond": 35248018.836635
+    },
+    {
+      "elapsedSeconds": 0.236429415,
+      "logicalAllocations": 1500000,
+      "maxRssKiB": 77388,
+      "model": "baseline-strict",
+      "operations": 1500000,
+      "repetition": 1,
+      "scenario": "destruction",
+      "throughputOpsPerSecond": 6344388.239509
+    },
+    {
+      "elapsedSeconds": 0.176286487,
+      "logicalAllocations": 1500000,
+      "maxRssKiB": 72832,
+      "model": "candidate-arc",
+      "operations": 1500000,
+      "repetition": 1,
+      "scenario": "destruction",
+      "throughputOpsPerSecond": 8508876.803473
+    },
+    {
+      "elapsedSeconds": 0.181912201,
+      "logicalAllocations": 1500000,
+      "maxRssKiB": 72832,
+      "model": "candidate-arc",
+      "operations": 1500000,
+      "repetition": 2,
+      "scenario": "destruction",
+      "throughputOpsPerSecond": 8245736.084519
+    },
+    {
+      "elapsedSeconds": 0.236315992,
+      "logicalAllocations": 1500000,
+      "maxRssKiB": 77388,
+      "model": "baseline-strict",
+      "operations": 1500000,
+      "repetition": 2,
+      "scenario": "destruction",
+      "throughputOpsPerSecond": 6347433.312935
+    },
+    {
+      "elapsedSeconds": 0.237089609,
+      "logicalAllocations": 1500000,
+      "maxRssKiB": 77388,
+      "model": "baseline-strict",
+      "operations": 1500000,
+      "repetition": 3,
+      "scenario": "destruction",
+      "throughputOpsPerSecond": 6326721.809221
+    },
+    {
+      "elapsedSeconds": 0.181503426,
+      "logicalAllocations": 1500000,
+      "maxRssKiB": 72832,
+      "model": "candidate-arc",
+      "operations": 1500000,
+      "repetition": 3,
+      "scenario": "destruction",
+      "throughputOpsPerSecond": 8264306.812589
+    },
+    {
+      "elapsedSeconds": 0.181992859,
+      "logicalAllocations": 1500000,
+      "maxRssKiB": 72832,
+      "model": "candidate-arc",
+      "operations": 1500000,
+      "repetition": 4,
+      "scenario": "destruction",
+      "throughputOpsPerSecond": 8242081.630247
+    },
+    {
+      "elapsedSeconds": 0.240619456,
+      "logicalAllocations": 1500000,
+      "maxRssKiB": 77408,
+      "model": "baseline-strict",
+      "operations": 1500000,
+      "repetition": 4,
+      "scenario": "destruction",
+      "throughputOpsPerSecond": 6233909.863049
+    },
+    {
+      "elapsedSeconds": 0.246063667,
+      "logicalAllocations": 1500000,
+      "maxRssKiB": 77384,
+      "model": "baseline-strict",
+      "operations": 1500000,
+      "repetition": 5,
+      "scenario": "destruction",
+      "throughputOpsPerSecond": 6095983.28062
+    },
+    {
+      "elapsedSeconds": 0.184037206,
+      "logicalAllocations": 1500000,
+      "maxRssKiB": 72832,
+      "model": "candidate-arc",
+      "operations": 1500000,
+      "repetition": 5,
+      "scenario": "destruction",
+      "throughputOpsPerSecond": 8150525.823566
+    },
+    {
+      "elapsedSeconds": 0.179189528,
+      "logicalAllocations": 1500000,
+      "maxRssKiB": 72832,
+      "model": "candidate-arc",
+      "operations": 1500000,
+      "repetition": 6,
+      "scenario": "destruction",
+      "throughputOpsPerSecond": 8371024.896053
+    },
+    {
+      "elapsedSeconds": 0.232719613,
+      "logicalAllocations": 1500000,
+      "maxRssKiB": 77384,
+      "model": "baseline-strict",
+      "operations": 1500000,
+      "repetition": 6,
+      "scenario": "destruction",
+      "throughputOpsPerSecond": 6445524.640848
+    },
+    {
+      "elapsedSeconds": 0.234566165,
+      "logicalAllocations": 1500000,
+      "maxRssKiB": 77384,
+      "model": "baseline-strict",
+      "operations": 1500000,
+      "repetition": 7,
+      "scenario": "destruction",
+      "throughputOpsPerSecond": 6394784.175288
+    },
+    {
+      "elapsedSeconds": 0.180380853,
+      "logicalAllocations": 1500000,
+      "maxRssKiB": 72832,
+      "model": "candidate-arc",
+      "operations": 1500000,
+      "repetition": 7,
+      "scenario": "destruction",
+      "throughputOpsPerSecond": 8315738.478074
+    },
+    {
+      "elapsedSeconds": 0.179797092,
+      "logicalAllocations": 1500000,
+      "maxRssKiB": 72832,
+      "model": "candidate-arc",
+      "operations": 1500000,
+      "repetition": 8,
+      "scenario": "destruction",
+      "throughputOpsPerSecond": 8342737.823591
+    },
+    {
+      "elapsedSeconds": 0.235004391,
+      "logicalAllocations": 1500000,
+      "maxRssKiB": 77384,
+      "model": "baseline-strict",
+      "operations": 1500000,
+      "repetition": 8,
+      "scenario": "destruction",
+      "throughputOpsPerSecond": 6382859.458996
+    },
+    {
+      "elapsedSeconds": 0.233417587,
+      "logicalAllocations": 1500000,
+      "maxRssKiB": 77388,
+      "model": "baseline-strict",
+      "operations": 1500000,
+      "repetition": 9,
+      "scenario": "destruction",
+      "throughputOpsPerSecond": 6426250.991961
+    },
+    {
+      "elapsedSeconds": 0.180977064,
+      "logicalAllocations": 1500000,
+      "maxRssKiB": 72832,
+      "model": "candidate-arc",
+      "operations": 1500000,
+      "repetition": 9,
+      "scenario": "destruction",
+      "throughputOpsPerSecond": 8288343.101864
+    },
+    {
+      "elapsedSeconds": 0.156274633,
+      "logicalAllocations": 12210,
+      "maxRssKiB": 3072,
+      "model": "baseline-strict",
+      "operations": 200000000,
+      "repetition": 1,
+      "scenario": "fields",
+      "throughputOpsPerSecond": 1279798238.271979
+    },
+    {
+      "elapsedSeconds": 0.160944066,
+      "logicalAllocations": 12210,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 200000000,
+      "repetition": 1,
+      "scenario": "fields",
+      "throughputOpsPerSecond": 1242667747.688194
+    },
+    {
+      "elapsedSeconds": 0.171924212,
+      "logicalAllocations": 12210,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 200000000,
+      "repetition": 2,
+      "scenario": "fields",
+      "throughputOpsPerSecond": 1163303281.564554
+    },
+    {
+      "elapsedSeconds": 0.156531768,
+      "logicalAllocations": 12210,
+      "maxRssKiB": 3072,
+      "model": "baseline-strict",
+      "operations": 200000000,
+      "repetition": 2,
+      "scenario": "fields",
+      "throughputOpsPerSecond": 1277695911.541739
+    },
+    {
+      "elapsedSeconds": 0.160643694,
+      "logicalAllocations": 12210,
+      "maxRssKiB": 3072,
+      "model": "baseline-strict",
+      "operations": 200000000,
+      "repetition": 3,
+      "scenario": "fields",
+      "throughputOpsPerSecond": 1244991291.09917
+    },
+    {
+      "elapsedSeconds": 0.16379493,
+      "logicalAllocations": 12210,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 200000000,
+      "repetition": 3,
+      "scenario": "fields",
+      "throughputOpsPerSecond": 1221039015.065973
+    },
+    {
+      "elapsedSeconds": 0.159246619,
+      "logicalAllocations": 12210,
+      "maxRssKiB": 2688,
+      "model": "candidate-arc",
+      "operations": 200000000,
+      "repetition": 4,
+      "scenario": "fields",
+      "throughputOpsPerSecond": 1255913634.185225
+    },
+    {
+      "elapsedSeconds": 0.153756167,
+      "logicalAllocations": 12210,
+      "maxRssKiB": 3072,
+      "model": "baseline-strict",
+      "operations": 200000000,
+      "repetition": 4,
+      "scenario": "fields",
+      "throughputOpsPerSecond": 1300760833.872764
+    },
+    {
+      "elapsedSeconds": 0.157824362,
+      "logicalAllocations": 12210,
+      "maxRssKiB": 3072,
+      "model": "baseline-strict",
+      "operations": 200000000,
+      "repetition": 5,
+      "scenario": "fields",
+      "throughputOpsPerSecond": 1267231481.030793
+    },
+    {
+      "elapsedSeconds": 0.161174482,
+      "logicalAllocations": 12210,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 200000000,
+      "repetition": 5,
+      "scenario": "fields",
+      "throughputOpsPerSecond": 1240891222.470316
+    },
+    {
+      "elapsedSeconds": 0.162759325,
+      "logicalAllocations": 12210,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 200000000,
+      "repetition": 6,
+      "scenario": "fields",
+      "throughputOpsPerSecond": 1228808241.86264
+    },
+    {
+      "elapsedSeconds": 0.155174907,
+      "logicalAllocations": 12210,
+      "maxRssKiB": 3072,
+      "model": "baseline-strict",
+      "operations": 200000000,
+      "repetition": 6,
+      "scenario": "fields",
+      "throughputOpsPerSecond": 1288868180.214215
+    },
+    {
+      "elapsedSeconds": 0.159580567,
+      "logicalAllocations": 12210,
+      "maxRssKiB": 3072,
+      "model": "baseline-strict",
+      "operations": 200000000,
+      "repetition": 7,
+      "scenario": "fields",
+      "throughputOpsPerSecond": 1253285432.931191
+    },
+    {
+      "elapsedSeconds": 0.163530497,
+      "logicalAllocations": 12210,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 200000000,
+      "repetition": 7,
+      "scenario": "fields",
+      "throughputOpsPerSecond": 1223013466.411712
+    },
+    {
+      "elapsedSeconds": 0.163496167,
+      "logicalAllocations": 12210,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 200000000,
+      "repetition": 8,
+      "scenario": "fields",
+      "throughputOpsPerSecond": 1223270267.85894
+    },
+    {
+      "elapsedSeconds": 0.154733136,
+      "logicalAllocations": 12210,
+      "maxRssKiB": 3072,
+      "model": "baseline-strict",
+      "operations": 200000000,
+      "repetition": 8,
+      "scenario": "fields",
+      "throughputOpsPerSecond": 1292547964.645401
+    },
+    {
+      "elapsedSeconds": 0.157061255,
+      "logicalAllocations": 12210,
+      "maxRssKiB": 3072,
+      "model": "baseline-strict",
+      "operations": 200000000,
+      "repetition": 9,
+      "scenario": "fields",
+      "throughputOpsPerSecond": 1273388526.024448
+    },
+    {
+      "elapsedSeconds": 0.164628686,
+      "logicalAllocations": 12210,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 200000000,
+      "repetition": 9,
+      "scenario": "fields",
+      "throughputOpsPerSecond": 1214855107.329229
+    },
+    {
+      "elapsedSeconds": 0.173261908,
+      "logicalAllocations": 1,
+      "maxRssKiB": 2944,
+      "model": "baseline-strict",
+      "operations": 120000000,
+      "repetition": 1,
+      "scenario": "arrays",
+      "throughputOpsPerSecond": 692593088.608952
+    },
+    {
+      "elapsedSeconds": 0.173226445,
+      "logicalAllocations": 1,
+      "maxRssKiB": 2688,
+      "model": "candidate-arc",
+      "operations": 120000000,
+      "repetition": 1,
+      "scenario": "arrays",
+      "throughputOpsPerSecond": 692734876.594622
+    },
+    {
+      "elapsedSeconds": 0.173792806,
+      "logicalAllocations": 1,
+      "maxRssKiB": 2688,
+      "model": "candidate-arc",
+      "operations": 120000000,
+      "repetition": 2,
+      "scenario": "arrays",
+      "throughputOpsPerSecond": 690477372.233693
+    },
+    {
+      "elapsedSeconds": 0.177988674,
+      "logicalAllocations": 1,
+      "maxRssKiB": 2944,
+      "model": "baseline-strict",
+      "operations": 120000000,
+      "repetition": 2,
+      "scenario": "arrays",
+      "throughputOpsPerSecond": 674200202.199383
+    },
+    {
+      "elapsedSeconds": 0.174631849,
+      "logicalAllocations": 1,
+      "maxRssKiB": 2944,
+      "model": "baseline-strict",
+      "operations": 120000000,
+      "repetition": 3,
+      "scenario": "arrays",
+      "throughputOpsPerSecond": 687159877.692184
+    },
+    {
+      "elapsedSeconds": 0.173169772,
+      "logicalAllocations": 1,
+      "maxRssKiB": 2688,
+      "model": "candidate-arc",
+      "operations": 120000000,
+      "repetition": 3,
+      "scenario": "arrays",
+      "throughputOpsPerSecond": 692961586.852468
+    },
+    {
+      "elapsedSeconds": 0.173286944,
+      "logicalAllocations": 1,
+      "maxRssKiB": 2688,
+      "model": "candidate-arc",
+      "operations": 120000000,
+      "repetition": 4,
+      "scenario": "arrays",
+      "throughputOpsPerSecond": 692493024.748593
+    },
+    {
+      "elapsedSeconds": 0.174396121,
+      "logicalAllocations": 1,
+      "maxRssKiB": 2944,
+      "model": "baseline-strict",
+      "operations": 120000000,
+      "repetition": 4,
+      "scenario": "arrays",
+      "throughputOpsPerSecond": 688088698.945317
+    },
+    {
+      "elapsedSeconds": 0.176961212,
+      "logicalAllocations": 1,
+      "maxRssKiB": 2944,
+      "model": "baseline-strict",
+      "operations": 120000000,
+      "repetition": 5,
+      "scenario": "arrays",
+      "throughputOpsPerSecond": 678114704.594134
+    },
+    {
+      "elapsedSeconds": 0.172870149,
+      "logicalAllocations": 1,
+      "maxRssKiB": 2688,
+      "model": "candidate-arc",
+      "operations": 120000000,
+      "repetition": 5,
+      "scenario": "arrays",
+      "throughputOpsPerSecond": 694162645.744003
+    },
+    {
+      "elapsedSeconds": 0.173843416,
+      "logicalAllocations": 1,
+      "maxRssKiB": 2688,
+      "model": "candidate-arc",
+      "operations": 120000000,
+      "repetition": 6,
+      "scenario": "arrays",
+      "throughputOpsPerSecond": 690276357.662001
+    },
+    {
+      "elapsedSeconds": 0.168498046,
+      "logicalAllocations": 1,
+      "maxRssKiB": 2944,
+      "model": "baseline-strict",
+      "operations": 120000000,
+      "repetition": 6,
+      "scenario": "arrays",
+      "throughputOpsPerSecond": 712174430.794289
+    },
+    {
+      "elapsedSeconds": 0.174555638,
+      "logicalAllocations": 1,
+      "maxRssKiB": 2944,
+      "model": "baseline-strict",
+      "operations": 120000000,
+      "repetition": 7,
+      "scenario": "arrays",
+      "throughputOpsPerSecond": 687459891.728046
+    },
+    {
+      "elapsedSeconds": 0.170799873,
+      "logicalAllocations": 1,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 120000000,
+      "repetition": 7,
+      "scenario": "arrays",
+      "throughputOpsPerSecond": 702576634.819863
+    },
+    {
+      "elapsedSeconds": 0.177688364,
+      "logicalAllocations": 1,
+      "maxRssKiB": 2688,
+      "model": "candidate-arc",
+      "operations": 120000000,
+      "repetition": 8,
+      "scenario": "arrays",
+      "throughputOpsPerSecond": 675339663.772243
+    },
+    {
+      "elapsedSeconds": 0.175878849,
+      "logicalAllocations": 1,
+      "maxRssKiB": 2944,
+      "model": "baseline-strict",
+      "operations": 120000000,
+      "repetition": 8,
+      "scenario": "arrays",
+      "throughputOpsPerSecond": 682287840.080191
+    },
+    {
+      "elapsedSeconds": 0.173698074,
+      "logicalAllocations": 1,
+      "maxRssKiB": 2944,
+      "model": "baseline-strict",
+      "operations": 120000000,
+      "repetition": 9,
+      "scenario": "arrays",
+      "throughputOpsPerSecond": 690853946.947046
+    },
+    {
+      "elapsedSeconds": 0.176381355,
+      "logicalAllocations": 1,
+      "maxRssKiB": 2688,
+      "model": "candidate-arc",
+      "operations": 120000000,
+      "repetition": 9,
+      "scenario": "arrays",
+      "throughputOpsPerSecond": 680344019.355107
+    },
+    {
+      "elapsedSeconds": 0.154763208,
+      "logicalAllocations": 1800000,
+      "maxRssKiB": 3200,
+      "model": "baseline-strict",
+      "operations": 600000,
+      "repetition": 1,
+      "scenario": "strings",
+      "throughputOpsPerSecond": 3876890.429927
+    },
+    {
+      "elapsedSeconds": 0.31612099,
+      "logicalAllocations": 1800000,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 600000,
+      "repetition": 1,
+      "scenario": "strings",
+      "throughputOpsPerSecond": 1898007.468596
+    },
+    {
+      "elapsedSeconds": 0.31613494,
+      "logicalAllocations": 1800000,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 600000,
+      "repetition": 2,
+      "scenario": "strings",
+      "throughputOpsPerSecond": 1897923.71574
+    },
+    {
+      "elapsedSeconds": 0.155481984,
+      "logicalAllocations": 1800000,
+      "maxRssKiB": 3712,
+      "model": "baseline-strict",
+      "operations": 600000,
+      "repetition": 2,
+      "scenario": "strings",
+      "throughputOpsPerSecond": 3858967.994646
+    },
+    {
+      "elapsedSeconds": 0.155573183,
+      "logicalAllocations": 1800000,
+      "maxRssKiB": 4096,
+      "model": "baseline-strict",
+      "operations": 600000,
+      "repetition": 3,
+      "scenario": "strings",
+      "throughputOpsPerSecond": 3856705.817994
+    },
+    {
+      "elapsedSeconds": 0.312597574,
+      "logicalAllocations": 1800000,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 600000,
+      "repetition": 3,
+      "scenario": "strings",
+      "throughputOpsPerSecond": 1919400.69247
+    },
+    {
+      "elapsedSeconds": 0.321173933,
+      "logicalAllocations": 1800000,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 600000,
+      "repetition": 4,
+      "scenario": "strings",
+      "throughputOpsPerSecond": 1868146.628201
+    },
+    {
+      "elapsedSeconds": 0.155316309,
+      "logicalAllocations": 1800000,
+      "maxRssKiB": 3712,
+      "model": "baseline-strict",
+      "operations": 600000,
+      "repetition": 4,
+      "scenario": "strings",
+      "throughputOpsPerSecond": 3863084.333275
+    },
+    {
+      "elapsedSeconds": 0.155535926,
+      "logicalAllocations": 1800000,
+      "maxRssKiB": 3328,
+      "model": "baseline-strict",
+      "operations": 600000,
+      "repetition": 5,
+      "scenario": "strings",
+      "throughputOpsPerSecond": 3857629.651429
+    },
+    {
+      "elapsedSeconds": 0.310863044,
+      "logicalAllocations": 1800000,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 600000,
+      "repetition": 5,
+      "scenario": "strings",
+      "throughputOpsPerSecond": 1930110.418658
+    },
+    {
+      "elapsedSeconds": 0.31637866,
+      "logicalAllocations": 1800000,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 600000,
+      "repetition": 6,
+      "scenario": "strings",
+      "throughputOpsPerSecond": 1896461.664007
+    },
+    {
+      "elapsedSeconds": 0.155726941,
+      "logicalAllocations": 1800000,
+      "maxRssKiB": 3328,
+      "model": "baseline-strict",
+      "operations": 600000,
+      "repetition": 6,
+      "scenario": "strings",
+      "throughputOpsPerSecond": 3852897.87462
+    },
+    {
+      "elapsedSeconds": 0.160829645,
+      "logicalAllocations": 1800000,
+      "maxRssKiB": 3712,
+      "model": "baseline-strict",
+      "operations": 600000,
+      "repetition": 7,
+      "scenario": "strings",
+      "throughputOpsPerSecond": 3730655.501975
+    },
+    {
+      "elapsedSeconds": 0.313065905,
+      "logicalAllocations": 1800000,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 600000,
+      "repetition": 7,
+      "scenario": "strings",
+      "throughputOpsPerSecond": 1916529.36464
+    },
+    {
+      "elapsedSeconds": 0.314491534,
+      "logicalAllocations": 1800000,
+      "maxRssKiB": 2688,
+      "model": "candidate-arc",
+      "operations": 600000,
+      "repetition": 8,
+      "scenario": "strings",
+      "throughputOpsPerSecond": 1907841.500115
+    },
+    {
+      "elapsedSeconds": 0.156776833,
+      "logicalAllocations": 1800000,
+      "maxRssKiB": 3712,
+      "model": "baseline-strict",
+      "operations": 600000,
+      "repetition": 8,
+      "scenario": "strings",
+      "throughputOpsPerSecond": 3827096.060806
+    },
+    {
+      "elapsedSeconds": 0.158088471,
+      "logicalAllocations": 1800000,
+      "maxRssKiB": 3712,
+      "model": "baseline-strict",
+      "operations": 600000,
+      "repetition": 9,
+      "scenario": "strings",
+      "throughputOpsPerSecond": 3795343.178441
+    },
+    {
+      "elapsedSeconds": 0.311380288,
+      "logicalAllocations": 1800000,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 600000,
+      "repetition": 9,
+      "scenario": "strings",
+      "throughputOpsPerSecond": 1926904.248993
+    },
+    {
+      "elapsedSeconds": 0.146409083,
+      "logicalAllocations": 4,
+      "maxRssKiB": 2816,
+      "model": "baseline-strict",
+      "operations": 80000000,
+      "repetition": 1,
+      "scenario": "virtual-dispatch",
+      "throughputOpsPerSecond": 546414186.611633
+    },
+    {
+      "elapsedSeconds": 0.145131284,
+      "logicalAllocations": 4,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 80000000,
+      "repetition": 1,
+      "scenario": "virtual-dispatch",
+      "throughputOpsPerSecond": 551225054.964717
+    },
+    {
+      "elapsedSeconds": 0.147865575,
+      "logicalAllocations": 4,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 80000000,
+      "repetition": 2,
+      "scenario": "virtual-dispatch",
+      "throughputOpsPerSecond": 541031947.429278
+    },
+    {
+      "elapsedSeconds": 0.151661925,
+      "logicalAllocations": 4,
+      "maxRssKiB": 2816,
+      "model": "baseline-strict",
+      "operations": 80000000,
+      "repetition": 2,
+      "scenario": "virtual-dispatch",
+      "throughputOpsPerSecond": 527489018.750092
+    },
+    {
+      "elapsedSeconds": 0.146635518,
+      "logicalAllocations": 4,
+      "maxRssKiB": 2816,
+      "model": "baseline-strict",
+      "operations": 80000000,
+      "repetition": 3,
+      "scenario": "virtual-dispatch",
+      "throughputOpsPerSecond": 545570412.210771
+    },
+    {
+      "elapsedSeconds": 0.148448078,
+      "logicalAllocations": 4,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 80000000,
+      "repetition": 3,
+      "scenario": "virtual-dispatch",
+      "throughputOpsPerSecond": 538908964.520241
+    },
+    {
+      "elapsedSeconds": 0.148221146,
+      "logicalAllocations": 4,
+      "maxRssKiB": 2688,
+      "model": "candidate-arc",
+      "operations": 80000000,
+      "repetition": 4,
+      "scenario": "virtual-dispatch",
+      "throughputOpsPerSecond": 539734053.871099
+    },
+    {
+      "elapsedSeconds": 0.14932648,
+      "logicalAllocations": 4,
+      "maxRssKiB": 2816,
+      "model": "baseline-strict",
+      "operations": 80000000,
+      "repetition": 4,
+      "scenario": "virtual-dispatch",
+      "throughputOpsPerSecond": 535738872.301818
+    },
+    {
+      "elapsedSeconds": 0.152357443,
+      "logicalAllocations": 4,
+      "maxRssKiB": 2816,
+      "model": "baseline-strict",
+      "operations": 80000000,
+      "repetition": 5,
+      "scenario": "virtual-dispatch",
+      "throughputOpsPerSecond": 525081009.662259
+    },
+    {
+      "elapsedSeconds": 0.146703304,
+      "logicalAllocations": 4,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 80000000,
+      "repetition": 5,
+      "scenario": "virtual-dispatch",
+      "throughputOpsPerSecond": 545318324.936976
+    },
+    {
+      "elapsedSeconds": 0.143441917,
+      "logicalAllocations": 4,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 80000000,
+      "repetition": 6,
+      "scenario": "virtual-dispatch",
+      "throughputOpsPerSecond": 557717030.510684
+    },
+    {
+      "elapsedSeconds": 0.146680646,
+      "logicalAllocations": 4,
+      "maxRssKiB": 2816,
+      "model": "baseline-strict",
+      "operations": 80000000,
+      "repetition": 6,
+      "scenario": "virtual-dispatch",
+      "throughputOpsPerSecond": 545402561.15316
+    },
+    {
+      "elapsedSeconds": 0.148832209,
+      "logicalAllocations": 4,
+      "maxRssKiB": 2816,
+      "model": "baseline-strict",
+      "operations": 80000000,
+      "repetition": 7,
+      "scenario": "virtual-dispatch",
+      "throughputOpsPerSecond": 537518058.339106
+    },
+    {
+      "elapsedSeconds": 0.14727176,
+      "logicalAllocations": 4,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 80000000,
+      "repetition": 7,
+      "scenario": "virtual-dispatch",
+      "throughputOpsPerSecond": 543213444.315461
+    },
+    {
+      "elapsedSeconds": 0.145061378,
+      "logicalAllocations": 4,
+      "maxRssKiB": 2688,
+      "model": "candidate-arc",
+      "operations": 80000000,
+      "repetition": 8,
+      "scenario": "virtual-dispatch",
+      "throughputOpsPerSecond": 551490693.822032
+    },
+    {
+      "elapsedSeconds": 0.1475321,
+      "logicalAllocations": 4,
+      "maxRssKiB": 2816,
+      "model": "baseline-strict",
+      "operations": 80000000,
+      "repetition": 8,
+      "scenario": "virtual-dispatch",
+      "throughputOpsPerSecond": 542254871.99057
+    },
+    {
+      "elapsedSeconds": 0.146991707,
+      "logicalAllocations": 4,
+      "maxRssKiB": 2816,
+      "model": "baseline-strict",
+      "operations": 80000000,
+      "repetition": 9,
+      "scenario": "virtual-dispatch",
+      "throughputOpsPerSecond": 544248390.829287
+    },
+    {
+      "elapsedSeconds": 0.143875721,
+      "logicalAllocations": 4,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 80000000,
+      "repetition": 9,
+      "scenario": "virtual-dispatch",
+      "throughputOpsPerSecond": 556035441.170786
+    },
+    {
+      "elapsedSeconds": 0.134888104,
+      "logicalAllocations": 4885,
+      "maxRssKiB": 3072,
+      "model": "baseline-strict",
+      "operations": 80000000,
+      "repetition": 1,
+      "scenario": "call-arguments",
+      "throughputOpsPerSecond": 593084175.90331
+    },
+    {
+      "elapsedSeconds": 0.121930664,
+      "logicalAllocations": 4885,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 80000000,
+      "repetition": 1,
+      "scenario": "call-arguments",
+      "throughputOpsPerSecond": 656110590.851863
+    },
+    {
+      "elapsedSeconds": 0.125371116,
+      "logicalAllocations": 4885,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 80000000,
+      "repetition": 2,
+      "scenario": "call-arguments",
+      "throughputOpsPerSecond": 638105510.682381
+    },
+    {
+      "elapsedSeconds": 0.138520096,
+      "logicalAllocations": 4885,
+      "maxRssKiB": 3072,
+      "model": "baseline-strict",
+      "operations": 80000000,
+      "repetition": 2,
+      "scenario": "call-arguments",
+      "throughputOpsPerSecond": 577533529.864143
+    },
+    {
+      "elapsedSeconds": 0.135400531,
+      "logicalAllocations": 4885,
+      "maxRssKiB": 3072,
+      "model": "baseline-strict",
+      "operations": 80000000,
+      "repetition": 3,
+      "scenario": "call-arguments",
+      "throughputOpsPerSecond": 590839632.674705
+    },
+    {
+      "elapsedSeconds": 0.121201909,
+      "logicalAllocations": 4885,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 80000000,
+      "repetition": 3,
+      "scenario": "call-arguments",
+      "throughputOpsPerSecond": 660055610.180199
+    },
+    {
+      "elapsedSeconds": 0.121539619,
+      "logicalAllocations": 4885,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 80000000,
+      "repetition": 4,
+      "scenario": "call-arguments",
+      "throughputOpsPerSecond": 658221579.58221
+    },
+    {
+      "elapsedSeconds": 0.137122707,
+      "logicalAllocations": 4885,
+      "maxRssKiB": 3072,
+      "model": "baseline-strict",
+      "operations": 80000000,
+      "repetition": 4,
+      "scenario": "call-arguments",
+      "throughputOpsPerSecond": 583419054.001027
+    },
+    {
+      "elapsedSeconds": 0.136654222,
+      "logicalAllocations": 4885,
+      "maxRssKiB": 3072,
+      "model": "baseline-strict",
+      "operations": 80000000,
+      "repetition": 5,
+      "scenario": "call-arguments",
+      "throughputOpsPerSecond": 585419161.070633
+    },
+    {
+      "elapsedSeconds": 0.124726023,
+      "logicalAllocations": 4885,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 80000000,
+      "repetition": 5,
+      "scenario": "call-arguments",
+      "throughputOpsPerSecond": 641405843.590475
+    },
+    {
+      "elapsedSeconds": 0.121206878,
+      "logicalAllocations": 4885,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 80000000,
+      "repetition": 6,
+      "scenario": "call-arguments",
+      "throughputOpsPerSecond": 660028550.524996
+    },
+    {
+      "elapsedSeconds": 0.135231087,
+      "logicalAllocations": 4885,
+      "maxRssKiB": 3072,
+      "model": "baseline-strict",
+      "operations": 80000000,
+      "repetition": 6,
+      "scenario": "call-arguments",
+      "throughputOpsPerSecond": 591579952.322649
+    },
+    {
+      "elapsedSeconds": 0.136243058,
+      "logicalAllocations": 4885,
+      "maxRssKiB": 3072,
+      "model": "baseline-strict",
+      "operations": 80000000,
+      "repetition": 7,
+      "scenario": "call-arguments",
+      "throughputOpsPerSecond": 587185880.692725
+    },
+    {
+      "elapsedSeconds": 0.12613037,
+      "logicalAllocations": 4885,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 80000000,
+      "repetition": 7,
+      "scenario": "call-arguments",
+      "throughputOpsPerSecond": 634264372.648713
+    },
+    {
+      "elapsedSeconds": 0.123119346,
+      "logicalAllocations": 4885,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 80000000,
+      "repetition": 8,
+      "scenario": "call-arguments",
+      "throughputOpsPerSecond": 649776031.136488
+    },
+    {
+      "elapsedSeconds": 0.135587626,
+      "logicalAllocations": 4885,
+      "maxRssKiB": 3072,
+      "model": "baseline-strict",
+      "operations": 80000000,
+      "repetition": 8,
+      "scenario": "call-arguments",
+      "throughputOpsPerSecond": 590024343.371865
+    },
+    {
+      "elapsedSeconds": 0.135756985,
+      "logicalAllocations": 4885,
+      "maxRssKiB": 3072,
+      "model": "baseline-strict",
+      "operations": 80000000,
+      "repetition": 9,
+      "scenario": "call-arguments",
+      "throughputOpsPerSecond": 589288278.610489
+    },
+    {
+      "elapsedSeconds": 0.125722511,
+      "logicalAllocations": 4885,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 80000000,
+      "repetition": 9,
+      "scenario": "call-arguments",
+      "throughputOpsPerSecond": 636322002.827322
+    },
+    {
+      "elapsedSeconds": 0.315383537,
+      "logicalAllocations": 600000000,
+      "maxRssKiB": 2816,
+      "model": "baseline-strict",
+      "operations": 600000000,
+      "repetition": 1,
+      "scenario": "closures",
+      "throughputOpsPerSecond": 1902445529.361921
+    },
+    {
+      "elapsedSeconds": 0.164022642,
+      "logicalAllocations": 600000000,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 600000000,
+      "repetition": 1,
+      "scenario": "closures",
+      "throughputOpsPerSecond": 3658031553.960702
+    },
+    {
+      "elapsedSeconds": 0.166320297,
+      "logicalAllocations": 600000000,
+      "maxRssKiB": 2688,
+      "model": "candidate-arc",
+      "operations": 600000000,
+      "repetition": 2,
+      "scenario": "closures",
+      "throughputOpsPerSecond": 3607497165.544383
+    },
+    {
+      "elapsedSeconds": 0.308615219,
+      "logicalAllocations": 600000000,
+      "maxRssKiB": 2816,
+      "model": "baseline-strict",
+      "operations": 600000000,
+      "repetition": 2,
+      "scenario": "closures",
+      "throughputOpsPerSecond": 1944168540.826238
+    },
+    {
+      "elapsedSeconds": 0.314103432,
+      "logicalAllocations": 600000000,
+      "maxRssKiB": 2816,
+      "model": "baseline-strict",
+      "operations": 600000000,
+      "repetition": 3,
+      "scenario": "closures",
+      "throughputOpsPerSecond": 1910198803.55844
+    },
+    {
+      "elapsedSeconds": 0.163485264,
+      "logicalAllocations": 600000000,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 600000000,
+      "repetition": 3,
+      "scenario": "closures",
+      "throughputOpsPerSecond": 3670055547.024715
+    },
+    {
+      "elapsedSeconds": 0.163763706,
+      "logicalAllocations": 600000000,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 600000000,
+      "repetition": 4,
+      "scenario": "closures",
+      "throughputOpsPerSecond": 3663815473.252663
+    },
+    {
+      "elapsedSeconds": 0.317684117,
+      "logicalAllocations": 600000000,
+      "maxRssKiB": 2816,
+      "model": "baseline-strict",
+      "operations": 600000000,
+      "repetition": 4,
+      "scenario": "closures",
+      "throughputOpsPerSecond": 1888668548.072235
+    },
+    {
+      "elapsedSeconds": 0.315828406,
+      "logicalAllocations": 600000000,
+      "maxRssKiB": 2816,
+      "model": "baseline-strict",
+      "operations": 600000000,
+      "repetition": 5,
+      "scenario": "closures",
+      "throughputOpsPerSecond": 1899765786.108549
+    },
+    {
+      "elapsedSeconds": 0.16723781,
+      "logicalAllocations": 600000000,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 600000000,
+      "repetition": 5,
+      "scenario": "closures",
+      "throughputOpsPerSecond": 3587705435.750444
+    },
+    {
+      "elapsedSeconds": 0.168445355,
+      "logicalAllocations": 600000000,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 600000000,
+      "repetition": 6,
+      "scenario": "closures",
+      "throughputOpsPerSecond": 3561986022.113819
+    },
+    {
+      "elapsedSeconds": 0.314209801,
+      "logicalAllocations": 600000000,
+      "maxRssKiB": 2816,
+      "model": "baseline-strict",
+      "operations": 600000000,
+      "repetition": 6,
+      "scenario": "closures",
+      "throughputOpsPerSecond": 1909552146.656304
+    },
+    {
+      "elapsedSeconds": 0.315386616,
+      "logicalAllocations": 600000000,
+      "maxRssKiB": 2816,
+      "model": "baseline-strict",
+      "operations": 600000000,
+      "repetition": 7,
+      "scenario": "closures",
+      "throughputOpsPerSecond": 1902426956.507247
+    },
+    {
+      "elapsedSeconds": 0.167051973,
+      "logicalAllocations": 600000000,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 600000000,
+      "repetition": 7,
+      "scenario": "closures",
+      "throughputOpsPerSecond": 3591696579.363358
+    },
+    {
+      "elapsedSeconds": 0.167246401,
+      "logicalAllocations": 600000000,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 600000000,
+      "repetition": 8,
+      "scenario": "closures",
+      "throughputOpsPerSecond": 3587521144.924368
+    },
+    {
+      "elapsedSeconds": 0.314438483,
+      "logicalAllocations": 600000000,
+      "maxRssKiB": 2816,
+      "model": "baseline-strict",
+      "operations": 600000000,
+      "repetition": 8,
+      "scenario": "closures",
+      "throughputOpsPerSecond": 1908163384.696141
+    },
+    {
+      "elapsedSeconds": 0.316354626,
+      "logicalAllocations": 600000000,
+      "maxRssKiB": 2816,
+      "model": "baseline-strict",
+      "operations": 600000000,
+      "repetition": 9,
+      "scenario": "closures",
+      "throughputOpsPerSecond": 1896605741.431453
+    },
+    {
+      "elapsedSeconds": 0.163688643,
+      "logicalAllocations": 600000000,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 600000000,
+      "repetition": 9,
+      "scenario": "closures",
+      "throughputOpsPerSecond": 3665495595.806241
+    },
+    {
+      "elapsedSeconds": 0.359285809,
+      "logicalAllocations": 200000,
+      "maxRssKiB": 4480,
+      "model": "baseline-strict",
+      "operations": 100000,
+      "repetition": 1,
+      "scenario": "exceptions",
+      "throughputOpsPerSecond": 278329.946508
+    },
+    {
+      "elapsedSeconds": 0.303953818,
+      "logicalAllocations": 200000,
+      "maxRssKiB": 2688,
+      "model": "candidate-arc",
+      "operations": 100000,
+      "repetition": 1,
+      "scenario": "exceptions",
+      "throughputOpsPerSecond": 328997.34788
+    },
+    {
+      "elapsedSeconds": 0.300444508,
+      "logicalAllocations": 200000,
+      "maxRssKiB": 2688,
+      "model": "candidate-arc",
+      "operations": 100000,
+      "repetition": 2,
+      "scenario": "exceptions",
+      "throughputOpsPerSecond": 332840.166278
+    },
+    {
+      "elapsedSeconds": 0.356611801,
+      "logicalAllocations": 200000,
+      "maxRssKiB": 4480,
+      "model": "baseline-strict",
+      "operations": 100000,
+      "repetition": 2,
+      "scenario": "exceptions",
+      "throughputOpsPerSecond": 280416.96803
+    },
+    {
+      "elapsedSeconds": 0.35433409,
+      "logicalAllocations": 200000,
+      "maxRssKiB": 5632,
+      "model": "baseline-strict",
+      "operations": 100000,
+      "repetition": 3,
+      "scenario": "exceptions",
+      "throughputOpsPerSecond": 282219.529033
+    },
+    {
+      "elapsedSeconds": 0.304100023,
+      "logicalAllocations": 200000,
+      "maxRssKiB": 2816,
+      "model": "candidate-arc",
+      "operations": 100000,
+      "repetition": 3,
+      "scenario": "exceptions",
+      "throughputOpsPerSecond": 328839.172761
+    },
+    {
+      "elapsedSeconds": 0.303874457,
+      "logicalAllocations": 200000,
+      "maxRssKiB": 2688,
+      "model": "candidate-arc",
+      "operations": 100000,
+      "repetition": 4,
+      "scenario": "exceptions",
+      "throughputOpsPerSecond": 329083.270069
+    },
+    {
+      "elapsedSeconds": 0.353323272,
+      "logicalAllocations": 200000,
+      "maxRssKiB": 4608,
+      "model": "baseline-strict",
+      "operations": 100000,
+      "repetition": 4,
+      "scenario": "exceptions",
+      "throughputOpsPerSecond": 283026.92725
+    },
+    {
+      "elapsedSeconds": 0.351903692,
+      "logicalAllocations": 200000,
+      "maxRssKiB": 4608,
+      "model": "baseline-strict",
+      "operations": 100000,
+      "repetition": 5,
+      "scenario": "exceptions",
+      "throughputOpsPerSecond": 284168.658282
+    },
+    {
+      "elapsedSeconds": 0.301324073,
+      "logicalAllocations": 200000,
+      "maxRssKiB": 2816,
+      "model": "candidate-arc",
+      "operations": 100000,
+      "repetition": 5,
+      "scenario": "exceptions",
+      "throughputOpsPerSecond": 331868.605798
+    },
+    {
+      "elapsedSeconds": 0.300609018,
+      "logicalAllocations": 200000,
+      "maxRssKiB": 2688,
+      "model": "candidate-arc",
+      "operations": 100000,
+      "repetition": 6,
+      "scenario": "exceptions",
+      "throughputOpsPerSecond": 332658.017598
+    },
+    {
+      "elapsedSeconds": 0.356791305,
+      "logicalAllocations": 200000,
+      "maxRssKiB": 4480,
+      "model": "baseline-strict",
+      "operations": 100000,
+      "repetition": 6,
+      "scenario": "exceptions",
+      "throughputOpsPerSecond": 280275.88845
+    },
+    {
+      "elapsedSeconds": 0.34792365,
+      "logicalAllocations": 200000,
+      "maxRssKiB": 5504,
+      "model": "baseline-strict",
+      "operations": 100000,
+      "repetition": 7,
+      "scenario": "exceptions",
+      "throughputOpsPerSecond": 287419.38066
+    },
+    {
+      "elapsedSeconds": 0.302034587,
+      "logicalAllocations": 200000,
+      "maxRssKiB": 2688,
+      "model": "candidate-arc",
+      "operations": 100000,
+      "repetition": 7,
+      "scenario": "exceptions",
+      "throughputOpsPerSecond": 331087.909478
+    },
+    {
+      "elapsedSeconds": 0.306997908,
+      "logicalAllocations": 200000,
+      "maxRssKiB": 2688,
+      "model": "candidate-arc",
+      "operations": 100000,
+      "repetition": 8,
+      "scenario": "exceptions",
+      "throughputOpsPerSecond": 325735.11869
+    },
+    {
+      "elapsedSeconds": 0.357360278,
+      "logicalAllocations": 200000,
+      "maxRssKiB": 4608,
+      "model": "baseline-strict",
+      "operations": 100000,
+      "repetition": 8,
+      "scenario": "exceptions",
+      "throughputOpsPerSecond": 279829.645756
+    },
+    {
+      "elapsedSeconds": 0.35776634,
+      "logicalAllocations": 200000,
+      "maxRssKiB": 4480,
+      "model": "baseline-strict",
+      "operations": 100000,
+      "repetition": 9,
+      "scenario": "exceptions",
+      "throughputOpsPerSecond": 279512.041295
+    },
+    {
+      "elapsedSeconds": 0.308676687,
+      "logicalAllocations": 200000,
+      "maxRssKiB": 2688,
+      "model": "candidate-arc",
+      "operations": 100000,
+      "repetition": 9,
+      "scenario": "exceptions",
+      "throughputOpsPerSecond": 323963.565153
+    },
+    {
+      "elapsedSeconds": 0.150118536,
+      "logicalAllocations": 900000,
+      "maxRssKiB": 3712,
+      "model": "baseline-strict",
+      "operations": 300000,
+      "repetition": 1,
+      "scenario": "coroutines",
+      "throughputOpsPerSecond": 1998420.767972
+    },
+    {
+      "elapsedSeconds": 0.263836126,
+      "logicalAllocations": 900000,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 300000,
+      "repetition": 1,
+      "scenario": "coroutines",
+      "throughputOpsPerSecond": 1137069.455
+    },
+    {
+      "elapsedSeconds": 0.270568945,
+      "logicalAllocations": 900000,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 300000,
+      "repetition": 2,
+      "scenario": "coroutines",
+      "throughputOpsPerSecond": 1108774.696963
+    },
+    {
+      "elapsedSeconds": 0.149482063,
+      "logicalAllocations": 900000,
+      "maxRssKiB": 3712,
+      "model": "baseline-strict",
+      "operations": 300000,
+      "repetition": 2,
+      "scenario": "coroutines",
+      "throughputOpsPerSecond": 2006929.754508
+    },
+    {
+      "elapsedSeconds": 0.154125114,
+      "logicalAllocations": 900000,
+      "maxRssKiB": 3712,
+      "model": "baseline-strict",
+      "operations": 300000,
+      "repetition": 3,
+      "scenario": "coroutines",
+      "throughputOpsPerSecond": 1946470.57974
+    },
+    {
+      "elapsedSeconds": 0.269394308,
+      "logicalAllocations": 900000,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 300000,
+      "repetition": 3,
+      "scenario": "coroutines",
+      "throughputOpsPerSecond": 1113609.274922
+    },
+    {
+      "elapsedSeconds": 0.262931403,
+      "logicalAllocations": 900000,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 300000,
+      "repetition": 4,
+      "scenario": "coroutines",
+      "throughputOpsPerSecond": 1140982.007387
+    },
+    {
+      "elapsedSeconds": 0.152898742,
+      "logicalAllocations": 900000,
+      "maxRssKiB": 3712,
+      "model": "baseline-strict",
+      "operations": 300000,
+      "repetition": 4,
+      "scenario": "coroutines",
+      "throughputOpsPerSecond": 1962082.853501
+    },
+    {
+      "elapsedSeconds": 0.155731865,
+      "logicalAllocations": 900000,
+      "maxRssKiB": 3712,
+      "model": "baseline-strict",
+      "operations": 300000,
+      "repetition": 5,
+      "scenario": "coroutines",
+      "throughputOpsPerSecond": 1926388.025983
+    },
+    {
+      "elapsedSeconds": 0.271231446,
+      "logicalAllocations": 900000,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 300000,
+      "repetition": 5,
+      "scenario": "coroutines",
+      "throughputOpsPerSecond": 1106066.440393
+    },
+    {
+      "elapsedSeconds": 0.267644815,
+      "logicalAllocations": 900000,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 300000,
+      "repetition": 6,
+      "scenario": "coroutines",
+      "throughputOpsPerSecond": 1120888.517866
+    },
+    {
+      "elapsedSeconds": 0.15244499,
+      "logicalAllocations": 900000,
+      "maxRssKiB": 3712,
+      "model": "baseline-strict",
+      "operations": 300000,
+      "repetition": 6,
+      "scenario": "coroutines",
+      "throughputOpsPerSecond": 1967922.986515
+    },
+    {
+      "elapsedSeconds": 0.15059601,
+      "logicalAllocations": 900000,
+      "maxRssKiB": 3712,
+      "model": "baseline-strict",
+      "operations": 300000,
+      "repetition": 7,
+      "scenario": "coroutines",
+      "throughputOpsPerSecond": 1992084.650848
+    },
+    {
+      "elapsedSeconds": 0.264833668,
+      "logicalAllocations": 900000,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 300000,
+      "repetition": 7,
+      "scenario": "coroutines",
+      "throughputOpsPerSecond": 1132786.48544
+    },
+    {
+      "elapsedSeconds": 0.281214233,
+      "logicalAllocations": 900000,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 300000,
+      "repetition": 8,
+      "scenario": "coroutines",
+      "throughputOpsPerSecond": 1066802.333579
+    },
+    {
+      "elapsedSeconds": 0.15299908,
+      "logicalAllocations": 900000,
+      "maxRssKiB": 3712,
+      "model": "baseline-strict",
+      "operations": 300000,
+      "repetition": 8,
+      "scenario": "coroutines",
+      "throughputOpsPerSecond": 1960796.104133
+    },
+    {
+      "elapsedSeconds": 0.153186853,
+      "logicalAllocations": 900000,
+      "maxRssKiB": 3712,
+      "model": "baseline-strict",
+      "operations": 300000,
+      "repetition": 9,
+      "scenario": "coroutines",
+      "throughputOpsPerSecond": 1958392.604358
+    },
+    {
+      "elapsedSeconds": 0.269283824,
+      "logicalAllocations": 900000,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 300000,
+      "repetition": 9,
+      "scenario": "coroutines",
+      "throughputOpsPerSecond": 1114066.175769
+    },
+    {
+      "elapsedSeconds": 0.176040692,
+      "logicalAllocations": 16,
+      "maxRssKiB": 3328,
+      "model": "baseline-strict",
+      "operations": 160000000,
+      "repetition": 1,
+      "scenario": "workers",
+      "throughputOpsPerSecond": 908880771.72521
+    },
+    {
+      "elapsedSeconds": 0.177146365,
+      "logicalAllocations": 16,
+      "maxRssKiB": 2816,
+      "model": "candidate-arc",
+      "operations": 160000000,
+      "repetition": 1,
+      "scenario": "workers",
+      "throughputOpsPerSecond": 903207920.749602
+    },
+    {
+      "elapsedSeconds": 0.177328329,
+      "logicalAllocations": 16,
+      "maxRssKiB": 2816,
+      "model": "candidate-arc",
+      "operations": 160000000,
+      "repetition": 2,
+      "scenario": "workers",
+      "throughputOpsPerSecond": 902281101.402585
+    },
+    {
+      "elapsedSeconds": 0.176473722,
+      "logicalAllocations": 16,
+      "maxRssKiB": 3456,
+      "model": "baseline-strict",
+      "operations": 160000000,
+      "repetition": 2,
+      "scenario": "workers",
+      "throughputOpsPerSecond": 906650566.365909
+    },
+    {
+      "elapsedSeconds": 0.180852682,
+      "logicalAllocations": 16,
+      "maxRssKiB": 3456,
+      "model": "baseline-strict",
+      "operations": 160000000,
+      "repetition": 3,
+      "scenario": "workers",
+      "throughputOpsPerSecond": 884697966.491866
+    },
+    {
+      "elapsedSeconds": 0.176007321,
+      "logicalAllocations": 16,
+      "maxRssKiB": 2816,
+      "model": "candidate-arc",
+      "operations": 160000000,
+      "repetition": 3,
+      "scenario": "workers",
+      "throughputOpsPerSecond": 909053095.581178
+    },
+    {
+      "elapsedSeconds": 0.176505531,
+      "logicalAllocations": 16,
+      "maxRssKiB": 2816,
+      "model": "candidate-arc",
+      "operations": 160000000,
+      "repetition": 4,
+      "scenario": "workers",
+      "throughputOpsPerSecond": 906487174.047821
+    },
+    {
+      "elapsedSeconds": 0.176901657,
+      "logicalAllocations": 16,
+      "maxRssKiB": 3328,
+      "model": "baseline-strict",
+      "operations": 160000000,
+      "repetition": 4,
+      "scenario": "workers",
+      "throughputOpsPerSecond": 904457327.949167
+    },
+    {
+      "elapsedSeconds": 0.17795724,
+      "logicalAllocations": 16,
+      "maxRssKiB": 3456,
+      "model": "baseline-strict",
+      "operations": 160000000,
+      "repetition": 5,
+      "scenario": "workers",
+      "throughputOpsPerSecond": 899092388.710906
+    },
+    {
+      "elapsedSeconds": 0.178142283,
+      "logicalAllocations": 16,
+      "maxRssKiB": 2816,
+      "model": "candidate-arc",
+      "operations": 160000000,
+      "repetition": 5,
+      "scenario": "workers",
+      "throughputOpsPerSecond": 898158468.082505
+    },
+    {
+      "elapsedSeconds": 0.175930705,
+      "logicalAllocations": 16,
+      "maxRssKiB": 2816,
+      "model": "candidate-arc",
+      "operations": 160000000,
+      "repetition": 6,
+      "scenario": "workers",
+      "throughputOpsPerSecond": 909448978.789689
+    },
+    {
+      "elapsedSeconds": 0.177233619,
+      "logicalAllocations": 16,
+      "maxRssKiB": 3456,
+      "model": "baseline-strict",
+      "operations": 160000000,
+      "repetition": 6,
+      "scenario": "workers",
+      "throughputOpsPerSecond": 902763261.861735
+    },
+    {
+      "elapsedSeconds": 0.176646161,
+      "logicalAllocations": 16,
+      "maxRssKiB": 3456,
+      "model": "baseline-strict",
+      "operations": 160000000,
+      "repetition": 7,
+      "scenario": "workers",
+      "throughputOpsPerSecond": 905765509.390266
+    },
+    {
+      "elapsedSeconds": 0.174919047,
+      "logicalAllocations": 16,
+      "maxRssKiB": 2816,
+      "model": "candidate-arc",
+      "operations": 160000000,
+      "repetition": 7,
+      "scenario": "workers",
+      "throughputOpsPerSecond": 914708848.145051
+    },
+    {
+      "elapsedSeconds": 0.175848372,
+      "logicalAllocations": 16,
+      "maxRssKiB": 2816,
+      "model": "candidate-arc",
+      "operations": 160000000,
+      "repetition": 8,
+      "scenario": "workers",
+      "throughputOpsPerSecond": 909874786.898795
+    },
+    {
+      "elapsedSeconds": 0.175556164,
+      "logicalAllocations": 16,
+      "maxRssKiB": 3456,
+      "model": "baseline-strict",
+      "operations": 160000000,
+      "repetition": 8,
+      "scenario": "workers",
+      "throughputOpsPerSecond": 911389246.349675
+    },
+    {
+      "elapsedSeconds": 0.173432573,
+      "logicalAllocations": 16,
+      "maxRssKiB": 3456,
+      "model": "baseline-strict",
+      "operations": 160000000,
+      "repetition": 9,
+      "scenario": "workers",
+      "throughputOpsPerSecond": 922548730.220361
+    },
+    {
+      "elapsedSeconds": 0.177270745,
+      "logicalAllocations": 16,
+      "maxRssKiB": 2816,
+      "model": "candidate-arc",
+      "operations": 160000000,
+      "repetition": 9,
+      "scenario": "workers",
+      "throughputOpsPerSecond": 902574195.195039
+    },
+    {
+      "elapsedSeconds": 0.174959476,
+      "logicalAllocations": 1,
+      "maxRssKiB": 2816,
+      "model": "baseline-strict",
+      "operations": 40000000,
+      "repetition": 1,
+      "scenario": "atomics",
+      "throughputOpsPerSecond": 228624370.137002
+    },
+    {
+      "elapsedSeconds": 0.171372735,
+      "logicalAllocations": 1,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 40000000,
+      "repetition": 1,
+      "scenario": "atomics",
+      "throughputOpsPerSecond": 233409357.678746
+    },
+    {
+      "elapsedSeconds": 0.17306822,
+      "logicalAllocations": 1,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 40000000,
+      "repetition": 2,
+      "scenario": "atomics",
+      "throughputOpsPerSecond": 231122732.989338
+    },
+    {
+      "elapsedSeconds": 0.175869157,
+      "logicalAllocations": 1,
+      "maxRssKiB": 2816,
+      "model": "baseline-strict",
+      "operations": 40000000,
+      "repetition": 2,
+      "scenario": "atomics",
+      "throughputOpsPerSecond": 227441813.461356
+    },
+    {
+      "elapsedSeconds": 0.177003254,
+      "logicalAllocations": 1,
+      "maxRssKiB": 2816,
+      "model": "baseline-strict",
+      "operations": 40000000,
+      "repetition": 3,
+      "scenario": "atomics",
+      "throughputOpsPerSecond": 225984546.024222
+    },
+    {
+      "elapsedSeconds": 0.173846194,
+      "logicalAllocations": 1,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 40000000,
+      "repetition": 3,
+      "scenario": "atomics",
+      "throughputOpsPerSecond": 230088442.4309
+    },
+    {
+      "elapsedSeconds": 0.172719687,
+      "logicalAllocations": 1,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 40000000,
+      "repetition": 4,
+      "scenario": "atomics",
+      "throughputOpsPerSecond": 231589118.153045
+    },
+    {
+      "elapsedSeconds": 0.175202484,
+      "logicalAllocations": 1,
+      "maxRssKiB": 2816,
+      "model": "baseline-strict",
+      "operations": 40000000,
+      "repetition": 4,
+      "scenario": "atomics",
+      "throughputOpsPerSecond": 228307265.323932
+    },
+    {
+      "elapsedSeconds": 0.172473649,
+      "logicalAllocations": 1,
+      "maxRssKiB": 2816,
+      "model": "baseline-strict",
+      "operations": 40000000,
+      "repetition": 5,
+      "scenario": "atomics",
+      "throughputOpsPerSecond": 231919485.857228
+    },
+    {
+      "elapsedSeconds": 0.172708935,
+      "logicalAllocations": 1,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 40000000,
+      "repetition": 5,
+      "scenario": "atomics",
+      "throughputOpsPerSecond": 231603535.740638
+    },
+    {
+      "elapsedSeconds": 0.174263426,
+      "logicalAllocations": 1,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 40000000,
+      "repetition": 6,
+      "scenario": "atomics",
+      "throughputOpsPerSecond": 229537550.81115
+    },
+    {
+      "elapsedSeconds": 0.169794266,
+      "logicalAllocations": 1,
+      "maxRssKiB": 2816,
+      "model": "baseline-strict",
+      "operations": 40000000,
+      "repetition": 6,
+      "scenario": "atomics",
+      "throughputOpsPerSecond": 235579215.613795
+    },
+    {
+      "elapsedSeconds": 0.171719161,
+      "logicalAllocations": 1,
+      "maxRssKiB": 2816,
+      "model": "baseline-strict",
+      "operations": 40000000,
+      "repetition": 7,
+      "scenario": "atomics",
+      "throughputOpsPerSecond": 232938477.960535
+    },
+    {
+      "elapsedSeconds": 0.171810885,
+      "logicalAllocations": 1,
+      "maxRssKiB": 2688,
+      "model": "candidate-arc",
+      "operations": 40000000,
+      "repetition": 7,
+      "scenario": "atomics",
+      "throughputOpsPerSecond": 232814120.013409
+    },
+    {
+      "elapsedSeconds": 0.171160114,
+      "logicalAllocations": 1,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 40000000,
+      "repetition": 8,
+      "scenario": "atomics",
+      "throughputOpsPerSecond": 233699306.837339
+    },
+    {
+      "elapsedSeconds": 0.175079882,
+      "logicalAllocations": 1,
+      "maxRssKiB": 2816,
+      "model": "baseline-strict",
+      "operations": 40000000,
+      "repetition": 8,
+      "scenario": "atomics",
+      "throughputOpsPerSecond": 228467140.502185
+    },
+    {
+      "elapsedSeconds": 0.17288155,
+      "logicalAllocations": 1,
+      "maxRssKiB": 2816,
+      "model": "baseline-strict",
+      "operations": 40000000,
+      "repetition": 9,
+      "scenario": "atomics",
+      "throughputOpsPerSecond": 231372289.292871
+    },
+    {
+      "elapsedSeconds": 0.177559211,
+      "logicalAllocations": 1,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 40000000,
+      "repetition": 9,
+      "scenario": "atomics",
+      "throughputOpsPerSecond": 225276964.088334
+    },
+    {
+      "elapsedSeconds": 0.290286635,
+      "logicalAllocations": 0,
+      "maxRssKiB": 3200,
+      "model": "baseline-strict",
+      "operations": 1800000,
+      "repetition": 1,
+      "scenario": "platform-c-interop",
+      "throughputOpsPerSecond": 6200767.734278
+    },
+    {
+      "elapsedSeconds": 0.333759696,
+      "logicalAllocations": 0,
+      "maxRssKiB": 2688,
+      "model": "candidate-arc",
+      "operations": 1800000,
+      "repetition": 1,
+      "scenario": "platform-c-interop",
+      "throughputOpsPerSecond": 5393101.748271
+    },
+    {
+      "elapsedSeconds": 0.341814431,
+      "logicalAllocations": 0,
+      "maxRssKiB": 2688,
+      "model": "candidate-arc",
+      "operations": 1800000,
+      "repetition": 2,
+      "scenario": "platform-c-interop",
+      "throughputOpsPerSecond": 5266015.231522
+    },
+    {
+      "elapsedSeconds": 0.289080343,
+      "logicalAllocations": 0,
+      "maxRssKiB": 3200,
+      "model": "baseline-strict",
+      "operations": 1800000,
+      "repetition": 2,
+      "scenario": "platform-c-interop",
+      "throughputOpsPerSecond": 6226642.674213
+    },
+    {
+      "elapsedSeconds": 0.288705365,
+      "logicalAllocations": 0,
+      "maxRssKiB": 3200,
+      "model": "baseline-strict",
+      "operations": 1800000,
+      "repetition": 3,
+      "scenario": "platform-c-interop",
+      "throughputOpsPerSecond": 6234729.998869
+    },
+    {
+      "elapsedSeconds": 0.343276046,
+      "logicalAllocations": 0,
+      "maxRssKiB": 2688,
+      "model": "candidate-arc",
+      "operations": 1800000,
+      "repetition": 3,
+      "scenario": "platform-c-interop",
+      "throughputOpsPerSecond": 5243593.373247
+    },
+    {
+      "elapsedSeconds": 0.346258811,
+      "logicalAllocations": 0,
+      "maxRssKiB": 2688,
+      "model": "candidate-arc",
+      "operations": 1800000,
+      "repetition": 4,
+      "scenario": "platform-c-interop",
+      "throughputOpsPerSecond": 5198423.672748
+    },
+    {
+      "elapsedSeconds": 0.287018666,
+      "logicalAllocations": 0,
+      "maxRssKiB": 3200,
+      "model": "baseline-strict",
+      "operations": 1800000,
+      "repetition": 4,
+      "scenario": "platform-c-interop",
+      "throughputOpsPerSecond": 6271369.124125
+    },
+    {
+      "elapsedSeconds": 0.41277925,
+      "logicalAllocations": 0,
+      "maxRssKiB": 3200,
+      "model": "baseline-strict",
+      "operations": 1800000,
+      "repetition": 5,
+      "scenario": "platform-c-interop",
+      "throughputOpsPerSecond": 4360684.312499
+    },
+    {
+      "elapsedSeconds": 0.346006935,
+      "logicalAllocations": 0,
+      "maxRssKiB": 2688,
+      "model": "candidate-arc",
+      "operations": 1800000,
+      "repetition": 5,
+      "scenario": "platform-c-interop",
+      "throughputOpsPerSecond": 5202207.869042
+    },
+    {
+      "elapsedSeconds": 0.33623619,
+      "logicalAllocations": 0,
+      "maxRssKiB": 2688,
+      "model": "candidate-arc",
+      "operations": 1800000,
+      "repetition": 6,
+      "scenario": "platform-c-interop",
+      "throughputOpsPerSecond": 5353379.717989
+    },
+    {
+      "elapsedSeconds": 0.285458688,
+      "logicalAllocations": 0,
+      "maxRssKiB": 3200,
+      "model": "baseline-strict",
+      "operations": 1800000,
+      "repetition": 6,
+      "scenario": "platform-c-interop",
+      "throughputOpsPerSecond": 6305640.975972
+    },
+    {
+      "elapsedSeconds": 0.288280128,
+      "logicalAllocations": 0,
+      "maxRssKiB": 3200,
+      "model": "baseline-strict",
+      "operations": 1800000,
+      "repetition": 7,
+      "scenario": "platform-c-interop",
+      "throughputOpsPerSecond": 6243926.74059
+    },
+    {
+      "elapsedSeconds": 0.519778604,
+      "logicalAllocations": 0,
+      "maxRssKiB": 2688,
+      "model": "candidate-arc",
+      "operations": 1800000,
+      "repetition": 7,
+      "scenario": "platform-c-interop",
+      "throughputOpsPerSecond": 3463012.87923
+    },
+    {
+      "elapsedSeconds": 0.336456233,
+      "logicalAllocations": 0,
+      "maxRssKiB": 2688,
+      "model": "candidate-arc",
+      "operations": 1800000,
+      "repetition": 8,
+      "scenario": "platform-c-interop",
+      "throughputOpsPerSecond": 5349878.597731
+    },
+    {
+      "elapsedSeconds": 0.287540606,
+      "logicalAllocations": 0,
+      "maxRssKiB": 3200,
+      "model": "baseline-strict",
+      "operations": 1800000,
+      "repetition": 8,
+      "scenario": "platform-c-interop",
+      "throughputOpsPerSecond": 6259985.415764
+    },
+    {
+      "elapsedSeconds": 0.282056833,
+      "logicalAllocations": 0,
+      "maxRssKiB": 3200,
+      "model": "baseline-strict",
+      "operations": 1800000,
+      "repetition": 9,
+      "scenario": "platform-c-interop",
+      "throughputOpsPerSecond": 6381692.586047
+    },
+    {
+      "elapsedSeconds": 0.341095954,
+      "logicalAllocations": 0,
+      "maxRssKiB": 2688,
+      "model": "candidate-arc",
+      "operations": 1800000,
+      "repetition": 9,
+      "scenario": "platform-c-interop",
+      "throughputOpsPerSecond": 5277107.449946
+    },
+    {
+      "elapsedSeconds": 0.137101298,
+      "logicalAllocations": 50000,
+      "maxRssKiB": 2816,
+      "model": "baseline-strict",
+      "operations": 256000000,
+      "repetition": 1,
+      "scenario": "bounded-cycles",
+      "throughputOpsPerSecond": 1867232504.246604
+    },
+    {
+      "elapsedSeconds": 2.35759582,
+      "logicalAllocations": 50000,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 256000000,
+      "repetition": 1,
+      "scenario": "bounded-cycles",
+      "throughputOpsPerSecond": 108585194.217048
+    },
+    {
+      "elapsedSeconds": 2.361285273,
+      "logicalAllocations": 50000,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 256000000,
+      "repetition": 2,
+      "scenario": "bounded-cycles",
+      "throughputOpsPerSecond": 108415532.391287
+    },
+    {
+      "elapsedSeconds": 0.192539441,
+      "logicalAllocations": 50000,
+      "maxRssKiB": 2816,
+      "model": "baseline-strict",
+      "operations": 256000000,
+      "repetition": 2,
+      "scenario": "bounded-cycles",
+      "throughputOpsPerSecond": 1329597710.839931
+    },
+    {
+      "elapsedSeconds": 0.199584977,
+      "logicalAllocations": 50000,
+      "maxRssKiB": 2816,
+      "model": "baseline-strict",
+      "operations": 256000000,
+      "repetition": 3,
+      "scenario": "bounded-cycles",
+      "throughputOpsPerSecond": 1282661670.472322
+    },
+    {
+      "elapsedSeconds": 2.332938635,
+      "logicalAllocations": 50000,
+      "maxRssKiB": 2688,
+      "model": "candidate-arc",
+      "operations": 256000000,
+      "repetition": 3,
+      "scenario": "bounded-cycles",
+      "throughputOpsPerSecond": 109732847.730905
+    },
+    {
+      "elapsedSeconds": 2.345206445,
+      "logicalAllocations": 50000,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 256000000,
+      "repetition": 4,
+      "scenario": "bounded-cycles",
+      "throughputOpsPerSecond": 109158833.562731
+    },
+    {
+      "elapsedSeconds": 0.192684939,
+      "logicalAllocations": 50000,
+      "maxRssKiB": 2816,
+      "model": "baseline-strict",
+      "operations": 256000000,
+      "repetition": 4,
+      "scenario": "bounded-cycles",
+      "throughputOpsPerSecond": 1328593720.550209
+    },
+    {
+      "elapsedSeconds": 0.157886076,
+      "logicalAllocations": 50000,
+      "maxRssKiB": 2816,
+      "model": "baseline-strict",
+      "operations": 256000000,
+      "repetition": 5,
+      "scenario": "bounded-cycles",
+      "throughputOpsPerSecond": 1621422271.587775
+    },
+    {
+      "elapsedSeconds": 2.402693343,
+      "logicalAllocations": 50000,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 256000000,
+      "repetition": 5,
+      "scenario": "bounded-cycles",
+      "throughputOpsPerSecond": 106547096.717869
+    },
+    {
+      "elapsedSeconds": 2.389324021,
+      "logicalAllocations": 50000,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 256000000,
+      "repetition": 6,
+      "scenario": "bounded-cycles",
+      "throughputOpsPerSecond": 107143274.729585
+    },
+    {
+      "elapsedSeconds": 0.201215102,
+      "logicalAllocations": 50000,
+      "maxRssKiB": 2816,
+      "model": "baseline-strict",
+      "operations": 256000000,
+      "repetition": 6,
+      "scenario": "bounded-cycles",
+      "throughputOpsPerSecond": 1272270309.014877
+    },
+    {
+      "elapsedSeconds": 0.140782271,
+      "logicalAllocations": 50000,
+      "maxRssKiB": 2816,
+      "model": "baseline-strict",
+      "operations": 256000000,
+      "repetition": 7,
+      "scenario": "bounded-cycles",
+      "throughputOpsPerSecond": 1818410785.545575
+    },
+    {
+      "elapsedSeconds": 2.37812408,
+      "logicalAllocations": 50000,
+      "maxRssKiB": 2688,
+      "model": "candidate-arc",
+      "operations": 256000000,
+      "repetition": 7,
+      "scenario": "bounded-cycles",
+      "throughputOpsPerSecond": 107647873.444854
+    },
+    {
+      "elapsedSeconds": 2.400120879,
+      "logicalAllocations": 50000,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 256000000,
+      "repetition": 8,
+      "scenario": "bounded-cycles",
+      "throughputOpsPerSecond": 106661294.537241
+    },
+    {
+      "elapsedSeconds": 0.146596265,
+      "logicalAllocations": 50000,
+      "maxRssKiB": 2816,
+      "model": "baseline-strict",
+      "operations": 256000000,
+      "repetition": 8,
+      "scenario": "bounded-cycles",
+      "throughputOpsPerSecond": 1746292785.835983
+    },
+    {
+      "elapsedSeconds": 0.15783578,
+      "logicalAllocations": 50000,
+      "maxRssKiB": 2816,
+      "model": "baseline-strict",
+      "operations": 256000000,
+      "repetition": 9,
+      "scenario": "bounded-cycles",
+      "throughputOpsPerSecond": 1621938954.526027
+    },
+    {
+      "elapsedSeconds": 2.402943453,
+      "logicalAllocations": 50000,
+      "maxRssKiB": 2560,
+      "model": "candidate-arc",
+      "operations": 256000000,
+      "repetition": 9,
+      "scenario": "bounded-cycles",
+      "throughputOpsPerSecond": 106536006.779682
+    }
+  ]
+}
