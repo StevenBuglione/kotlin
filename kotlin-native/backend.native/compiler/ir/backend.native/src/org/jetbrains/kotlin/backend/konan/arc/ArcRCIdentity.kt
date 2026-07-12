@@ -39,6 +39,10 @@ internal enum class ArcRCIdentityIssueKind {
     UnresolvedCycle,
     MissingDefinition,
     OverlappingOwnershipWeb,
+    UseAfterConsume,
+    UnmodeledExceptionalConsume,
+    UnsupportedEscape,
+    UnsupportedUnknownConsume,
 }
 
 internal data class ArcRCIdentityIssue(
@@ -110,7 +114,7 @@ internal class ArcRCPrunedLiveness internal constructor(
         val frontier: Set<ArcRCLifetimeFrontier>,
     )
 
-    private val cache = mutableMapOf<Set<ArcSSAValue>, FamilyLiveness>()
+    private val cache = mutableMapOf<ArcSSAValue, FamilyLiveness>()
 
     internal fun operationCount(block: ArcBlockId): Int? = cfg.blocks[block]?.operations?.size
 
@@ -142,18 +146,30 @@ internal class ArcRCPrunedLiveness internal constructor(
 
     private fun family(value: ArcSSAValue): FamilyLiveness? {
         val identity = identities[value] ?: return null
-        val family = identities.values.asSequence()
-            .filter { candidate ->
-                candidate.provenanceRoots.any { it in identity.provenanceRoots } ||
-                        (identity.ownershipWeb != null && candidate.ownershipWeb === identity.ownershipWeb)
+        return cache.getOrPut(value) {
+            val relevantRoots = identity.provenanceRoots.toMutableSet()
+            val family = linkedSetOf<ArcSSAValue>()
+            var changed = true
+            while (changed) {
+                changed = false
+                identities.values.forEach { candidate ->
+                    val related = candidate.provenanceRoots.any { it in relevantRoots } ||
+                            candidate.anchorRoots.any { it in relevantRoots } ||
+                            (identity.ownershipWeb != null && candidate.ownershipWeb === identity.ownershipWeb)
+                    if (related && family.add(candidate.value)) {
+                        relevantRoots += candidate.provenanceRoots
+                        relevantRoots += candidate.anchorRoots
+                        changed = true
+                    }
+                }
             }
-            .mapTo(linkedSetOf()) { it.value }
-        return cache.getOrPut(family) { compute(family, identity) }
+            compute(family, identity)
+        }
     }
 
     private fun compute(family: Set<ArcSSAValue>, identity: ArcRCIdentity): FamilyLiveness {
-        val successors = cfg.blocks.keys.associateWith { block ->
-            cfg.edges.filter { it.from == block }.map { it.to }
+        val normalSuccessors = cfg.blocks.keys.associateWith { block ->
+            cfg.edges.filter { it.from == block && it.kind == ArcSSAEdgeKind.Normal }.map { it.to }
         }
         val liveIn = cfg.blocks.keys.associateWithTo(linkedMapOf()) { false }
         val liveOut = cfg.blocks.keys.associateWithTo(linkedMapOf()) { false }
@@ -164,14 +180,19 @@ internal class ArcRCPrunedLiveness internal constructor(
         while (changed) {
             changed = false
             cfg.blocks.values.toList().asReversed().forEach { block ->
-                val blockLiveOut = successors.getValue(block.id).any { liveIn[it] == true }
+                val blockLiveOut = normalSuccessors.getValue(block.id).any { liveIn[it] == true }
                 var live = blockLiveOut
                 val newAfter = BooleanArray(block.operations.size)
                 val newBefore = BooleanArray(block.operations.size)
                 for (index in block.operations.indices.reversed()) {
                     val operation = block.operations[index]
                     newAfter[index] = live
-                    live = transferBackward(operation, family, live)
+                    val exceptionalLive = if (operation is ArcSSAOperation.Use && operation.mayThrow) {
+                        cfg.edges.any { edge ->
+                            edge.from == block.id && edge.kind == ArcSSAEdgeKind.Exceptional && liveIn[edge.to] == true
+                        }
+                    } else false
+                    live = transferBackward(operation, family, identity, live) || exceptionalLive
                     newBefore[index] = live
                 }
                 if (liveOut[block.id] != blockLiveOut || liveIn[block.id] != live ||
@@ -187,17 +208,29 @@ internal class ArcRCPrunedLiveness internal constructor(
             }
         }
 
+        val hasUnsupportedTerminalEffect = cfg.blocks.values.any { block ->
+            block.operations.any { operation ->
+                operation is ArcSSAOperation.Use && operation.value in family &&
+                        (operation.kind == ArcSSAUseKind.Escape || operation.kind == ArcSSAUseKind.UnknownConsume)
+            }
+        }
+        if (hasUnsupportedTerminalEffect) return FamilyLiveness(before, after, emptySet())
+
         val frontier = linkedSetOf<ArcRCLifetimeFrontier>()
         cfg.blocks.values.forEach { block ->
             block.operations.forEachIndexed { index, operation ->
                 val position = ArcRCPosition(block.id, index)
                 when {
                     operation is ArcSSAOperation.Use && operation.value in family &&
-                            operation.kind == ArcSSAUseKind.Consume ->
+                            operation.kind == ArcSSAUseKind.Consume &&
+                            operation.value.hasQueriedProvenance(identity) ->
                         frontier += ArcRCLifetimeFrontier.ConsumedAt(position)
                     before.getValue(block.id)[index] && !after.getValue(block.id)[index] -> {
                         val barrier = barriers.firstOrNull { it.position == position }
-                        if (barrier != null && barrierAffects(identity, barrier)) {
+                        val endsAfterOperation = operation is ArcSSAOperation.Use &&
+                                operation.kind == ArcSSAUseKind.Borrow || operation.isDistinctConsumeOf(identity)
+                        if (barrier != null && barrierAffects(identity, barrier) && !endsAfterOperation
+                        ) {
                             frontier += ArcRCLifetimeFrontier.BeforeBarrier(barrier)
                         } else {
                             frontier += ArcRCLifetimeFrontier.AfterOperation(position)
@@ -207,22 +240,21 @@ internal class ArcRCPrunedLiveness internal constructor(
             }
             val endsLive = block.operations.indices.lastOrNull()?.let { after.getValue(block.id)[it] }
                 ?: liveOut.getValue(block.id)
-            if (endsLive && successors.getValue(block.id).isEmpty()) {
+            if (endsLive && cfg.edges.none { it.from == block.id }) {
                 frontier += ArcRCLifetimeFrontier.BeforeExit(block.id)
             }
         }
-        cfg.blocks.values.forEach { block ->
-            val exceptionalEdges = cfg.edges.filter { it.from == block.id && it.kind == ArcSSAEdgeKind.Exceptional }
-            val throwingUses = block.operations.filterIsInstance<ArcSSAOperation.Use>().filter { it.mayThrow }
-            val throwingUse = throwingUses.singleOrNull()
-            val edge = exceptionalEdges.singleOrNull()
-            if (throwingUse != null && edge != null && throwingUse.value in family &&
-                !reachableFrom(edge.to).any { reachable ->
-                    cfg.blocks.getValue(reachable).operations.any { it is ArcSSAOperation.Use && it.value in family }
+        cfg.edges.forEach { edge ->
+            val block = cfg.blocks.getValue(edge.from)
+            val sourceLive = if (edge.kind == ArcSSAEdgeKind.Exceptional) {
+                val throwingIndex = block.operations.indices.singleOrNull { index ->
+                    (block.operations[index] as? ArcSSAOperation.Use)?.mayThrow == true
                 }
-            ) {
-                frontier += ArcRCLifetimeFrontier.OnEdge(edge)
+                throwingIndex?.let { before.getValue(block.id)[it] } == true
+            } else {
+                liveOut.getValue(block.id)
             }
+            if (sourceLive && liveIn[edge.to] != true) frontier += ArcRCLifetimeFrontier.OnEdge(edge)
         }
         identity.ownershipWeb?.destroyPlacements?.forEach { placement ->
             frontier += when (placement) {
@@ -241,26 +273,40 @@ internal class ArcRCPrunedLiveness internal constructor(
         return FamilyLiveness(before, after, frontier)
     }
 
-    private fun reachableFrom(start: ArcBlockId): Set<ArcBlockId> {
-        val result = linkedSetOf<ArcBlockId>()
-        val worklist = ArrayDeque<ArcBlockId>().apply { add(start) }
-        while (worklist.isNotEmpty()) {
-            val block = worklist.removeFirst()
-            if (!result.add(block)) continue
-            cfg.edges.filter { it.from == block }.forEach { worklist += it.to }
-        }
-        return result
-    }
-
-    private fun transferBackward(operation: ArcSSAOperation, family: Set<ArcSSAValue>, liveAfter: Boolean): Boolean = when (operation) {
+    private fun transferBackward(
+        operation: ArcSSAOperation,
+        family: Set<ArcSSAValue>,
+        queriedIdentity: ArcRCIdentity,
+        liveAfter: Boolean,
+    ): Boolean = when (operation) {
         is ArcSSAOperation.Use -> if (operation.value in family) true else liveAfter
-        is ArcSSAOperation.Introduce -> if (operation.result in family) false else liveAfter
+        is ArcSSAOperation.Introduce -> if (operation.result in family &&
+            identities[operation.result]?.provenanceRoots?.any { it in queriedIdentity.provenanceRoots } == true
+        ) false else liveAfter
         // Forwarding and reborrow definitions do not end an identity family; their source and
         // result are the same RC identity at different SSA points.
         is ArcSSAOperation.Forward -> if (operation.source in family || operation.result in family) liveAfter else liveAfter
         is ArcSSAOperation.Reborrow -> if (operation.source in family || operation.result in family) liveAfter else liveAfter
+        is ArcSSAOperation.Borrow -> if (operation.source in family || operation.result in family) liveAfter else liveAfter
         is ArcSSAOperation.Join -> if (operation.result in family || operation.incoming.values.any { it in family }) liveAfter else liveAfter
-        is ArcSSAOperation.DeinitBarrier -> liveAfter
+        is ArcSSAOperation.InitializeOwned -> if (operation.value in family) true else liveAfter
+        is ArcSSAOperation.InitializeImmortal -> if (operation.value in family) true else liveAfter
+        is ArcSSAOperation.JoinSlot -> if (operation.value in family) liveAfter else liveAfter
+        is ArcSSAOperation.MoveOwned -> if (operation.value in family) true else liveAfter
+        is ArcSSAOperation.DestroyOwned -> if (operation.value in family) true else liveAfter
+        is ArcSSAOperation.EndBorrow, is ArcSSAOperation.DeinitBarrier -> liveAfter
+    }
+
+    private fun ArcSSAValue.hasQueriedProvenance(queriedIdentity: ArcRCIdentity): Boolean {
+        val candidate = identities[this] ?: return false
+        return candidate.provenanceRoots.any { it in queriedIdentity.provenanceRoots } ||
+                (queriedIdentity.ownershipWeb != null && candidate.ownershipWeb === queriedIdentity.ownershipWeb)
+    }
+
+    private fun ArcSSAOperation.isDistinctConsumeOf(queriedIdentity: ArcRCIdentity): Boolean = when (this) {
+        is ArcSSAOperation.Use -> kind == ArcSSAUseKind.Consume && !value.hasQueriedProvenance(queriedIdentity)
+        is ArcSSAOperation.DestroyOwned -> !value.hasQueriedProvenance(queriedIdentity)
+        else -> false
     }
 
 }
@@ -360,6 +406,7 @@ internal object ArcRCIdentityAnalysis {
                     is ArcSSAOperation.Introduce -> setOf(value)
                     is ArcSSAOperation.Forward -> roots[operation.source]
                     is ArcSSAOperation.Reborrow -> roots[operation.source]
+                    is ArcSSAOperation.Borrow -> roots[operation.source]
                     is ArcSSAOperation.Join -> operation.incoming.values.map { roots[it] }
                         .takeIf { it.none { rootsForInput -> rootsForInput == null } }
                         ?.filterNotNull()?.flatten()?.toCollection(linkedSetOf())
@@ -369,6 +416,7 @@ internal object ArcRCIdentityAnalysis {
                     is ArcSSAOperation.Introduce -> canonicalKnownRoots(operation.anchorDependencies, roots)
                     is ArcSSAOperation.Forward -> anchors[operation.source]
                     is ArcSSAOperation.Reborrow -> canonicalKnownRoots(operation.anchorDependencies, roots)
+                    is ArcSSAOperation.Borrow -> canonicalKnownRoots(setOf(operation.source), roots)
                     is ArcSSAOperation.Join -> operation.incoming.values.map { anchors[it] }
                         .takeIf { it.none { anchorsForInput -> anchorsForInput == null } }
                         ?.filterNotNull()?.flatten()?.toCollection(linkedSetOf())
@@ -396,6 +444,8 @@ internal object ArcRCIdentityAnalysis {
         val identities = roots.filterKeys { it !in invalidValues }.mapValues { (value, provenance) ->
             ArcRCIdentity(value, provenance, anchors[value].orEmpty(), webByMember[value])
         }
+        issues += validateTerminalConsumes(input.cfg, identities)
+        issues += validateUnsupportedEffects(input.cfg, identities)
         val barriers = collectBarriers(input.cfg)
         val liveness = ArcRCPrunedLiveness(input.cfg, identities, barriers)
         return ArcRCIdentityResult(identities, barriers, liveness, issues.distinct())
@@ -409,7 +459,8 @@ internal object ArcRCIdentityAnalysis {
             block.operations.forEachIndexed { index, operation ->
                 val kind = when (operation) {
                     is ArcSSAOperation.DeinitBarrier -> ArcRCBarrierKind.Deinitialization
-                    is ArcSSAOperation.Join -> ArcRCBarrierKind.ControlJoin
+                    is ArcSSAOperation.Join, is ArcSSAOperation.JoinSlot -> ArcRCBarrierKind.ControlJoin
+                    is ArcSSAOperation.DestroyOwned -> ArcRCBarrierKind.Consume
                     is ArcSSAOperation.Use -> when {
                         operation.kind == ArcSSAUseKind.Consume -> ArcRCBarrierKind.Consume
                         operation.kind == ArcSSAUseKind.Escape -> ArcRCBarrierKind.Escape
@@ -424,12 +475,94 @@ internal object ArcRCIdentityAnalysis {
         }
     }
 
+    private fun validateTerminalConsumes(
+        cfg: ArcOwnershipSSAInput,
+        identities: Map<ArcSSAValue, ArcRCIdentity>,
+    ): List<ArcRCIdentityIssue> = buildList {
+        fun overlaps(left: ArcSSAValue, right: ArcSSAValue): Boolean {
+            val leftIdentity = identities[left] ?: return false
+            val rightIdentity = identities[right] ?: return false
+            return leftIdentity.provenanceRoots.any { it in rightIdentity.provenanceRoots } ||
+                    (leftIdentity.ownershipWeb != null && leftIdentity.ownershipWeb === rightIdentity.ownershipWeb)
+        }
+        fun operationTouches(operation: ArcSSAOperation, consumed: ArcSSAValue): Boolean =
+            operation.dependencies().any { overlaps(it, consumed) }
+
+        cfg.blocks.values.forEach { block ->
+            block.operations.forEachIndexed { index, operation ->
+                val consume = operation as? ArcSSAOperation.Use ?: return@forEachIndexed
+                if (consume.kind != ArcSSAUseKind.Consume || consume.value !in identities) return@forEachIndexed
+                if (consume.mayThrow && cfg.edges.count {
+                        it.from == block.id && it.kind == ArcSSAEdgeKind.Exceptional
+                    } != 1
+                ) {
+                    add(ArcRCIdentityIssue(
+                        ArcRCIdentityIssueKind.UnmodeledExceptionalConsume,
+                        consume.value,
+                        "throwing consume at ${ArcRCPosition(block.id, index)} requires exactly one exceptional edge",
+                    ))
+                }
+                val sameBlockUse = block.operations.drop(index + 1).firstOrNull { operationTouches(it, consume.value) }
+                val reachable = linkedSetOf<ArcBlockId>()
+                val worklist = ArrayDeque<ArcBlockId>().apply {
+                    cfg.edges.filter {
+                        it.from == block.id && it.kind == ArcSSAEdgeKind.Normal
+                    }.forEach { add(it.to) }
+                }
+                while (worklist.isNotEmpty()) {
+                    val next = worklist.removeFirst()
+                    if (!reachable.add(next)) continue
+                    cfg.edges.filter { it.from == next }.forEach { worklist += it.to }
+                }
+                val downstreamUse = reachable.asSequence()
+                    .flatMap { cfg.blocks.getValue(it).operations.asSequence() }
+                    .firstOrNull { operationTouches(it, consume.value) }
+                if (sameBlockUse != null || downstreamUse != null) {
+                    add(ArcRCIdentityIssue(
+                        ArcRCIdentityIssueKind.UseAfterConsume,
+                        consume.value,
+                        "consume at ${ArcRCPosition(block.id, index)} is not the terminal normal-path identity use",
+                    ))
+                }
+            }
+        }
+    }
+
+    private fun validateUnsupportedEffects(
+        cfg: ArcOwnershipSSAInput,
+        identities: Map<ArcSSAValue, ArcRCIdentity>,
+    ): List<ArcRCIdentityIssue> = buildList {
+        cfg.blocks.values.forEach { block ->
+            block.operations.filterIsInstance<ArcSSAOperation.Use>().forEach useLoop@ { use ->
+                if (use.value !in identities) return@useLoop
+                val kind = when (use.kind) {
+                    ArcSSAUseKind.Escape -> ArcRCIdentityIssueKind.UnsupportedEscape
+                    ArcSSAUseKind.UnknownConsume -> ArcRCIdentityIssueKind.UnsupportedUnknownConsume
+                    ArcSSAUseKind.Borrow, ArcSSAUseKind.Consume -> null
+                }
+                if (kind != null) add(ArcRCIdentityIssue(
+                    kind,
+                    use.value,
+                    "${use.kind} has no proven local lifetime end",
+                ))
+            }
+        }
+    }
+
     private fun ArcSSAOperation.resultOrNull(): ArcSSAValue? = when (this) {
         is ArcSSAOperation.Introduce -> result
         is ArcSSAOperation.Forward -> result
         is ArcSSAOperation.Reborrow -> result
         is ArcSSAOperation.Join -> result
-        is ArcSSAOperation.Use, is ArcSSAOperation.DeinitBarrier -> null
+        is ArcSSAOperation.Borrow -> result
+        is ArcSSAOperation.Use,
+        is ArcSSAOperation.InitializeOwned,
+        is ArcSSAOperation.InitializeImmortal,
+        is ArcSSAOperation.JoinSlot,
+        is ArcSSAOperation.EndBorrow,
+        is ArcSSAOperation.MoveOwned,
+        is ArcSSAOperation.DestroyOwned,
+        is ArcSSAOperation.DeinitBarrier -> null
     }
 
     private fun ArcSSAOperation.dependencies(): List<ArcSSAValue> = when (this) {
@@ -437,7 +570,13 @@ internal object ArcRCIdentityAnalysis {
         is ArcSSAOperation.Forward -> listOf(source)
         is ArcSSAOperation.Reborrow -> listOf(source) + anchorDependencies
         is ArcSSAOperation.Join -> incoming.values.toList()
+        is ArcSSAOperation.Borrow -> listOf(source)
         is ArcSSAOperation.Use -> listOf(value)
-        is ArcSSAOperation.DeinitBarrier -> emptyList()
+        is ArcSSAOperation.InitializeOwned -> listOf(value)
+        is ArcSSAOperation.InitializeImmortal -> listOf(value)
+        is ArcSSAOperation.JoinSlot -> listOf(value)
+        is ArcSSAOperation.MoveOwned -> listOf(value)
+        is ArcSSAOperation.DestroyOwned -> listOf(value)
+        is ArcSSAOperation.EndBorrow, is ArcSSAOperation.DeinitBarrier -> emptyList()
     }
 }

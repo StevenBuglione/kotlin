@@ -348,6 +348,338 @@ class ArcRCIdentityTest {
         assertFalse(ArcRCLifetimeFrontier.OnEdge(exceptional) in frontier)
     }
 
+    @Test
+    fun consumeMustBeTheTerminalNormalPathUse() {
+        listOf(ArcSSAUseKind.Borrow, ArcSSAUseKind.Consume).forEach { laterKind ->
+            val value = ArcSSAValue("value.$laterKind")
+            val cfg = linear(listOf(
+                ArcSSAOperation.Introduce(value, ArcOwnership.Owned),
+                ArcSSAOperation.Use(value, ArcSSAUseKind.Consume),
+                ArcSSAOperation.Use(value, laterKind),
+            ))
+
+            val issues = ArcRCIdentityAnalysis.analyze(ArcRCIdentityInput(cfg, emptyList())).issues
+            assertEquals(
+                laterKind.toString(),
+                setOf(ArcRCIdentityIssueKind.UseAfterConsume),
+                issues.mapTo(mutableSetOf()) { it.kind },
+            )
+        }
+    }
+
+    @Test
+    fun consumeCannotBeFollowedByBorrowProjection() {
+        val value = ArcSSAValue("value")
+        val borrowed = ArcSSAValue("borrowed")
+        val cfg = linear(listOf(
+            ArcSSAOperation.Introduce(value, ArcOwnership.Owned),
+            ArcSSAOperation.Use(value, ArcSSAUseKind.Consume),
+            ArcSSAOperation.Borrow(
+                ArcSSASlot("slot"), ArcSSASlotVersion("slot.0"), value, borrowed, ArcSSABorrowId("borrow"),
+            ),
+        ))
+
+        val issues = ArcRCIdentityAnalysis.analyze(ArcRCIdentityInput(cfg, emptyList())).issues
+        assertEquals(
+            setOf(ArcRCIdentityIssueKind.UseAfterConsume),
+            issues.mapTo(mutableSetOf()) { it.kind },
+        )
+    }
+
+    @Test
+    fun throwingConsumeKillsNormalPathButPreservesUnwindPath() {
+        val value = ArcSSAValue("value")
+        val normal = ArcBlockId("normal")
+        val handler = ArcBlockId("handler")
+        val exceptional = ArcSSAEdge(entry, handler, ArcSSAEdgeKind.Exceptional)
+        val cfg = ArcOwnershipSSAInput(entry, linkedMapOf(
+            entry to ArcSSABlock(entry, listOf(
+                ArcSSAOperation.Introduce(value, ArcOwnership.Owned),
+                ArcSSAOperation.Use(value, ArcSSAUseKind.Consume, mayThrow = true),
+            )),
+            normal to ArcSSABlock(normal, emptyList()),
+            handler to ArcSSABlock(handler, listOf(ArcSSAOperation.Use(value, ArcSSAUseKind.Borrow))),
+        ), setOf(ArcSSAEdge(entry, normal), exceptional))
+
+        val result = ArcRCIdentityAnalysis.analyze(ArcRCIdentityInput(cfg, emptyList()))
+
+        assertTrue(result.issues.toString(), result.issues.isEmpty())
+        assertFalse(result.liveness.isLiveAfter(value, entry, 1))
+        assertTrue(result.liveness.isLiveBefore(value, handler, 0))
+        assertFalse(ArcRCLifetimeFrontier.OnEdge(exceptional) in result.liveness.lifetimeFrontier(value))
+    }
+
+    @Test
+    fun throwingConsumeReleasesOnDeadUnwindEdge() {
+        val value = ArcSSAValue("value")
+        val normal = ArcBlockId("normal")
+        val handler = ArcBlockId("handler")
+        val exceptional = ArcSSAEdge(entry, handler, ArcSSAEdgeKind.Exceptional)
+        val cfg = ArcOwnershipSSAInput(entry, linkedMapOf(
+            entry to ArcSSABlock(entry, listOf(
+                ArcSSAOperation.Introduce(value, ArcOwnership.Owned),
+                ArcSSAOperation.Use(value, ArcSSAUseKind.Consume, mayThrow = true),
+            )),
+            normal to ArcSSABlock(normal, emptyList()),
+            handler to ArcSSABlock(handler, emptyList()),
+        ), setOf(ArcSSAEdge(entry, normal), exceptional))
+
+        val result = ArcRCIdentityAnalysis.analyze(ArcRCIdentityInput(cfg, emptyList()))
+
+        assertTrue(result.issues.toString(), result.issues.isEmpty())
+        assertTrue(ArcRCLifetimeFrontier.OnEdge(exceptional) in result.liveness.lifetimeFrontier(value))
+    }
+
+    @Test
+    fun throwingConsumeWithoutModeledUnwindEdgeFailsClosed() {
+        val value = ArcSSAValue("value")
+        val cfg = linear(listOf(
+            ArcSSAOperation.Introduce(value, ArcOwnership.Owned),
+            ArcSSAOperation.Use(value, ArcSSAUseKind.Consume, mayThrow = true),
+        ))
+
+        val result = ArcRCIdentityAnalysis.analyze(ArcRCIdentityInput(cfg, emptyList()))
+
+        assertEquals(
+            setOf(ArcRCIdentityIssueKind.UnmodeledExceptionalConsume),
+            result.issues.mapTo(mutableSetOf()) { it.kind },
+        )
+    }
+
+    @Test
+    fun unrelatedThrowGetsExceptionalEdgeFrontierWhenValueLivesNormally() {
+        val value = ArcSSAValue("value")
+        val other = ArcSSAValue("other")
+        val normal = ArcBlockId("normal")
+        val handler = ArcBlockId("handler")
+        val exceptional = ArcSSAEdge(entry, handler, ArcSSAEdgeKind.Exceptional)
+        val cfg = ArcOwnershipSSAInput(entry, linkedMapOf(
+            entry to ArcSSABlock(entry, listOf(
+                ArcSSAOperation.Introduce(value, ArcOwnership.Owned),
+                ArcSSAOperation.Introduce(other, ArcOwnership.Owned),
+                ArcSSAOperation.Use(other, ArcSSAUseKind.Borrow, mayThrow = true),
+            )),
+            normal to ArcSSABlock(normal, listOf(ArcSSAOperation.Use(value, ArcSSAUseKind.Borrow))),
+            handler to ArcSSABlock(handler, emptyList()),
+        ), setOf(ArcSSAEdge(entry, normal), exceptional))
+
+        val frontier = ArcRCIdentityAnalysis.analyze(ArcRCIdentityInput(cfg, emptyList()))
+            .liveness.lifetimeFrontier(value)
+        assertTrue(ArcRCLifetimeFrontier.OnEdge(exceptional) in frontier)
+    }
+
+    @Test
+    fun asymmetricNormalSuccessorsGetPerEdgeFrontier() {
+        val value = ArcSSAValue("value")
+        val live = ArcBlockId("live")
+        val dead = ArcBlockId("dead")
+        val deadEdge = ArcSSAEdge(entry, dead)
+        val cfg = ArcOwnershipSSAInput(entry, linkedMapOf(
+            entry to ArcSSABlock(entry, listOf(ArcSSAOperation.Introduce(value, ArcOwnership.Owned))),
+            live to ArcSSABlock(live, listOf(ArcSSAOperation.Use(value, ArcSSAUseKind.Borrow))),
+            dead to ArcSSABlock(dead, emptyList()),
+        ), setOf(ArcSSAEdge(entry, live), deadEdge))
+
+        val frontier = ArcRCIdentityAnalysis.analyze(ArcRCIdentityInput(cfg, emptyList()))
+            .liveness.lifetimeFrontier(value)
+        assertTrue(ArcRCLifetimeFrontier.OnEdge(deadEdge) in frontier)
+    }
+
+    @Test
+    fun ownerLifetimeExtendsThroughAnchoredProjectionLastUse() {
+        val owner = ArcSSAValue("owner")
+        val source = ArcSSAValue("source")
+        val other = ArcSSAValue("other")
+        val projection = ArcSSAValue("projection")
+        val cfg = linear(listOf(
+            ArcSSAOperation.Introduce(owner, ArcOwnership.Owned),
+            ArcSSAOperation.Introduce(source, ArcOwnership.Owned),
+            ArcSSAOperation.Introduce(other, ArcOwnership.Owned),
+            ArcSSAOperation.Reborrow(source, projection, setOf(owner)),
+            ArcSSAOperation.Use(owner, ArcSSAUseKind.Borrow),
+            ArcSSAOperation.Use(projection, ArcSSAUseKind.Borrow),
+            ArcSSAOperation.Use(other, ArcSSAUseKind.Borrow),
+        ))
+
+        val result = ArcRCIdentityAnalysis.analyze(ArcRCIdentityInput(cfg, emptyList()))
+        val frontier = result.liveness.lifetimeFrontier(owner)
+
+        assertTrue(ArcRCLifetimeFrontier.AfterOperation(ArcRCPosition(entry, 5)) in frontier)
+        assertFalse(ArcRCLifetimeFrontier.AfterOperation(ArcRCPosition(entry, 4)) in frontier)
+        assertTrue(result.canMoveWithinBlock(owner, entry, 4, 5))
+        assertFalse(result.canMoveWithinBlock(owner, entry, 4, 6))
+    }
+
+    @Test
+    fun ownerLifetimeFollowsAnchorDependenciesTransitively() {
+        val owner = ArcSSAValue("owner")
+        val firstSource = ArcSSAValue("firstSource")
+        val secondSource = ArcSSAValue("secondSource")
+        val firstProjection = ArcSSAValue("firstProjection")
+        val secondProjection = ArcSSAValue("secondProjection")
+        val cfg = linear(listOf(
+            ArcSSAOperation.Introduce(owner, ArcOwnership.Owned),
+            ArcSSAOperation.Introduce(firstSource, ArcOwnership.Owned),
+            ArcSSAOperation.Introduce(secondSource, ArcOwnership.Owned),
+            ArcSSAOperation.Reborrow(firstSource, firstProjection, setOf(owner)),
+            ArcSSAOperation.Reborrow(secondSource, secondProjection, setOf(firstProjection)),
+            ArcSSAOperation.Use(secondProjection, ArcSSAUseKind.Borrow),
+        ))
+
+        val result = ArcRCIdentityAnalysis.analyze(ArcRCIdentityInput(cfg, emptyList()))
+
+        assertTrue(
+            ArcRCLifetimeFrontier.AfterOperation(ArcRCPosition(entry, 5)) in
+                    result.liveness.lifetimeFrontier(owner)
+        )
+    }
+
+    @Test
+    fun distinctIntroducerDoesNotEndQueriedOwnerBeforeAnchoredProjection() {
+        val owner = ArcSSAValue("owner")
+        val source = ArcSSAValue("source")
+        val projection = ArcSSAValue("projection")
+        val cfg = linear(listOf(
+            ArcSSAOperation.Introduce(owner, ArcOwnership.Owned),
+            ArcSSAOperation.Use(owner, ArcSSAUseKind.Borrow),
+            ArcSSAOperation.Introduce(source, ArcOwnership.Owned),
+            ArcSSAOperation.Reborrow(source, projection, setOf(owner)),
+            ArcSSAOperation.Use(owner, ArcSSAUseKind.Borrow),
+            ArcSSAOperation.Use(projection, ArcSSAUseKind.Borrow),
+        ))
+
+        val frontier = ArcRCIdentityAnalysis.analyze(ArcRCIdentityInput(cfg, emptyList()))
+            .liveness.lifetimeFrontier(owner)
+
+        assertTrue(ArcRCLifetimeFrontier.AfterOperation(ArcRCPosition(entry, 5)) in frontier)
+        assertFalse(ArcRCLifetimeFrontier.AfterOperation(ArcRCPosition(entry, 1)) in frontier)
+        assertFalse(ArcRCLifetimeFrontier.AfterOperation(ArcRCPosition(entry, 4)) in frontier)
+    }
+
+    @Test
+    fun distinctAnchorFamilyConsumeIsNotQueriedOwnerConsume() {
+        val owner = ArcSSAValue("owner")
+        val source = ArcSSAValue("source")
+        val projection = ArcSSAValue("projection")
+        val cfg = linear(listOf(
+            ArcSSAOperation.Introduce(owner, ArcOwnership.Owned),
+            ArcSSAOperation.Introduce(source, ArcOwnership.Owned),
+            ArcSSAOperation.Reborrow(source, projection, setOf(owner)),
+            ArcSSAOperation.Use(projection, ArcSSAUseKind.Borrow),
+            ArcSSAOperation.Use(source, ArcSSAUseKind.Consume),
+        ))
+
+        val frontier = ArcRCIdentityAnalysis.analyze(ArcRCIdentityInput(cfg, emptyList()))
+            .liveness.lifetimeFrontier(owner)
+
+        assertFalse(ArcRCLifetimeFrontier.ConsumedAt(ArcRCPosition(entry, 4)) in frontier)
+        assertTrue(ArcRCLifetimeFrontier.AfterOperation(ArcRCPosition(entry, 4)) in frontier)
+    }
+
+    @Test
+    fun destroyingAnchoredChildEndsOwnerAfterChildDestroy() {
+        val owner = ArcSSAValue("owner")
+        val child = ArcSSAValue("child")
+        val slot = ArcSSASlot("child")
+        val version = ArcSSASlotVersion("child.0")
+        val cfg = linear(listOf(
+            ArcSSAOperation.Introduce(owner, ArcOwnership.Owned),
+            ArcSSAOperation.Introduce(child, ArcOwnership.Owned, setOf(owner)),
+            ArcSSAOperation.InitializeOwned(slot, version, child),
+            ArcSSAOperation.DestroyOwned(slot, version, child),
+        ))
+
+        val result = ArcRCIdentityAnalysis.analyze(ArcRCIdentityInput(cfg, emptyList()))
+        val frontier = result.liveness.lifetimeFrontier(owner)
+        val destroyBarrier = result.barriers.single()
+
+        assertTrue(ArcRCLifetimeFrontier.AfterOperation(ArcRCPosition(entry, 3)) in frontier)
+        assertFalse(ArcRCLifetimeFrontier.BeforeBarrier(destroyBarrier) in frontier)
+    }
+
+    @Test
+    fun terminalThrowingBorrowEndsNormallyAfterOperationAndCleansExceptionalEdge() {
+        val value = ArcSSAValue("value")
+        val handler = ArcBlockId("handler")
+        val exceptional = ArcSSAEdge(entry, handler, ArcSSAEdgeKind.Exceptional)
+        val cfg = ArcOwnershipSSAInput(entry, linkedMapOf(
+            entry to ArcSSABlock(entry, listOf(
+                ArcSSAOperation.Introduce(value, ArcOwnership.Owned),
+                ArcSSAOperation.Use(value, ArcSSAUseKind.Borrow, mayThrow = true),
+            )),
+            handler to ArcSSABlock(handler, emptyList()),
+        ), setOf(exceptional))
+
+        val result = ArcRCIdentityAnalysis.analyze(ArcRCIdentityInput(cfg, emptyList()))
+        val frontier = result.liveness.lifetimeFrontier(value)
+
+        assertTrue(ArcRCLifetimeFrontier.AfterOperation(ArcRCPosition(entry, 1)) in frontier)
+        assertTrue(ArcRCLifetimeFrontier.OnEdge(exceptional) in frontier)
+        assertFalse(ArcRCLifetimeFrontier.BeforeBarrier(result.barriers.single()) in frontier)
+    }
+
+    @Test
+    fun escapeAndUnknownConsumeDisableLocalLifetimeFrontier() {
+        listOf(
+            ArcSSAUseKind.Escape to ArcRCIdentityIssueKind.UnsupportedEscape,
+            ArcSSAUseKind.UnknownConsume to ArcRCIdentityIssueKind.UnsupportedUnknownConsume,
+        ).forEach { (useKind, issueKind) ->
+            val value = ArcSSAValue("value.$useKind")
+            val cfg = linear(listOf(
+                ArcSSAOperation.Introduce(value, ArcOwnership.Owned),
+                ArcSSAOperation.Use(value, useKind),
+            ))
+
+            val result = ArcRCIdentityAnalysis.analyze(ArcRCIdentityInput(cfg, emptyList()))
+
+            assertEquals(useKind.toString(), setOf(issueKind), result.issues.mapTo(mutableSetOf()) { it.kind })
+            assertTrue(useKind.toString(), result.liveness.lifetimeFrontier(value).isEmpty())
+        }
+    }
+
+    @Test
+    fun slotBorrowKeepsCanonicalIdentityAndRecordsItsAnchor() {
+        val root = ArcSSAValue("root")
+        val borrowed = ArcSSAValue("borrowed")
+        val slot = ArcSSASlot("slot")
+        val version = ArcSSASlotVersion("slot.0")
+        val borrow = ArcSSABorrowId("borrow.0")
+        val cfg = linear(listOf(
+            ArcSSAOperation.Introduce(root, ArcOwnership.Owned),
+            ArcSSAOperation.InitializeOwned(slot, version, root),
+            ArcSSAOperation.Borrow(slot, version, root, borrowed, borrow),
+            ArcSSAOperation.Use(borrowed, ArcSSAUseKind.Borrow),
+            ArcSSAOperation.EndBorrow(borrow),
+            ArcSSAOperation.DestroyOwned(slot, version, root),
+        ))
+
+        val result = ArcRCIdentityAnalysis.analyze(ArcRCIdentityInput(cfg, emptyList()))
+
+        assertTrue(result.issues.isEmpty())
+        assertEquals(root, result.identity(borrowed)?.singleRoot)
+        assertEquals(setOf(root), result.identity(borrowed)?.anchorRoots)
+    }
+
+    @Test
+    fun destroyIsAConsumeBarrierButMoveIsNot() {
+        val root = ArcSSAValue("root")
+        val slot = ArcSSASlot("slot")
+        val moved = ArcSSASlot("moved")
+        val first = ArcSSASlotVersion("slot.0")
+        val second = ArcSSASlotVersion("moved.0")
+        val cfg = linear(listOf(
+            ArcSSAOperation.Introduce(root, ArcOwnership.Owned),
+            ArcSSAOperation.InitializeOwned(slot, first, root),
+            ArcSSAOperation.MoveOwned(slot, first, moved, second, root),
+            ArcSSAOperation.DestroyOwned(moved, second, root),
+        ))
+
+        val result = ArcRCIdentityAnalysis.analyze(ArcRCIdentityInput(cfg, emptyList()))
+
+        assertEquals(listOf(ArcRCBarrierKind.Consume), result.barriers.map { it.kind })
+        assertTrue(ArcRCLifetimeFrontier.BeforeBarrier(result.barriers.single()) in result.liveness.lifetimeFrontier(root))
+    }
+
     private fun linear(operations: List<ArcSSAOperation>): ArcOwnershipSSAInput = ArcOwnershipSSAInput(
         entry,
         mapOf(entry to ArcSSABlock(entry, operations)),

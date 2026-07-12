@@ -8,6 +8,7 @@
 package org.jetbrains.kotlin.backend.konan.arc
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -406,6 +407,751 @@ class ArcOwnershipSSATest {
             result.rejected.mapTo(mutableSetOf()) { it.reason },
         )
         assertEquals(2, result.rejected.size)
+    }
+
+    @Test
+    fun ownedSlotBorrowMoveAndDestroyConsumeOneVersionAtATime() {
+        val value = ArcSSAValue("value")
+        val borrowed = ArcSSAValue("borrowed")
+        val source = ArcSSASlot("source")
+        val destination = ArcSSASlot("destination")
+        val sourceVersion = ArcSSASlotVersion("source.0")
+        val destinationVersion = ArcSSASlotVersion("destination.0")
+        val borrow = ArcSSABorrowId("borrow.0")
+        val cfg = ArcOwnershipSSAInput(
+            entry,
+            mapOf(entry to ArcSSABlock(entry, listOf(
+                ArcSSAOperation.Introduce(value, ArcOwnership.Owned),
+                ArcSSAOperation.InitializeOwned(source, sourceVersion, value),
+                ArcSSAOperation.Borrow(source, sourceVersion, value, borrowed, borrow),
+                ArcSSAOperation.Use(borrowed, ArcSSAUseKind.Borrow),
+                ArcSSAOperation.EndBorrow(borrow),
+                ArcSSAOperation.MoveOwned(source, sourceVersion, destination, destinationVersion, value),
+                ArcSSAOperation.DestroyOwned(destination, destinationVersion, value),
+            ))),
+            emptySet(),
+        )
+
+        val result = ArcOwnershipSSAAnalysis.analyze(cfg)
+
+        assertTrue(result.slotFlow.rejections.toString(), result.slotFlow.verified)
+        assertTrue(result.slotFlow.blockExitStates.getValue(entry).facts.isEmpty())
+        assertEquals(
+            setOf(value),
+            result.slotFlow.blockExitStates.getValue(entry).destroyedOwnedIdentities,
+        )
+    }
+
+    @Test
+    fun liveBorrowPreventsMove() {
+        val value = ArcSSAValue("value")
+        val borrowed = ArcSSAValue("borrowed")
+        val source = ArcSSASlot("source")
+        val destination = ArcSSASlot("destination")
+        val sourceVersion = ArcSSASlotVersion("source.0")
+        val borrow = ArcSSABorrowId("borrow.0")
+        val result = ArcOwnershipSSAAnalysis.analyze(
+            ArcOwnershipSSAInput(
+                entry,
+                mapOf(entry to ArcSSABlock(entry, listOf(
+                    ArcSSAOperation.Introduce(value, ArcOwnership.Owned),
+                    ArcSSAOperation.InitializeOwned(source, sourceVersion, value),
+                    ArcSSAOperation.Borrow(source, sourceVersion, value, borrowed, borrow),
+                    ArcSSAOperation.MoveOwned(
+                        source, sourceVersion, destination, ArcSSASlotVersion("destination.0"), value,
+                    ),
+                ))),
+                emptySet(),
+            )
+        )
+
+        assertEquals(ArcSSASlotRejectionReason.LIVE_BORROW, result.slotFlow.rejections.single().reason)
+    }
+
+    @Test
+    fun liveBorrowPreventsDestroy() {
+        val value = ArcSSAValue("value")
+        val borrowed = ArcSSAValue("borrowed")
+        val slot = ArcSSASlot("source")
+        val version = ArcSSASlotVersion("source.0")
+        val result = ArcOwnershipSSAAnalysis.analyze(
+            ArcOwnershipSSAInput(
+                entry,
+                mapOf(entry to ArcSSABlock(entry, listOf(
+                    ArcSSAOperation.Introduce(value, ArcOwnership.Owned),
+                    ArcSSAOperation.InitializeOwned(slot, version, value),
+                    ArcSSAOperation.Borrow(slot, version, value, borrowed, ArcSSABorrowId("borrow.0")),
+                    ArcSSAOperation.DestroyOwned(slot, version, value),
+                ))),
+                emptySet(),
+            )
+        )
+
+        assertEquals(ArcSSASlotRejectionReason.LIVE_BORROW, result.slotFlow.rejections.single().reason)
+    }
+
+    @Test
+    fun initializationAfterThrowExistsOnlyOnNormalEdge() {
+        val value = ArcSSAValue("value")
+        val slot = ArcSSASlot("result")
+        val version = ArcSSASlotVersion("result.0")
+        val normalExit = ArcBlockId("normalExit")
+        val handler = ArcBlockId("handler")
+        val normal = ArcSSAEdge(entry, normalExit)
+        val exceptional = ArcSSAEdge(entry, handler, ArcSSAEdgeKind.Exceptional)
+        val cfg = ArcOwnershipSSAInput(
+            entry,
+            linkedMapOf(
+                entry to ArcSSABlock(entry, listOf(
+                    ArcSSAOperation.Introduce(value, ArcOwnership.Owned),
+                    ArcSSAOperation.Use(value, ArcSSAUseKind.Borrow, mayThrow = true),
+                    ArcSSAOperation.InitializeOwned(slot, version, value),
+                )),
+                normalExit to ArcSSABlock(normalExit, listOf(ArcSSAOperation.DestroyOwned(slot, version, value))),
+                handler to ArcSSABlock(handler, emptyList()),
+            ),
+            setOf(normal, exceptional),
+        )
+
+        val result = ArcOwnershipSSAAnalysis.analyze(cfg).slotFlow
+
+        assertTrue(result.rejections.toString(), result.verified)
+        assertEquals(version, result.normalEdgeStates.getValue(normal)[slot]?.version)
+        assertNull(result.exceptionalEdgeStates.getValue(exceptional)[slot])
+    }
+
+    @Test
+    fun explicitJoinSlotVerifiesPathDisjointOwnedAlternatives() {
+        val left = ArcSSAValue("left")
+        val right = ArcSSAValue("right")
+        val joined = ArcSSAValue("joined")
+        val borrowed = ArcSSAValue("borrowed")
+        val slot = ArcSSASlot("result")
+        val leftVersion = ArcSSASlotVersion("result.left")
+        val rightVersion = ArcSSASlotVersion("result.right")
+        val joinedVersion = ArcSSASlotVersion("result.joined")
+        val leftEdge = ArcSSAEdge(thenBlock, merge)
+        val rightEdge = ArcSSAEdge(elseBlock, merge)
+        val borrow = ArcSSABorrowId("joined.borrow")
+        val cfg = diamond(
+            thenOperations = listOf(
+                ArcSSAOperation.Introduce(left, ArcOwnership.Owned),
+                ArcSSAOperation.InitializeOwned(slot, leftVersion, left),
+            ),
+            elseOperations = listOf(
+                ArcSSAOperation.Introduce(right, ArcOwnership.Owned),
+                ArcSSAOperation.InitializeOwned(slot, rightVersion, right),
+            ),
+            mergeOperations = listOf(
+                ArcSSAOperation.Join(joined, linkedMapOf(thenBlock to left, elseBlock to right)),
+                ArcSSAOperation.JoinSlot(
+                    slot,
+                    joinedVersion,
+                    joined,
+                    linkedMapOf(leftEdge to leftVersion, rightEdge to rightVersion),
+                ),
+                ArcSSAOperation.Borrow(slot, joinedVersion, joined, borrowed, borrow),
+                ArcSSAOperation.Use(borrowed, ArcSSAUseKind.Borrow),
+                ArcSSAOperation.EndBorrow(borrow),
+                ArcSSAOperation.DestroyOwned(slot, joinedVersion, joined),
+            ),
+        )
+
+        val result = ArcOwnershipSSAAnalysis.analyze(cfg)
+
+        assertTrue(result.slotFlow.rejections.toString(), result.slotFlow.verified)
+        val fact = result.slotFlow.blockEntryStates.getValue(merge)[slot]!!
+        assertEquals(joinedVersion, fact.version)
+        assertTrue(fact.identity is ArcSSASlotRCIdentity.PathDisjoint)
+    }
+
+    @Test
+    fun unequalSlotVersionsWithoutExplicitJoinFailClosed() {
+        val left = ArcSSAValue("left")
+        val right = ArcSSAValue("right")
+        val joined = ArcSSAValue("joined")
+        val slot = ArcSSASlot("result")
+        val cfg = diamond(
+            thenOperations = listOf(
+                ArcSSAOperation.Introduce(left, ArcOwnership.Owned),
+                ArcSSAOperation.InitializeOwned(slot, ArcSSASlotVersion("left"), left),
+            ),
+            elseOperations = listOf(
+                ArcSSAOperation.Introduce(right, ArcOwnership.Owned),
+                ArcSSAOperation.InitializeOwned(slot, ArcSSASlotVersion("right"), right),
+            ),
+            mergeOperations = listOf(
+                ArcSSAOperation.Join(joined, linkedMapOf(thenBlock to left, elseBlock to right)),
+            ),
+        )
+
+        val rejection = ArcOwnershipSSAAnalysis.analyze(cfg).slotFlow.rejections.single()
+
+        assertEquals(ArcSSASlotRejectionReason.INVALID_PATH_DISJOINT_JOIN, rejection.reason)
+    }
+
+    @Test
+    fun mixedInitializedAndEmptyPathsFailClosed() {
+        val value = ArcSSAValue("value")
+        val slot = ArcSSASlot("result")
+        val cfg = diamond(
+            thenOperations = listOf(
+                ArcSSAOperation.Introduce(value, ArcOwnership.Owned),
+                ArcSSAOperation.InitializeOwned(slot, ArcSSASlotVersion("then"), value),
+            ),
+            elseOperations = emptyList(),
+            mergeOperations = emptyList(),
+        )
+
+        assertEquals(
+            ArcSSASlotRejectionReason.MIXED_INITIALIZATION,
+            ArcOwnershipSSAAnalysis.analyze(cfg).slotFlow.rejections.single().reason,
+        )
+    }
+
+    @Test
+    fun mixedOwnedAndImmortalSlotAlternativesFailClosed() {
+        val owned = ArcSSAValue("owned")
+        val immortal = ArcSSAValue("immortal")
+        val joined = ArcSSAValue("joined")
+        val slot = ArcSSASlot("result")
+        val cfg = diamond(
+            thenOperations = listOf(
+                ArcSSAOperation.Introduce(owned, ArcOwnership.Owned),
+                ArcSSAOperation.InitializeOwned(slot, ArcSSASlotVersion("owned"), owned),
+            ),
+            elseOperations = listOf(
+                ArcSSAOperation.Introduce(immortal, ArcOwnership.Immortal),
+                ArcSSAOperation.InitializeImmortal(slot, ArcSSASlotVersion("immortal"), immortal),
+            ),
+            mergeOperations = listOf(
+                ArcSSAOperation.Join(joined, linkedMapOf(thenBlock to owned, elseBlock to immortal)),
+            ),
+        )
+
+        assertEquals(
+            ArcSSASlotRejectionReason.MIXED_OWNERSHIP,
+            ArcOwnershipSSAAnalysis.analyze(cfg).slotFlow.rejections.single().reason,
+        )
+    }
+
+    @Test
+    fun slotVersionsAndBorrowIdsAreGloballyUniqueProofTokens() {
+        val first = ArcSSAValue("first")
+        val second = ArcSSAValue("second")
+        val duplicated = ArcSSASlotVersion("duplicate")
+        val cfg = diamond(
+            thenOperations = listOf(
+                ArcSSAOperation.Introduce(first, ArcOwnership.Owned),
+                ArcSSAOperation.InitializeOwned(ArcSSASlot("left"), duplicated, first),
+            ),
+            elseOperations = listOf(
+                ArcSSAOperation.Introduce(second, ArcOwnership.Owned),
+                ArcSSAOperation.InitializeOwned(ArcSSASlot("right"), duplicated, second),
+            ),
+            mergeOperations = emptyList(),
+        )
+
+        assertEquals(
+            ArcSSASlotRejectionReason.DUPLICATE_VERSION,
+            ArcOwnershipSSAAnalysis.analyze(cfg).slotFlow.rejections.single().reason,
+        )
+    }
+
+    @Test
+    fun borrowIdsAreGloballyUniqueProofTokens() {
+        val value = ArcSSAValue("value")
+        val firstBorrow = ArcSSAValue("firstBorrow")
+        val secondBorrow = ArcSSAValue("secondBorrow")
+        val slot = ArcSSASlot("slot")
+        val version = ArcSSASlotVersion("slot.0")
+        val duplicated = ArcSSABorrowId("duplicate")
+        val cfg = ArcOwnershipSSAInput(
+            entry,
+            mapOf(entry to ArcSSABlock(entry, listOf(
+                ArcSSAOperation.Introduce(value, ArcOwnership.Owned),
+                ArcSSAOperation.InitializeOwned(slot, version, value),
+                ArcSSAOperation.Borrow(slot, version, value, firstBorrow, duplicated),
+                ArcSSAOperation.EndBorrow(duplicated),
+                ArcSSAOperation.Borrow(slot, version, value, secondBorrow, duplicated),
+                ArcSSAOperation.EndBorrow(duplicated),
+                ArcSSAOperation.DestroyOwned(slot, version, value),
+            ))),
+            emptySet(),
+        )
+
+        assertEquals(
+            ArcSSASlotRejectionReason.DUPLICATE_BORROW_ID,
+            ArcOwnershipSSAAnalysis.analyze(cfg).slotFlow.rejections.single().reason,
+        )
+    }
+
+    @Test
+    fun useAfterDestroyRejectsTheCompleteIdentity() {
+        val value = ArcSSAValue("value")
+        val alias = ArcSSAValue("alias")
+        val slot = ArcSSASlot("result")
+        val version = ArcSSASlotVersion("result.0")
+        val cfg = ArcOwnershipSSAInput(
+            entry,
+            mapOf(entry to ArcSSABlock(entry, listOf(
+                ArcSSAOperation.Introduce(value, ArcOwnership.Owned),
+                ArcSSAOperation.Forward(value, alias),
+                ArcSSAOperation.InitializeOwned(slot, version, value),
+                ArcSSAOperation.DestroyOwned(slot, version, alias),
+                ArcSSAOperation.Use(value, ArcSSAUseKind.Borrow),
+            ))),
+            emptySet(),
+        )
+
+        assertEquals(
+            ArcSSASlotRejectionReason.INVALID_SLOT_OPERATION,
+            ArcOwnershipSSAAnalysis.analyze(cfg).slotFlow.rejections.single().reason,
+        )
+    }
+
+    @Test
+    fun ownedSlotMustBeConsumedBeforeEveryExit() {
+        val value = ArcSSAValue("value")
+        val slot = ArcSSASlot("result")
+        val cfg = ArcOwnershipSSAInput(
+            entry,
+            mapOf(entry to ArcSSABlock(entry, listOf(
+                ArcSSAOperation.Introduce(value, ArcOwnership.Owned),
+                ArcSSAOperation.InitializeOwned(slot, ArcSSASlotVersion("result.0"), value),
+            ))),
+            emptySet(),
+        )
+
+        assertEquals(
+            ArcSSASlotRejectionReason.UNCONSUMED_OWNED_AT_EXIT,
+            ArcOwnershipSSAAnalysis.analyze(cfg).slotFlow.rejections.single().reason,
+        )
+    }
+
+    @Test
+    fun slotInitializationCannotPrecedeItsSsaDefinition() {
+        val value = ArcSSAValue("value")
+        val slot = ArcSSASlot("slot")
+        val result = ArcOwnershipSSAAnalysis.analyze(ArcOwnershipSSAInput(
+            entry,
+            mapOf(entry to ArcSSABlock(entry, listOf(
+                ArcSSAOperation.InitializeOwned(slot, ArcSSASlotVersion("slot.0"), value),
+                ArcSSAOperation.Introduce(value, ArcOwnership.Owned),
+            ))),
+            emptySet(),
+        ))
+
+        assertEquals(ArcSSASlotRejectionReason.MALFORMED_CFG, result.slotFlow.rejections.single().reason)
+    }
+
+    @Test
+    fun siblingBranchBorrowResultCannotBeUsedWithoutDominance() {
+        val value = ArcSSAValue("value")
+        val borrowed = ArcSSAValue("borrowed")
+        val slot = ArcSSASlot("slot")
+        val version = ArcSSASlotVersion("slot.0")
+        val left = ArcBlockId("left")
+        val right = ArcBlockId("right")
+        val cfg = ArcOwnershipSSAInput(
+            entry,
+            linkedMapOf(
+                entry to ArcSSABlock(entry, listOf(
+                    ArcSSAOperation.Introduce(value, ArcOwnership.Owned),
+                    ArcSSAOperation.InitializeOwned(slot, version, value),
+                )),
+                left to ArcSSABlock(left, listOf(
+                    ArcSSAOperation.Borrow(slot, version, value, borrowed, ArcSSABorrowId("borrow")),
+                )),
+                right to ArcSSABlock(right, listOf(ArcSSAOperation.Use(borrowed, ArcSSAUseKind.Borrow))),
+            ),
+            setOf(ArcSSAEdge(entry, left), ArcSSAEdge(entry, right)),
+        )
+
+        assertEquals(
+            ArcSSASlotRejectionReason.MALFORMED_CFG,
+            ArcOwnershipSSAAnalysis.analyze(cfg).slotFlow.rejections.single().reason,
+        )
+    }
+
+    @Test
+    fun joinInputMustDominateItsNamedPredecessorEnd() {
+        val root = ArcSSAValue("root")
+        val leftValue = ArcSSAValue("left")
+        val joined = ArcSSAValue("joined")
+        val slot = ArcSSASlot("slot")
+        val left = ArcBlockId("left")
+        val right = ArcBlockId("right")
+        val mergeBlock = ArcBlockId("join")
+        val cfg = ArcOwnershipSSAInput(entry, linkedMapOf(
+            entry to ArcSSABlock(entry, listOf(
+                ArcSSAOperation.Introduce(root, ArcOwnership.Owned),
+                ArcSSAOperation.InitializeOwned(slot, ArcSSASlotVersion("slot.0"), root),
+            )),
+            left to ArcSSABlock(left, listOf(ArcSSAOperation.Introduce(leftValue, ArcOwnership.Owned))),
+            right to ArcSSABlock(right, emptyList()),
+            mergeBlock to ArcSSABlock(mergeBlock, listOf(
+                ArcSSAOperation.Join(joined, linkedMapOf(left to leftValue, right to leftValue)),
+            )),
+        ), setOf(
+            ArcSSAEdge(entry, left), ArcSSAEdge(entry, right),
+            ArcSSAEdge(left, mergeBlock), ArcSSAEdge(right, mergeBlock),
+        ))
+
+        assertEquals(
+            ArcSSASlotRejectionReason.MALFORMED_CFG,
+            ArcOwnershipSSAAnalysis.analyze(cfg).slotFlow.rejections.single().reason,
+        )
+    }
+
+    @Test
+    fun blockMapKeyMustMatchEmbeddedBlockId() {
+        val value = ArcSSAValue("value")
+        val wrong = ArcBlockId("wrong")
+        val result = ArcOwnershipSSAAnalysis.analyze(ArcOwnershipSSAInput(
+            entry,
+            mapOf(entry to ArcSSABlock(wrong, listOf(
+                ArcSSAOperation.Introduce(value, ArcOwnership.Owned),
+                ArcSSAOperation.InitializeOwned(ArcSSASlot("slot"), ArcSSASlotVersion("slot.0"), value),
+            ))),
+            emptySet(),
+        ))
+
+        assertEquals(ArcSSASlotRejectionReason.MALFORMED_CFG, result.slotFlow.rejections.single().reason)
+    }
+
+    @Test
+    fun endedBorrowResultCannotBeUsedAfterMovingItsOwner() {
+        val value = ArcSSAValue("value")
+        val borrowed = ArcSSAValue("borrowed")
+        val source = ArcSSASlot("source")
+        val destination = ArcSSASlot("destination")
+        val sourceVersion = ArcSSASlotVersion("source.0")
+        val destinationVersion = ArcSSASlotVersion("destination.0")
+        val borrowId = ArcSSABorrowId("borrow")
+        val cfg = ArcOwnershipSSAInput(entry, mapOf(entry to ArcSSABlock(entry, listOf(
+            ArcSSAOperation.Introduce(value, ArcOwnership.Owned),
+            ArcSSAOperation.InitializeOwned(source, sourceVersion, value),
+            ArcSSAOperation.Borrow(source, sourceVersion, value, borrowed, borrowId),
+            ArcSSAOperation.EndBorrow(borrowId),
+            ArcSSAOperation.MoveOwned(source, sourceVersion, destination, destinationVersion, value),
+            ArcSSAOperation.Use(borrowed, ArcSSAUseKind.Borrow),
+        ))), emptySet())
+
+        assertEquals(
+            ArcSSASlotRejectionReason.INVALID_BORROW_USE,
+            ArcOwnershipSSAAnalysis.analyze(cfg).slotFlow.rejections.single().reason,
+        )
+    }
+
+    @Test
+    fun endedBorrowCannotCreateForwardAlias() {
+        val value = ArcSSAValue("value")
+        val borrowed = ArcSSAValue("borrowed")
+        val alias = ArcSSAValue("alias")
+        val slot = ArcSSASlot("slot")
+        val version = ArcSSASlotVersion("slot.0")
+        val borrowId = ArcSSABorrowId("borrow")
+        val cfg = ArcOwnershipSSAInput(entry, mapOf(entry to ArcSSABlock(entry, listOf(
+            ArcSSAOperation.Introduce(value, ArcOwnership.Owned),
+            ArcSSAOperation.InitializeOwned(slot, version, value),
+            ArcSSAOperation.Borrow(slot, version, value, borrowed, borrowId),
+            ArcSSAOperation.EndBorrow(borrowId),
+            ArcSSAOperation.Forward(borrowed, alias),
+            ArcSSAOperation.Use(alias, ArcSSAUseKind.Borrow),
+        ))), emptySet())
+
+        assertEquals(
+            ArcSSASlotRejectionReason.INVALID_BORROW_USE,
+            ArcOwnershipSSAAnalysis.analyze(cfg).slotFlow.rejections.single().reason,
+        )
+    }
+
+    @Test
+    fun endedBorrowCannotCreateReborrowAlias() {
+        val value = ArcSSAValue("value")
+        val borrowed = ArcSSAValue("borrowed")
+        val alias = ArcSSAValue("alias")
+        val slot = ArcSSASlot("slot")
+        val version = ArcSSASlotVersion("slot.0")
+        val borrowId = ArcSSABorrowId("borrow")
+        val cfg = ArcOwnershipSSAInput(entry, mapOf(entry to ArcSSABlock(entry, listOf(
+            ArcSSAOperation.Introduce(value, ArcOwnership.Owned),
+            ArcSSAOperation.InitializeOwned(slot, version, value),
+            ArcSSAOperation.Borrow(slot, version, value, borrowed, borrowId),
+            ArcSSAOperation.EndBorrow(borrowId),
+            ArcSSAOperation.Reborrow(borrowed, alias, setOf(value)),
+        ))), emptySet())
+
+        assertEquals(
+            ArcSSASlotRejectionReason.INVALID_BORROW_USE,
+            ArcOwnershipSSAAnalysis.analyze(cfg).slotFlow.rejections.single().reason,
+        )
+    }
+
+    @Test
+    fun endedBorrowCannotCreateJoinAlias() {
+        val value = ArcSSAValue("value")
+        val borrowed = ArcSSAValue("borrowed")
+        val joined = ArcSSAValue("joined")
+        val slot = ArcSSASlot("slot")
+        val version = ArcSSASlotVersion("slot.0")
+        val borrowId = ArcSSABorrowId("borrow")
+        val left = ArcBlockId("left")
+        val right = ArcBlockId("right")
+        val join = ArcBlockId("join")
+        val cfg = ArcOwnershipSSAInput(entry, linkedMapOf(
+            entry to ArcSSABlock(entry, listOf(
+                ArcSSAOperation.Introduce(value, ArcOwnership.Owned),
+                ArcSSAOperation.InitializeOwned(slot, version, value),
+                ArcSSAOperation.Borrow(slot, version, value, borrowed, borrowId),
+                ArcSSAOperation.EndBorrow(borrowId),
+            )),
+            left to ArcSSABlock(left, emptyList()),
+            right to ArcSSABlock(right, emptyList()),
+            join to ArcSSABlock(join, listOf(
+                ArcSSAOperation.Join(joined, linkedMapOf(left to borrowed, right to borrowed)),
+            )),
+        ), setOf(
+            ArcSSAEdge(entry, left), ArcSSAEdge(entry, right),
+            ArcSSAEdge(left, join), ArcSSAEdge(right, join),
+        ))
+
+        assertEquals(
+            ArcSSASlotRejectionReason.INVALID_BORROW_USE,
+            ArcOwnershipSSAAnalysis.analyze(cfg).slotFlow.rejections.single().reason,
+        )
+    }
+
+    @Test
+    fun activeBorrowAliasRejectsEscapingEffect() {
+        val value = ArcSSAValue("value")
+        val borrowed = ArcSSAValue("borrowed")
+        val alias = ArcSSAValue("alias")
+        val slot = ArcSSASlot("slot")
+        val version = ArcSSASlotVersion("slot.0")
+        val borrowId = ArcSSABorrowId("borrow")
+        val cfg = ArcOwnershipSSAInput(entry, mapOf(entry to ArcSSABlock(entry, listOf(
+            ArcSSAOperation.Introduce(value, ArcOwnership.Owned),
+            ArcSSAOperation.InitializeOwned(slot, version, value),
+            ArcSSAOperation.Borrow(slot, version, value, borrowed, borrowId),
+            ArcSSAOperation.Forward(borrowed, alias),
+            ArcSSAOperation.Use(alias, ArcSSAUseKind.Escape),
+        ))), emptySet())
+
+        assertEquals(
+            ArcSSASlotRejectionReason.INVALID_BORROW_USE,
+            ArcOwnershipSSAAnalysis.analyze(cfg).slotFlow.rejections.single().reason,
+        )
+    }
+
+    @Test
+    fun endedBorrowCannotCreateAliasInSuccessorBlock() {
+        val value = ArcSSAValue("value")
+        val borrowed = ArcSSAValue("borrowed")
+        val alias = ArcSSAValue("alias")
+        val slot = ArcSSASlot("slot")
+        val version = ArcSSASlotVersion("slot.0")
+        val borrowId = ArcSSABorrowId("borrow")
+        val next = ArcBlockId("next")
+        val cfg = ArcOwnershipSSAInput(entry, linkedMapOf(
+            entry to ArcSSABlock(entry, listOf(
+                ArcSSAOperation.Introduce(value, ArcOwnership.Owned),
+                ArcSSAOperation.InitializeOwned(slot, version, value),
+                ArcSSAOperation.Borrow(slot, version, value, borrowed, borrowId),
+                ArcSSAOperation.EndBorrow(borrowId),
+            )),
+            next to ArcSSABlock(next, listOf(
+                ArcSSAOperation.Forward(borrowed, alias),
+                ArcSSAOperation.Use(alias, ArcSSAUseKind.Borrow),
+            )),
+        ), setOf(ArcSSAEdge(entry, next)))
+
+        assertEquals(
+            ArcSSASlotRejectionReason.INVALID_BORROW_USE,
+            ArcOwnershipSSAAnalysis.analyze(cfg).slotFlow.rejections.single().reason,
+        )
+    }
+
+    @Test
+    fun everySlotOperationRequiresItsBorrowDependentOperandsToRemainActive() {
+        listOf("InitializeOwned", "InitializeImmortal", "JoinSlot", "MoveOwned", "DestroyOwned").forEach { shape ->
+            val owner = ArcSSAValue("owner.$shape")
+            val borrowed = ArcSSAValue("borrowed.$shape")
+            val value = ArcSSAValue("value.$shape")
+            val ownerSlot = ArcSSASlot("owner.$shape")
+            val valueSlot = ArcSSASlot("value.$shape")
+            val ownerVersion = ArcSSASlotVersion("owner.$shape.0")
+            val valueVersion = ArcSSASlotVersion("value.$shape.0")
+            val borrowId = ArcSSABorrowId("borrow.$shape")
+            val operations = mutableListOf<ArcSSAOperation>(
+                ArcSSAOperation.Introduce(owner, ArcOwnership.Owned),
+                ArcSSAOperation.InitializeOwned(ownerSlot, ownerVersion, owner),
+                ArcSSAOperation.Borrow(ownerSlot, ownerVersion, owner, borrowed, borrowId),
+            )
+            when (shape) {
+                "InitializeOwned" -> operations += ArcSSAOperation.Introduce(
+                    value, ArcOwnership.Owned, setOf(borrowed),
+                )
+                "InitializeImmortal" -> operations += ArcSSAOperation.Introduce(
+                    value, ArcOwnership.Immortal, setOf(borrowed),
+                )
+                "MoveOwned", "DestroyOwned" -> {
+                    operations += ArcSSAOperation.Introduce(value, ArcOwnership.Owned, setOf(borrowed))
+                    operations += ArcSSAOperation.InitializeOwned(valueSlot, valueVersion, value)
+                }
+            }
+            operations += ArcSSAOperation.EndBorrow(borrowId)
+            operations += when (shape) {
+                "InitializeOwned" -> ArcSSAOperation.InitializeOwned(valueSlot, valueVersion, value)
+                "InitializeImmortal" -> ArcSSAOperation.InitializeImmortal(valueSlot, valueVersion, value)
+                "JoinSlot" -> ArcSSAOperation.JoinSlot(
+                    valueSlot, valueVersion, borrowed, emptyMap(),
+                )
+                "MoveOwned" -> ArcSSAOperation.MoveOwned(
+                    valueSlot, valueVersion, ArcSSASlot("moved.$shape"), ArcSSASlotVersion("moved.$shape.0"), value,
+                )
+                "DestroyOwned" -> ArcSSAOperation.DestroyOwned(valueSlot, valueVersion, value)
+                else -> error("unknown test shape $shape")
+            }
+            val cfg = ArcOwnershipSSAInput(
+                entry,
+                mapOf(entry to ArcSSABlock(entry, operations)),
+                emptySet(),
+            )
+
+            assertEquals(
+                shape,
+                ArcSSASlotRejectionReason.INVALID_BORROW_USE,
+                ArcOwnershipSSAAnalysis.analyze(cfg).slotFlow.rejections.single().reason,
+            )
+        }
+    }
+
+    @Test
+    fun activeBorrowRejectsNonBorrowEffects() {
+        listOf(ArcSSAUseKind.Escape, ArcSSAUseKind.Consume, ArcSSAUseKind.UnknownConsume).forEach { kind ->
+            val value = ArcSSAValue("value.$kind")
+            val borrowed = ArcSSAValue("borrowed.$kind")
+            val slot = ArcSSASlot("slot.$kind")
+            val version = ArcSSASlotVersion("slot.$kind.0")
+            val borrowId = ArcSSABorrowId("borrow.$kind")
+            val cfg = ArcOwnershipSSAInput(entry, mapOf(entry to ArcSSABlock(entry, listOf(
+                ArcSSAOperation.Introduce(value, ArcOwnership.Owned),
+                ArcSSAOperation.InitializeOwned(slot, version, value),
+                ArcSSAOperation.Borrow(slot, version, value, borrowed, borrowId),
+                ArcSSAOperation.Use(borrowed, kind),
+            ))), emptySet())
+
+            assertEquals(
+                kind.toString(),
+                ArcSSASlotRejectionReason.INVALID_BORROW_USE,
+                ArcOwnershipSSAAnalysis.analyze(cfg).slotFlow.rejections.single().reason,
+            )
+        }
+    }
+
+    @Test
+    fun endedBorrowCannotBeUsedInSuccessorBlock() {
+        val value = ArcSSAValue("value")
+        val borrowed = ArcSSAValue("borrowed")
+        val slot = ArcSSASlot("slot")
+        val version = ArcSSASlotVersion("slot.0")
+        val borrowId = ArcSSABorrowId("borrow")
+        val next = ArcBlockId("next")
+        val cfg = ArcOwnershipSSAInput(entry, linkedMapOf(
+            entry to ArcSSABlock(entry, listOf(
+                ArcSSAOperation.Introduce(value, ArcOwnership.Owned),
+                ArcSSAOperation.InitializeOwned(slot, version, value),
+                ArcSSAOperation.Borrow(slot, version, value, borrowed, borrowId),
+                ArcSSAOperation.EndBorrow(borrowId),
+            )),
+            next to ArcSSABlock(next, listOf(ArcSSAOperation.Use(borrowed, ArcSSAUseKind.Borrow))),
+        ), setOf(ArcSSAEdge(entry, next)))
+
+        assertEquals(
+            ArcSSASlotRejectionReason.INVALID_BORROW_USE,
+            ArcOwnershipSSAAnalysis.analyze(cfg).slotFlow.rejections.single().reason,
+        )
+    }
+
+    @Test
+    fun joinSlotCannotAppearAfterBorrowOrDestroyEffects() {
+        val left = ArcSSAValue("left")
+        val right = ArcSSAValue("right")
+        val joined = ArcSSAValue("joined")
+        val borrowed = ArcSSAValue("borrowed")
+        val slot = ArcSSASlot("slot")
+        val leftVersion = ArcSSASlotVersion("left")
+        val rightVersion = ArcSSASlotVersion("right")
+        val joinedVersion = ArcSSASlotVersion("joined")
+        val borrowId = ArcSSABorrowId("borrow")
+        val cfg = diamond(
+            thenOperations = listOf(
+                ArcSSAOperation.Introduce(left, ArcOwnership.Owned),
+                ArcSSAOperation.InitializeOwned(slot, leftVersion, left),
+            ),
+            elseOperations = listOf(
+                ArcSSAOperation.Introduce(right, ArcOwnership.Owned),
+                ArcSSAOperation.InitializeOwned(slot, rightVersion, right),
+            ),
+            mergeOperations = listOf(
+                ArcSSAOperation.Join(joined, linkedMapOf(thenBlock to left, elseBlock to right)),
+                ArcSSAOperation.Borrow(slot, joinedVersion, joined, borrowed, borrowId),
+                ArcSSAOperation.EndBorrow(borrowId),
+                ArcSSAOperation.DestroyOwned(slot, joinedVersion, joined),
+                ArcSSAOperation.JoinSlot(
+                    slot, joinedVersion, joined,
+                    linkedMapOf(ArcSSAEdge(thenBlock, merge) to leftVersion, ArcSSAEdge(elseBlock, merge) to rightVersion),
+                ),
+            ),
+        )
+
+        assertEquals(
+            ArcSSASlotRejectionReason.INVALID_PATH_DISJOINT_JOIN,
+            ArcOwnershipSSAAnalysis.analyze(cfg).slotFlow.rejections.single().reason,
+        )
+    }
+
+    @Test
+    fun throwingOperationWithLiveOwnedSlotRequiresExceptionalEdge() {
+        val value = ArcSSAValue("value")
+        val slot = ArcSSASlot("slot")
+        val version = ArcSSASlotVersion("slot.0")
+        val cfg = ArcOwnershipSSAInput(entry, mapOf(entry to ArcSSABlock(entry, listOf(
+            ArcSSAOperation.Introduce(value, ArcOwnership.Owned),
+            ArcSSAOperation.InitializeOwned(slot, version, value),
+            ArcSSAOperation.Use(value, ArcSSAUseKind.Borrow, mayThrow = true),
+            ArcSSAOperation.DestroyOwned(slot, version, value),
+        ))), emptySet())
+
+        assertEquals(
+            ArcSSASlotRejectionReason.UNMODELED_EXCEPTIONAL_EDGE,
+            ArcOwnershipSSAAnalysis.analyze(cfg).slotFlow.rejections.single().reason,
+        )
+    }
+
+    @Test
+    fun slotFactsRejectBackedgesUntilOwnershipPhiCleanupIsModeled() {
+        val value = ArcSSAValue("value")
+        val loop = ArcBlockId("loop")
+        val slot = ArcSSASlot("result")
+        val cfg = ArcOwnershipSSAInput(
+            entry,
+            linkedMapOf(
+                entry to ArcSSABlock(entry, listOf(
+                    ArcSSAOperation.Introduce(value, ArcOwnership.Owned),
+                    ArcSSAOperation.InitializeOwned(slot, ArcSSASlotVersion("entry"), value),
+                )),
+                loop to ArcSSABlock(loop, emptyList()),
+            ),
+            setOf(ArcSSAEdge(entry, loop), ArcSSAEdge(loop, loop)),
+        )
+
+        assertEquals(
+            ArcSSASlotRejectionReason.BACKEDGE_STATE,
+            ArcOwnershipSSAAnalysis.analyze(cfg).slotFlow.rejections.single().reason,
+        )
     }
 
     private fun diamond(
