@@ -7,6 +7,7 @@ package org.jetbrains.kotlin.backend.konan.arc
 
 import org.jetbrains.kotlin.backend.konan.MemoryModel
 import org.jetbrains.kotlin.backend.konan.NativeGenerationState
+import org.jetbrains.kotlin.backend.konan.KonanFqNames
 import org.jetbrains.kotlin.backend.konan.binaryTypeIsReference
 import org.jetbrains.kotlin.backend.konan.getBoxFunction
 import org.jetbrains.kotlin.backend.konan.ir.konanLibrary
@@ -51,8 +52,10 @@ import org.jetbrains.kotlin.ir.types.isInt
 import org.jetbrains.kotlin.ir.types.getClass
 import org.jetbrains.kotlin.ir.util.constructors
 import org.jetbrains.kotlin.ir.util.fqNameForIrSerialization
+import org.jetbrains.kotlin.ir.util.hasAnnotation
 import org.jetbrains.kotlin.ir.util.isOverridable
 import org.jetbrains.kotlin.ir.util.isReal
+import org.jetbrains.kotlin.ir.util.properties
 import org.jetbrains.kotlin.ir.visitors.IrElementVisitorVoid
 import org.jetbrains.kotlin.ir.visitors.acceptChildrenVoid
 import org.jetbrains.kotlin.ir.visitors.acceptVoid
@@ -81,6 +84,8 @@ internal data class ArcSafeContinuationSROAIRBindings<T : Any>(
     val resultBoxIntrinsic: T,
     val resultConstructor: T,
     val structuralUnitCalls: List<T>,
+    /** Exact physical variables, reads, blocks, and Result.value projection consumed by emission. */
+    val resumeDataflowBindings: List<T>,
     val getOrThrow: T,
     val getOrThrowCall: T,
     val getOrThrowReceiver: T,
@@ -93,7 +98,7 @@ internal fun <T : Any> ArcSafeContinuationSROAIRBindings<T>.exactIdentityInvento
     resultRefField, resumeWith, resumeCall, resumeReceiver, resumeResultArgument,
     resumeResultParameter, resumeValueProducer, resultCompanionGetter, resultBoxIntrinsic,
     resultConstructor, getOrThrow, getOrThrowCall, getOrThrowReceiver,
-) + structuralUnitCalls + contractBindings
+) + structuralUnitCalls + resumeDataflowBindings + contractBindings
 
 internal data class ArcSafeContinuationSROAIRShape(
     val exactStdlibDeclarations: Boolean,
@@ -291,6 +296,10 @@ internal fun selectVerifiedSynchronousSafeContinuationSROA(
 ): List<ArcSafeContinuationSROAKotlinIRSelection> {
     val context = generationState.context
     val config = context.config
+    fun reject(stage: String): List<ArcSafeContinuationSROAKotlinIRSelection> {
+        context.log { "ARC synchronous SafeContinuation SROA selector rejected: $stage" }
+        return emptyList()
+    }
     val mode = ArcSafeContinuationSROAMode(
         arcEnabled = context.memoryModel == MemoryModel.ARC,
         linuxX64 = config.target == KonanTarget.LINUX_X64,
@@ -304,40 +313,70 @@ internal fun selectVerifiedSynchronousSafeContinuationSROA(
         exactLoweredSuspendFunction = false,
         nonExternalFunction = true,
     )
-    if (!mode.isSelectableProductionMode()) return emptyList()
-    val stdlib = context.stdlibModule.konanLibrary ?: return emptyList()
+    if (!mode.isSelectableProductionMode()) return reject("unsupported compilation mode")
+    val stdlib = context.stdlibModule.konanLibrary ?: return reject("stdlib library identity unavailable")
     val safeClass = collectClasses(module).singleOrNull {
         it.konanLibrary === stdlib &&
                 it.fqNameForIrSerialization.asString() == "kotlin.coroutines.SafeContinuation"
-    } ?: return emptyList()
-    if (safeClass.symbol.signature == null) return emptyList()
-    val delegateField = safeClass.declarations.filterIsInstance<IrField>().singleOrNull {
+    } ?: return reject("exact SafeContinuation class unavailable")
+    if (safeClass.symbol.signature == null) return reject("SafeContinuation signature unavailable")
+    // Dependency KLIB deserialization keeps private backing fields on their IrProperty even when
+    // it does not attach those fields directly to IrClass.declarations. Preserve exact field
+    // identity by reading both representations and deduplicating referentially.
+    val safeFields = buildList {
+        addAll(safeClass.declarations.filterIsInstance<IrField>())
+        safeClass.properties.mapNotNull { it.backingField }.forEach { field ->
+            if (none { it === field }) add(field)
+        }
+    }
+    val safeFunctions = buildList {
+        addAll(safeClass.declarations.filterIsInstance<IrSimpleFunction>())
+        safeClass.properties.forEach { property ->
+            listOfNotNull(property.getter, property.setter).forEach { accessor ->
+                if (none { it === accessor }) add(accessor)
+            }
+        }
+    }
+    if (safeFields.size != 2 || safeClass.hasAnnotation(KonanFqNames.hasFinalizer) ||
+        safeFunctions.any { it.hasAnnotation(KonanFqNames.arcDeinit) }
+    ) {
+        return reject("SafeContinuation storage/destruction contract drifted")
+    }
+    val delegateField = safeFields.singleOrNull {
         it.name.asString() == "delegate" && it.visibility == DescriptorVisibilities.PRIVATE &&
                 it.isFinal && !it.isStatic && it.type.binaryTypeIsReference() &&
+                !it.hasAnnotation(KonanFqNames.arcWeak) && !it.hasAnnotation(KonanFqNames.arcUnowned) &&
                 (it.symbol.signature ?: it.symbol.privateSignature) != null
-    } ?: return emptyList()
-    val resultRefField = safeClass.declarations.filterIsInstance<IrField>().singleOrNull {
+    } ?: return reject(
+        "exact delegate field unavailable: fields=" + safeFields.joinToString { field ->
+            "${field.name}/${field.visibility}/final=${field.isFinal}/static=${field.isStatic}/" +
+                    "reference=${field.type.binaryTypeIsReference()}/signature=" +
+                    ((field.symbol.signature ?: field.symbol.privateSignature) != null)
+        } + "; declarations=" + safeClass.declarations.joinToString { it::class.simpleName ?: "unknown" },
+    )
+    val resultRefField = safeFields.singleOrNull {
         it.name.asString() == "resultRef" && it.visibility == DescriptorVisibilities.PRIVATE &&
                 !it.isStatic && it.type.binaryTypeIsReference() &&
+                !it.hasAnnotation(KonanFqNames.arcWeak) && !it.hasAnnotation(KonanFqNames.arcUnowned) &&
                 (it.symbol.signature ?: it.symbol.privateSignature) != null
-    } ?: return emptyList()
+    } ?: return reject("exact resultRef field unavailable")
     val resumeWith = safeClass.declarations.filterIsInstance<IrSimpleFunction>().singleOrNull {
         it.konanLibrary === stdlib && it.name.asString() == "resumeWith" && it.isReal &&
                 !it.isExternal && !it.isOverridable && !it.isSuspend &&
                 it.dispatchReceiverParameter != null && it.extensionReceiverParameter == null &&
                 it.valueParameters.singleOrNull()?.type?.binaryTypeIsReference() == true &&
                 it.returnType.isUnit() && (it.symbol.signature ?: it.symbol.privateSignature) != null
-    } ?: return emptyList()
+    } ?: return reject("exact resumeWith unavailable")
     val getOrThrow = safeClass.declarations.filterIsInstance<IrSimpleFunction>().singleOrNull {
         it.konanLibrary === stdlib && it.name.asString() == "getOrThrow" && it.isReal &&
                 !it.isExternal && !it.isOverridable && !it.isSuspend &&
                 it.dispatchReceiverParameter != null && it.extensionReceiverParameter == null &&
                 it.valueParameters.isEmpty() && it.returnType.binaryTypeIsReference() &&
                 (it.symbol.signature ?: it.symbol.privateSignature) != null
-    } ?: return emptyList()
+    } ?: return reject("exact getOrThrow unavailable")
     val contract = authenticateExactSafeContinuationMethodContract(
         safeClass, delegateField, resultRefField, resumeWith, getOrThrow, context,
-    ) ?: return emptyList()
+    ) ?: return reject("SafeContinuation method contract drifted")
 
     val selected = IdentityHashMap<IrFunction, MutableList<ArcSafeContinuationSROAIRSelection<IrElement>>>()
     module.files.forEach { file ->
@@ -406,27 +445,61 @@ private fun selectInFunction(
         }
     })
     if (containsNestedFunction) return emptyList()
+    val safeAllocations = mutableListOf<IrConstructorCall>()
+    body.acceptVoid(object : IrElementVisitorVoid {
+        override fun visitElement(element: IrElement) = element.acceptChildrenVoid(this)
+        override fun visitFunction(declaration: IrFunction) = Unit
+        override fun visitConstructorCall(expression: IrConstructorCall) {
+            if (expression.symbol.owner.parent === safeClass) safeAllocations += expression
+            expression.acceptChildrenVoid(this)
+        }
+    })
+    if (safeAllocations.isNotEmpty()) {
+        context.log {
+            "ARC synchronous SafeContinuation SROA candidates in " +
+                    function.fqNameForIrSerialization.asString() + ": allocations=${safeAllocations.size}, " +
+                    "directImmutableLocals=" + variables.count { local ->
+                        !local.isVar && (local.initializer as? IrConstructorCall)?.symbol?.owner?.parent === safeClass
+                    }
+        }
+    }
 
     return variables.mapNotNull { local ->
         if (local.isVar) return@mapNotNull null
         val allocation = local.initializer as? IrConstructorCall ?: return@mapNotNull null
         val constructor = allocation.symbol.owner
-        if (constructor.parent !== safeClass || constructor.konanLibrary !== stdlib ||
-            constructor.isExternal || constructor.valueParameters.size != 1 ||
+        if (constructor.parent !== safeClass) return@mapNotNull null
+        fun rejectSite(stage: String): ArcSafeContinuationSROAIRSelection<IrElement>? {
+            context.log {
+                "ARC synchronous SafeContinuation SROA site rejected in " +
+                        function.fqNameForIrSerialization.asString() + "/${local.name}: $stage"
+            }
+            return null
+        }
+        if (constructor.konanLibrary !== stdlib || constructor.isExternal || constructor.valueParameters.size != 1 ||
             constructor.dispatchReceiverParameter != null || constructor.extensionReceiverParameter != null ||
             (constructor.symbol.signature ?: constructor.symbol.privateSignature) == null ||
             allocation.valueArgumentsCount != 1 || allocation.typeArgumentsCount != 1
-        ) return@mapNotNull null
+        ) return@mapNotNull rejectSite("secondary constructor ABI drifted")
         val secondaryContract = authenticateExactUndecidedConstructor(constructor, safeClass, context)
-            ?: return@mapNotNull null
-        val delegate = allocation.getValueArgument(0) ?: return@mapNotNull null
-        val intercepted = delegate as? IrCall ?: return@mapNotNull null
-        if (intercepted.symbol.owner.fqNameForIrSerialization.asString() !=
-            "kotlin.coroutines.intrinsics.intercepted" || intercepted.dispatchReceiver == null ||
-            intercepted.extensionReceiver != null || intercepted.valueArgumentsCount != 0 ||
-            intercepted.symbol.owner.konanLibrary !== stdlib
-        ) return@mapNotNull null
-        val interceptedReceiver = intercepted.dispatchReceiver ?: return@mapNotNull null
+            ?: return@mapNotNull rejectSite("secondary constructor effect contract drifted")
+        val delegate = allocation.getValueArgument(0) ?: return@mapNotNull rejectSite("delegate unavailable")
+        val intercepted = delegate as? IrCall ?: return@mapNotNull rejectSite("delegate is not intercepted call")
+        val interceptedFunction = intercepted.symbol.owner
+        if (interceptedFunction.fqNameForIrSerialization.asString() !=
+            "kotlin.coroutines.intrinsics.intercepted" || interceptedFunction.konanLibrary !== stdlib ||
+            interceptedFunction.isExternal || interceptedFunction.isSuspend ||
+            interceptedFunction.dispatchReceiverParameter != null ||
+            interceptedFunction.extensionReceiverParameter?.type?.binaryTypeIsReference() != true ||
+            !interceptedFunction.returnType.binaryTypeIsReference() ||
+            interceptedFunction.valueParameters.isNotEmpty() || interceptedFunction.typeParameters.size != 1 ||
+            (interceptedFunction.symbol.signature ?: interceptedFunction.symbol.privateSignature) == null ||
+            intercepted.dispatchReceiver != null ||
+            intercepted.extensionReceiver == null || intercepted.valueArgumentsCount != 0 ||
+            intercepted.typeArgumentsCount != 1 || !intercepted.type.binaryTypeIsReference()
+        ) return@mapNotNull rejectSite("intercepted call ABI drifted")
+        val interceptedReceiver = intercepted.extensionReceiver
+            ?: return@mapNotNull rejectSite("intercepted receiver unavailable")
 
         val reads = mutableListOf<IrGetValue>()
         val calls = mutableListOf<IrCall>()
@@ -443,7 +516,7 @@ private fun selectInFunction(
                 expression.acceptChildrenVoid(this)
             }
         })
-        if (localWrite) return@mapNotNull null
+        if (localWrite) return@mapNotNull rejectSite("local is reassigned")
         body.acceptVoid(object : IrElementVisitorVoid {
             override fun visitElement(element: IrElement) = element.acceptChildrenVoid(this)
             override fun visitFunction(declaration: IrFunction) = Unit
@@ -452,20 +525,30 @@ private fun selectInFunction(
                 expression.acceptChildrenVoid(this)
             }
         })
-        val resumeCall = calls.singleOrNull { it.symbol.owner === resumeWith } ?: return@mapNotNull null
-        val getCall = calls.singleOrNull { it.symbol.owner === getOrThrow } ?: return@mapNotNull null
+        val resumeCall = calls.singleOrNull { it.symbol.owner === resumeWith }
+            ?: return@mapNotNull rejectSite("exact resumeWith call unavailable")
+        val getCall = calls.singleOrNull { it.symbol.owner === getOrThrow }
+            ?: return@mapNotNull rejectSite("exact getOrThrow call unavailable")
         if (calls.size != 2 || reads.size != 2 || resumeCall.valueArgumentsCount != 1 ||
             getCall.valueArgumentsCount != 0
-        ) return@mapNotNull null
-        val resumeReceiver = resumeCall.dispatchReceiver.unwrapSROALocal() ?: return@mapNotNull null
-        val getReceiver = getCall.dispatchReceiver.unwrapSROALocal() ?: return@mapNotNull null
-        if (reads.none { it === resumeReceiver } || reads.none { it === getReceiver }) return@mapNotNull null
-        val resumeResult = resumeCall.getValueArgument(0) ?: return@mapNotNull null
-        val linear = proveLinearRegion(local, resumeCall, getCall, ancestry) ?: return@mapNotNull null
-        if (hasUnsupportedAncestorContext(local, resumeCall, getCall, ancestry)) return@mapNotNull null
+        ) return@mapNotNull rejectSite("local use census drifted: calls=${calls.size}, reads=${reads.size}")
+        val resumeReceiver = resumeCall.dispatchReceiver.unwrapSROALocal()
+            ?: return@mapNotNull rejectSite("resume receiver wrapper drifted")
+        val getReceiver = getCall.dispatchReceiver.unwrapSROALocal()
+            ?: return@mapNotNull rejectSite("get receiver wrapper drifted")
+        if (reads.none { it === resumeReceiver } || reads.none { it === getReceiver }) {
+            return@mapNotNull rejectSite("receiver/read identity drifted")
+        }
+        val resumeResult = resumeCall.getValueArgument(0)
+            ?: return@mapNotNull rejectSite("resume result unavailable")
+        val linear = proveLinearRegion(local, resumeCall, getCall, ancestry)
+            ?: return@mapNotNull rejectSite("linear region proof rejected")
+        if (hasUnsupportedAncestorContext(local, resumeCall, getCall, ancestry)) {
+            return@mapNotNull rejectSite("unsupported ancestor context")
+        }
         val structuralCalls = linear.authenticateExactStructuralCalls(
             allocation, resumeCall, getCall, intercepted, resumeResult, ancestry, context,
-        ) ?: return@mapNotNull null
+        ) ?: return@mapNotNull rejectSite("structural call/effect inventory drifted")
 
         val bindings = ArcSafeContinuationSROAIRBindings<IrElement>(
             function, safeClass, local, allocation, constructor, interceptedReceiver, intercepted, delegateField,
@@ -473,9 +556,10 @@ private fun selectInFunction(
             resumeWith.valueParameters.single(), structuralCalls.resumeValueProducer,
             structuralCalls.resultCompanionGetter, structuralCalls.resultBoxIntrinsic,
             structuralCalls.resultConstructor, structuralCalls.unitInstances,
+            structuralCalls.resumeDataflowBindings,
             getOrThrow, getCall, getReceiver, contract.identityBindings + secondaryContract.identityBindings,
         )
-        adaptVerifiedSafeContinuationSROAIR(
+        val adapted = adaptVerifiedSafeContinuationSROAIR(
             bindings,
             mode,
             ArcSafeContinuationSROAIRShape(
@@ -513,7 +597,13 @@ private fun selectInFunction(
                 exactBranchOrderAndDataflow = true,
                 ordinaryHeapOwnershipPreserved = true,
             ),
-        ).selection
+        )
+        adapted.selection?.also {
+            context.log {
+                "ARC synchronous SafeContinuation SROA selected production site: " +
+                        function.fqNameForIrSerialization.asString() + "/${local.name}; emitted=false"
+            }
+        } ?: rejectSite("semantic adapter rejected: ${adapted.rejection}/${adapted.semanticRejection}")
     }
 }
 
@@ -535,8 +625,15 @@ private fun authenticateExactSafeContinuationMethodContract(
     getOrThrow: IrSimpleFunction,
     context: org.jetbrains.kotlin.backend.konan.Context,
 ): ExactSafeContinuationMethodContract? {
-    val primary = safeClass.constructors.singleOrNull { it.isPrimary } ?: return null
-    if (primary.valueParameters.size != 2 || primary.body !is IrBlockBody) return null
+    fun reject(stage: String): ExactSafeContinuationMethodContract? {
+        context.log { "ARC synchronous SafeContinuation SROA contract rejected: $stage" }
+        return null
+    }
+    val primary = safeClass.constructors.singleOrNull { it.isPrimary }
+        ?: return reject("exact primary constructor unavailable")
+    if (primary.valueParameters.size != 2 || primary.body !is IrBlockBody) {
+        return reject("primary constructor parameters/body drifted")
+    }
     val delegateParameter = primary.valueParameters[0]
     val initialResultParameter = primary.valueParameters[1]
     val primaryWrites = mutableListOf<IrSetField>()
@@ -569,37 +666,42 @@ private fun authenticateExactSafeContinuationMethodContract(
         }
     })
     val delegateInitialization = primaryWrites.singleOrNull { it.symbol.owner === delegateField }
-        ?: return null
+        ?: return reject("delegate initialization unavailable")
     val resultRefInitialization = primaryWrites.singleOrNull { it.symbol.owner === resultRefField }
-        ?: return null
+        ?: return reject("resultRef initialization unavailable")
     if (primaryWrites.size != 2 ||
         (delegateInitialization.receiver as? IrGetValue)?.symbol != safeClass.thisReceiver?.symbol ||
         (delegateInitialization.value as? IrGetValue)?.symbol != delegateParameter.symbol ||
         (resultRefInitialization.receiver as? IrGetValue)?.symbol != safeClass.thisReceiver?.symbol
-    ) return null
+    ) return reject("primary field initialization dataflow drifted")
 
-    val atomicInitialization = resultRefInitialization.value as? IrConstructorCall ?: return null
-    val atomicClass = resultRefField.type.getClass() ?: return null
+    val atomicInitialization = resultRefInitialization.value as? IrConstructorCall
+        ?: return reject("atomic initialization unavailable")
+    val atomicClass = resultRefField.type.getClass()
+        ?: return reject("atomic resultRef class unavailable")
     if (atomicClass.fqNameForIrSerialization.asString() !=
         "kotlin.native.concurrent.FreezableAtomicReference" ||
         atomicClass.konanLibrary !== context.stdlibModule.konanLibrary
-    ) return null
-    val atomicConstructor = atomicClass.constructors.singleOrNull { it.isPrimary } ?: return null
+    ) return reject("atomic resultRef class identity drifted")
+    val atomicConstructor = atomicClass.constructors.singleOrNull { it.isPrimary }
+        ?: return reject("atomic primary constructor unavailable")
     if (atomicInitialization.symbol.owner !== atomicConstructor ||
         atomicInitialization.valueArgumentsCount != 1 ||
         (atomicInitialization.getValueArgument(0) as? IrGetValue)?.symbol != initialResultParameter.symbol
-    ) return null
+    ) return reject("atomic initialization dataflow drifted")
     val anyPrimary = context.irBuiltIns.anyClass.owner.constructors.singleOrNull { it.isPrimary }
-        ?: return null
-    val structuralReturn = (primary.body as IrBlockBody).statements.lastOrNull() as? IrReturn ?: return null
-    val structuralUnit = structuralReturn.value as? IrCall ?: return null
+        ?: return reject("Any primary constructor unavailable")
+    val structuralReturn = (primary.body as IrBlockBody).statements.lastOrNull() as? IrReturn
+        ?: return reject("primary structural return unavailable")
+    val structuralUnit = structuralReturn.value as? IrCall
+        ?: return reject("primary structural Unit unavailable")
     if (invalidPrimaryEffect || (primary.body as IrBlockBody).statements.size != 4 ||
         primaryDelegations.singleOrNull()?.symbol?.owner !== anyPrimary ||
         primaryConstructors.singleOrNull() !== atomicInitialization ||
         primaryCalls.singleOrNull() !== structuralUnit ||
         structuralUnit.symbol != context.ir.symbols.theUnitInstance ||
         structuralReturn.returnTargetSymbol != primary.symbol
-    ) return null
+    ) return reject("primary constructor effect inventory drifted")
 
     val allDelegateWrites = mutableListOf<IrSetField>()
     val allResultRefWrites = mutableListOf<IrSetField>()
@@ -615,17 +717,48 @@ private fun authenticateExactSafeContinuationMethodContract(
     })
     if (allDelegateWrites.singleOrNull() !== delegateInitialization ||
         allResultRefWrites.singleOrNull() !== resultRefInitialization
-    ) return null
+    ) return reject("SafeContinuation field-write census drifted")
 
-    val atomicGetter = atomicClass.declarations.filterIsInstance<IrSimpleFunction>().singleOrNull {
+    val atomicFunctions = buildList {
+        addAll(atomicClass.declarations.filterIsInstance<IrSimpleFunction>())
+        atomicClass.properties.forEach { property ->
+            listOfNotNull(property.getter, property.setter).forEach { accessor ->
+                if (none { it === accessor }) add(accessor)
+            }
+        }
+    }
+    val atomicFields = buildList {
+        addAll(atomicClass.declarations.filterIsInstance<IrField>())
+        atomicClass.properties.mapNotNull { it.backingField }.forEach { field ->
+            if (none { it === field }) add(field)
+        }
+    }
+    val atomicValueField = atomicFields.singleOrNull {
+        it.name.asString() == "value_" && !it.isStatic &&
+                it.visibility == DescriptorVisibilities.PRIVATE && it.type.binaryTypeIsReference() &&
+                !it.hasAnnotation(KonanFqNames.arcWeak) && !it.hasAnnotation(KonanFqNames.arcUnowned)
+    }
+    val atomicLockField = atomicFields.singleOrNull {
+        it.name.asString() == "lock" && !it.isStatic &&
+                it.visibility == DescriptorVisibilities.PRIVATE && it.type.isInt()
+    }
+    val atomicCookieField = atomicFields.singleOrNull {
+        it.name.asString() == "cookie" && !it.isStatic &&
+                it.visibility == DescriptorVisibilities.PRIVATE && it.type.isInt()
+    }
+    if (atomicFields.size != 3 || atomicValueField == null || atomicLockField == null ||
+        atomicCookieField == null || atomicFunctions.any { it.hasAnnotation(KonanFqNames.arcDeinit) }
+        || atomicClass.hasAnnotation(KonanFqNames.hasFinalizer)
+    ) return reject("atomic storage/destruction contract drifted")
+    val atomicGetter = atomicFunctions.singleOrNull {
         it.correspondingPropertySymbol?.owner?.name?.asString() == "value" &&
             it.valueParameters.isEmpty() && it.dispatchReceiverParameter != null &&
             !it.isExternal && !it.isOverridable
-    } ?: return null
-    val atomicCompareAndSet = atomicClass.declarations.filterIsInstance<IrSimpleFunction>().singleOrNull {
+    } ?: return reject("atomic value getter unavailable")
+    val atomicCompareAndSet = atomicFunctions.singleOrNull {
         it.name.asString() == "compareAndSet" && it.valueParameters.size == 2 &&
             it.dispatchReceiverParameter != null && !it.isExternal && !it.isOverridable
-    } ?: return null
+    } ?: return reject("atomic compareAndSet unavailable")
     /*
      * Trust boundary: these are compiler-owned declarations from the exact stdlib KLIB loaded by
      * this compilation. Their stable signatures define the FreezableAtomicReference ABI contract;
@@ -639,7 +772,7 @@ private fun authenticateExactSafeContinuationMethodContract(
         atomicConstructor.konanLibrary !== context.stdlibModule.konanLibrary ||
         atomicGetter.konanLibrary !== context.stdlibModule.konanLibrary ||
         atomicCompareAndSet.konanLibrary !== context.stdlibModule.konanLibrary
-    ) return null
+    ) return reject("atomic declaration ABI identity drifted")
 
     val resumeFingerprint = fingerprintSafeContinuationMethod(
         resumeWith, delegateField, resultRefField, atomicGetter, atomicCompareAndSet,
@@ -647,14 +780,14 @@ private fun authenticateExactSafeContinuationMethodContract(
         expectedEnumIds = listOf(1, 2, 2), expectedUnitReturns = 3,
         expectedVariables = 1, expectedAssignments = 0, expectedTargetReturns = 3, expectedBranches = 5,
         requireLoop = true, requireDelegateResume = true, requireFailureProjection = false, context = context,
-    ) ?: return null
+    ) ?: return reject("resumeWith method fingerprint drifted")
     val getFingerprint = fingerprintSafeContinuationMethod(
         getOrThrow, delegateField, resultRefField, atomicGetter, atomicCompareAndSet,
         expectedResultRefLoads = 3, expectedAtomicGets = 2, expectedAtomicCas = 1,
         expectedEnumIds = listOf(1, 2, 2), expectedUnitReturns = 0,
         expectedVariables = 1, expectedAssignments = 1, expectedTargetReturns = 2, expectedBranches = 5,
         requireLoop = false, requireDelegateResume = false, requireFailureProjection = true, context = context,
-    ) ?: return null
+    ) ?: return reject("getOrThrow method fingerprint drifted")
 
     return ExactSafeContinuationMethodContract(listOf(
         primary, atomicClass, atomicConstructor, atomicGetter, atomicCompareAndSet,
@@ -683,6 +816,10 @@ private fun fingerprintSafeContinuationMethod(
     requireFailureProjection: Boolean,
     context: org.jetbrains.kotlin.backend.konan.Context,
 ): List<IrElement>? {
+    fun reject(stage: String): List<IrElement>? {
+        context.log { "ARC synchronous SafeContinuation SROA ${function.name} fingerprint rejected: $stage" }
+        return null
+    }
     val body = function.body as? IrBlockBody ?: return null
     val resultRefLoads = mutableListOf<IrGetField>()
     val delegateLoads = mutableListOf<IrGetField>()
@@ -819,14 +956,25 @@ private fun fingerprintSafeContinuationMethod(
         failureProjections.size != expectedFailureNodes ||
         variables.size != expectedVariables || assignments.size != expectedAssignments ||
         targetReturns.size != expectedTargetReturns || orderedBranches.size != expectedBranches ||
-        throws.size != 1 || typeOperators.size != expectedFailureNodes ||
+        throws.size != 1 || typeOperators.size != expectedFailureNodes * 2 ||
         allFieldLoads.size != resultRefLoads.size + delegateLoads.size + failureProjections.size
-    ) return null
+    ) return reject(
+        "inventory drift: invalid=$invalid loops=$loops/$expectedLoops resultRefLoads=${resultRefLoads.size}/" +
+                "$expectedResultRefLoads atomicGets=${atomicCalls.count { it.symbol.owner === atomicGetter }}/" +
+                "$expectedAtomicGets atomicCas=${atomicCalls.count { it.symbol.owner === atomicCompareAndSet }}/" +
+                "$expectedAtomicCas enumIds=${enumIds.sorted()}/$expectedEnumIds unit=${unitCalls.size}/" +
+                "$expectedUnitReturns delegate=${delegateResumeCalls.size}/$expectedDelegateCalls " +
+                "failure=$failureTests,$failureProjections/$expectedFailureNodes vars=${variables.size}/" +
+                "$expectedVariables assigns=${assignments.size}/$expectedAssignments returns=" +
+                "${targetReturns.size}/$expectedTargetReturns branches=${orderedBranches.size}/" +
+                "$expectedBranches throws=${throws.size} typeOps=${typeOperators.size}/${expectedFailureNodes * 2} " +
+                "allFieldLoads=${allFieldLoads.size}",
+    )
     if (resultRefLoads.any { load ->
             (load.receiver as? IrGetValue)?.symbol != function.dispatchReceiverParameter?.symbol ||
                 atomicCalls.none { it.dispatchReceiver === load }
         }
-    ) return null
+    ) return reject("resultRef receiver/atomic-load association drifted")
     val exactAllowedCalls = buildList {
         addAll(atomicCalls)
         addAll(unitCalls)
@@ -844,27 +992,28 @@ private fun fingerprintSafeContinuationMethod(
                 "kotlin.coroutines.intrinsics.CoroutineSingletons" ||
                 it.symbol.owner.konanLibrary !== context.stdlibModule.konanLibrary
         }
-    ) return null
+    ) return reject("allowed-call inventory drifted")
     if (requireDelegateResume) {
-        val alreadyResumed = constructorCalls.singleOrNull() ?: return null
+        val alreadyResumed = constructorCalls.singleOrNull()
+            ?: return reject("Already resumed constructor unavailable")
         if ((alreadyResumed.symbol.owner.parent as? IrClass)?.fqNameForIrSerialization?.asString() !=
             "kotlin.IllegalStateException" ||
             (alreadyResumed.getValueArgument(0) as? IrConst<*>)?.value != "Already resumed" ||
             reinterpretCalls.size != 1 || suspendedCalls.size != 2 || enumInitializerCalls.size != 1
-        ) return null
+        ) return reject("resume exceptional/suspended call inventory drifted")
     } else if (constructorCalls.isNotEmpty() || reinterpretCalls.isNotEmpty() ||
         suspendedCalls.size != 3 || enumInitializerCalls.isNotEmpty()
-    ) return null
+    ) return reject("getOrThrow constructor/suspended call inventory drifted")
     if (requireDelegateResume && !provesExactResumeStateDataflow(
             function, atomicCalls, atomicGetter, atomicCompareAndSet, variables, identityCalls,
             delegateResumeCalls.single(), unitCalls, ancestry, context,
         )
-    ) return null
+    ) return reject("resume state dataflow drifted")
     if (requireFailureProjection && !provesExactGetOrThrowStateDataflow(
             atomicCalls, atomicGetter, atomicCompareAndSet, variables, assignments,
             identityCalls, targetReturns, failureProjections.single(), ancestry, context,
         )
-    ) return null
+    ) return reject("getOrThrow state dataflow drifted")
     return resultRefLoads + delegateLoads + variables + assignments + targetReturns + orderedBranches +
         allCalls + constructorCalls + failureProjections
 }
@@ -981,8 +1130,12 @@ private fun provesExactGetOrThrowStateDataflow(
     val failureBranch = finalWhen.branches[1]
     val failureTest = failureBranch.condition as? IrTypeOperatorCall ?: return false
     val failureThrow = failureBranch.result as? IrThrow ?: return false
+    val failureReceiverCast = failureProjection.receiver as? IrTypeOperatorCall ?: return false
     if (failureTest.operator != IrTypeOperator.INSTANCEOF ||
         (failureTest.argument as? IrGetValue)?.symbol != result.symbol ||
+        failureReceiverCast.operator != IrTypeOperator.IMPLICIT_CAST ||
+        (failureReceiverCast.argument as? IrGetValue)?.symbol != result.symbol ||
+        failureReceiverCast.typeOperand.getClass()?.fqNameForIrSerialization?.asString() != "kotlin.Result.Failure" ||
         failureThrow !in ancestry[failureProjection].orEmpty()
     ) return false
     val successBranch = finalWhen.branches.lastOrNull() ?: return false
@@ -1116,39 +1269,55 @@ private data class LinearSROARegion(
         ancestry: IdentityHashMap<IrElement, List<IrElement>>,
         context: org.jetbrains.kotlin.backend.konan.Context,
     ): ExactSafeContinuationStructuralCalls? {
+        fun reject(stage: String): ExactSafeContinuationStructuralCalls? {
+            context.log { "ARC synchronous SafeContinuation SROA structural inventory rejected: $stage" }
+            return null
+        }
         val calls = mutableListOf<IrCall>()
         val constructors = mutableListOf<IrConstructorCall>()
+        val getFields = mutableListOf<IrGetField>()
         var unsupported = false
+        val unsupportedReasons = mutableListOf<String>()
+        fun markUnsupported(reason: String) {
+            unsupported = true
+            unsupportedReasons += reason
+        }
         statements.forEach { statement ->
             statement.acceptVoid(object : IrElementVisitorVoid {
                 override fun visitElement(element: IrElement) = element.acceptChildrenVoid(this)
-                override fun visitFunction(declaration: IrFunction) { unsupported = true }
-                override fun visitTry(aTry: IrTry) { unsupported = true }
-                override fun visitWhen(expression: IrWhen) { unsupported = true }
-                override fun visitLoop(loop: IrLoop) { unsupported = true }
-                override fun visitBreak(jump: IrBreak) { unsupported = true }
-                override fun visitContinue(jump: IrContinue) { unsupported = true }
-                override fun visitThrow(expression: IrThrow) { unsupported = true }
+                override fun visitFunction(declaration: IrFunction) { markUnsupported("function") }
+                override fun visitTry(aTry: IrTry) { markUnsupported("try") }
+                override fun visitWhen(expression: IrWhen) { markUnsupported("when") }
+                override fun visitLoop(loop: IrLoop) { markUnsupported("loop") }
+                override fun visitBreak(jump: IrBreak) { markUnsupported("break") }
+                override fun visitContinue(jump: IrContinue) { markUnsupported("continue") }
+                override fun visitThrow(expression: IrThrow) { markUnsupported("throw") }
                 override fun visitReturn(expression: IrReturn) {
-                    if (!expression.isTerminalLexicalReturn(get, ancestry)) unsupported = true
+                    if (!expression.isTerminalLexicalReturn(get, ancestry)) markUnsupported("early return")
                     expression.acceptChildrenVoid(this)
                 }
-                override fun visitSuspendableExpression(expression: IrSuspendableExpression) { unsupported = true }
-                override fun visitSuspensionPoint(expression: IrSuspensionPoint) { unsupported = true }
+                override fun visitSuspendableExpression(expression: IrSuspendableExpression) {
+                    markUnsupported("suspendable expression")
+                }
+                override fun visitSuspensionPoint(expression: IrSuspensionPoint) {
+                    markUnsupported("suspension point")
+                }
                 override fun visitSetField(expression: IrSetField) {
-                    unsupported = true
+                    markUnsupported("set field ${expression.symbol.owner.fqNameForIrSerialization.asString()}")
                     expression.acceptChildrenVoid(this)
                 }
                 override fun visitGetField(expression: IrGetField) {
-                    unsupported = true
+                    getFields += expression
                     expression.acceptChildrenVoid(this)
                 }
                 override fun visitSetValue(expression: IrSetValue) {
-                    unsupported = true
+                    markUnsupported("set value ${expression.symbol.owner.name}")
                     expression.acceptChildrenVoid(this)
                 }
                 override fun visitTypeOperator(expression: IrTypeOperatorCall) {
-                    if (expression.operator != IrTypeOperator.IMPLICIT_CAST) unsupported = true
+                    if (expression.operator != IrTypeOperator.IMPLICIT_CAST) {
+                        markUnsupported("type operator ${expression.operator}")
+                    }
                     expression.acceptChildrenVoid(this)
                 }
                 override fun visitCall(expression: IrCall) {
@@ -1157,7 +1326,7 @@ private data class LinearSROARegion(
                     if (callee.isSuspend || fqName.contains("COROUTINE_SUSPENDED") ||
                         fqName.startsWith("kotlin.native.concurrent.Worker") ||
                         fqName.contains("executeAfter") || fqName.contains("TransferMode")
-                    ) unsupported = true
+                    ) markUnsupported("boundary call $fqName")
                     calls += expression
                     expression.acceptChildrenVoid(this)
                 }
@@ -1170,59 +1339,87 @@ private data class LinearSROARegion(
         if (unsupported || constructors.singleOrNull() !== allocation ||
             calls.count { it === resume } != 1 || calls.count { it === get } != 1 ||
             calls.count { it === intercepted } != 1
-        ) return null
-
+        ) return reject(
+            "topology unsupported=$unsupported reasons=${unsupportedReasons.joinToString()} " +
+                    "constructors=${constructors.size} " +
+                    "resume=${calls.count { it === resume }} get=${calls.count { it === get }} " +
+                    "intercepted=${calls.count { it === intercepted }} calls=" +
+                    calls.joinToString { it.symbol.owner.fqNameForIrSerialization.asString() },
+        )
         val structural = calls.filter { it !== resume && it !== get && it !== intercepted }
         val producer = structural.singleOrNull { call ->
             call.symbol == context.irBuiltIns.intPlusSymbol &&
                     call.symbol.owner.isExternal && call.origin?.toString() == "PLUS" &&
                     call.dispatchReceiver?.type?.isInt() == true && call.valueArgumentsCount == 1 &&
                     call.getValueArgument(0)?.type?.isInt() == true && call.type.isInt()
-        } ?: return null
+        } ?: return reject("exact Int.plus producer unavailable; structural=" +
+                structural.joinToString { it.symbol.owner.fqNameForIrSerialization.asString() })
         val resultClass = context.ir.symbols.kotlinResult.owner
-        val exactCompanionGetter = resultClass.declarations.filterIsInstance<IrSimpleFunction>().singleOrNull {
-            it.name.asString() == "<get-\$companion>" && it.valueParameters.isEmpty() &&
-                    it.dispatchReceiverParameter == null && it.extensionReceiverParameter == null
-        } ?: return null
+        val resultValueRead = getFields.singleOrNull()
+            ?: return reject("exact Result.value read unavailable: ${getFields.size}")
+        val resultValueField = resultValueRead.symbol.owner
+        if (resultValueField.name.asString() != "value" || resultValueField.parent !== resultClass ||
+            resultValueField.konanLibrary !== context.stdlibModule.konanLibrary || resultValueField.isStatic ||
+            !resultValueField.isFinal || resultValueField.visibility != DescriptorVisibilities.PRIVATE ||
+            !resultValueField.type.binaryTypeIsReference() ||
+            resultValueField.hasAnnotation(KonanFqNames.arcWeak) ||
+            resultValueField.hasAnnotation(KonanFqNames.arcUnowned) || resultValueRead.receiver == null ||
+            resumeResult !in ancestry[resultValueRead].orEmpty()
+        ) return reject("exact Result.value extraction drifted")
         val companion = structural.singleOrNull { call ->
-            call.symbol.owner === exactCompanionGetter &&
             call.symbol.owner.name.asString() == "<get-\$companion>" &&
                     call.symbol.owner.parent === resultClass &&
                     call.dispatchReceiver == null && call.extensionReceiver == null &&
                     call.valueArgumentsCount == 0
-        } ?: return null
+        } ?: return reject("exact Result companion getter call unavailable")
+        val exactCompanionGetter = companion.symbol.owner
+        if (exactCompanionGetter.konanLibrary !== context.stdlibModule.konanLibrary ||
+            exactCompanionGetter.valueParameters.isNotEmpty() ||
+            exactCompanionGetter.dispatchReceiverParameter != null ||
+            exactCompanionGetter.extensionReceiverParameter != null || exactCompanionGetter.isExternal
+        ) return reject("exact Result companion getter declaration drifted")
         val exactBox = context.getBoxFunction(context.irBuiltIns.intClass.owner)
         val box = structural.singleOrNull { call ->
             call.symbol.owner === exactBox && call.dispatchReceiver == null &&
                     call.extensionReceiver == null && call.valueArgumentsCount == 1 &&
                     call.getValueArgument(0)?.type?.isInt() == true && call.type.binaryTypeIsReference()
-        } ?: return null
-        val exactResultConstructor = resultClass.constructors.singleOrNull { it.isPrimary } ?: return null
+        } ?: return reject("exact Int box call unavailable")
         val resultConstructor = structural.singleOrNull { call ->
-            call.symbol.owner === exactResultConstructor && call.symbol.owner.parent === resultClass &&
+            call.symbol.owner.name.asString() == "<constructor>" && call.symbol.owner.parent === resultClass &&
                     call.dispatchReceiver == null && call.extensionReceiver == null &&
                     call.valueArgumentsCount == 1 && call.type.isUnit()
-        } ?: return null
+        } ?: return reject("exact Result constructor call unavailable")
+        val exactResultConstructor = resultConstructor.symbol.owner
+        if (exactResultConstructor.konanLibrary !== context.stdlibModule.konanLibrary ||
+            exactResultConstructor.valueParameters.size != 1 || exactResultConstructor.isExternal ||
+            exactResultConstructor.dispatchReceiverParameter != null ||
+            exactResultConstructor.extensionReceiverParameter != null || !exactResultConstructor.returnType.isUnit()
+        ) return reject("exact Result primary constructor declaration drifted")
         val units = structural.filter { call ->
             call.symbol == context.ir.symbols.theUnitInstance &&
                     call.dispatchReceiver == null && call.extensionReceiver == null &&
                     call.valueArgumentsCount == 0 && call.type.isUnit()
         }
-        if (units.size != 2 || structural.size != 6) return null
+        if (units.size != 2 || structural.size != 6) {
+            return reject("structural census units=${units.size} structural=${structural.size}: " +
+                    structural.joinToString { it.symbol.owner.fqNameForIrSerialization.asString() })
+        }
         if (units.any { unit ->
                 val structuralReturn = ancestry[unit].orEmpty().lastOrNull { it is IrReturn } as? IrReturn
                 structuralReturn?.value !== unit || !structuralReturn.isTerminalLexicalReturn(get, ancestry)
             }
-        ) return null
+        ) return reject("structural Unit return topology drifted")
         if (listOf(companion, box, resultConstructor).any { call ->
                 resumeResult !in ancestry[call].orEmpty()
             }
-        ) return null
-        if (!provesExactResumeArgumentDataflow(
-                statements, resumeResult, producer, box, resultConstructor, ancestry,
-            )
-        ) return null
-        return ExactSafeContinuationStructuralCalls(producer, companion, box, resultConstructor, units)
+        ) return reject("Result construction is outside resume argument")
+        val resumeDataflow = provesExactResumeArgumentDataflow(
+                statements, resumeResult, producer, box, resultConstructor, ancestry, context,
+            ) ?: return reject("resume argument dataflow drifted")
+        return ExactSafeContinuationStructuralCalls(
+            producer, companion, box, resultConstructor, units,
+            listOf(resultValueField, resultValueRead) + resumeDataflow.identityBindings,
+        )
     }
 }
 
@@ -1251,6 +1448,8 @@ private fun IrReturn.isTerminalLexicalReturn(
  * the boxed temporary, and the same boxed value is the terminal resume argument. Containment in
  * the resume expression alone is insufficient.
  */
+private data class ExactResumeArgumentDataflow(val identityBindings: List<IrElement>)
+
 private fun provesExactResumeArgumentDataflow(
     statements: List<IrElement>,
     resumeResult: IrExpression,
@@ -1258,23 +1457,45 @@ private fun provesExactResumeArgumentDataflow(
     box: IrCall,
     resultConstructor: IrCall,
     ancestry: IdentityHashMap<IrElement, List<IrElement>>,
-): Boolean {
+    context: org.jetbrains.kotlin.backend.konan.Context,
+): ExactResumeArgumentDataflow? {
+    fun reject(stage: String): ExactResumeArgumentDataflow? {
+        context.log { "ARC synchronous SafeContinuation SROA resume dataflow rejected: $stage" }
+        return null
+    }
+    val boxArgument = box.getValueArgument(0) ?: return reject("box argument")
     val producedVariable = ancestry[producer].orEmpty().filterIsInstance<IrVariable>()
-        .lastOrNull { it.initializer === producer } ?: return false
-    val producedRead = box.getValueArgument(0) as? IrGetValue ?: return false
-    if (producedRead.symbol != producedVariable.symbol) return false
+        .lastOrNull { variable ->
+            variable.initializer === producer || variable.initializer.containsSROAIdentity(producer)
+        }
+    val producedRead = boxArgument as? IrGetValue
+    if (producedVariable != null) {
+        if (producedRead?.symbol != producedVariable.symbol) return reject("producer-to-box identity")
+    } else if (boxArgument !== producer && boxArgument !in ancestry[producer].orEmpty()) {
+        return reject(
+            "direct producer-to-box topology argument=${boxArgument.javaClass.simpleName} " +
+                    "producerAncestors=${ancestry[producer].orEmpty().joinToString { it.javaClass.simpleName }}",
+        )
+    }
 
     val boxedVariable = ancestry[box].orEmpty().filterIsInstance<IrVariable>()
-        .lastOrNull { it.initializer === box } ?: return false
-    val resultConstructorRead = resultConstructor.getValueArgument(0) as? IrGetValue ?: return false
-    if (resultConstructorRead.symbol != boxedVariable.symbol) return false
+        .lastOrNull { it.initializer === box } ?: return reject("box variable")
+    val resultConstructorRead = resultConstructor.getValueArgument(0) as? IrGetValue
+        ?: return reject("Result constructor argument")
+    if (resultConstructorRead.symbol != boxedVariable.symbol) return reject("box-to-Result identity")
 
     val resultBlock = ancestry[boxedVariable].orEmpty().filterIsInstance<IrBlock>().lastOrNull { block ->
         resumeResult in ancestry[block].orEmpty() &&
                 block.statements.size == 3 && block.statements[0] === boxedVariable &&
                 block.statements[1] === resultConstructor &&
                 (block.statements[2] as? IrGetValue)?.symbol == boxedVariable.symbol
-    } ?: return false
+    } ?: return reject(
+        "Result block; enclosingBlocks=" + ancestry[boxedVariable].orEmpty().filterIsInstance<IrBlock>()
+            .joinToString { block ->
+                "${block.origin}:${block.statements.size}[" +
+                        block.statements.joinToString { it.javaClass.simpleName } + "]"
+            },
+    )
     val terminalRead = resultBlock.statements[2] as IrGetValue
 
     val producedReads = mutableListOf<IrGetValue>()
@@ -1284,16 +1505,38 @@ private fun provesExactResumeArgumentDataflow(
             override fun visitElement(element: IrElement) = element.acceptChildrenVoid(this)
             override fun visitFunction(declaration: IrFunction) = Unit
             override fun visitGetValue(expression: IrGetValue) {
-                when (expression.symbol) {
-                    producedVariable.symbol -> producedReads += expression
-                    boxedVariable.symbol -> boxedReads += expression
+                if (producedVariable != null && expression.symbol == producedVariable.symbol) {
+                    producedReads += expression
                 }
+                if (expression.symbol == boxedVariable.symbol) boxedReads += expression
                 expression.acceptChildrenVoid(this)
             }
         })
     }
-    return producedReads.singleOrNull() === producedRead && boxedReads.size == 2 &&
-            boxedReads.any { it === resultConstructorRead } && boxedReads.any { it === terminalRead }
+    if ((producedVariable != null && producedReads.singleOrNull() !== producedRead) ||
+        (producedVariable == null && producedReads.isNotEmpty()) || boxedReads.size != 2 ||
+        boxedReads.none { it === resultConstructorRead } || boxedReads.none { it === terminalRead }
+    ) return reject("read census produced=${producedReads.size} boxed=${boxedReads.size}")
+    return ExactResumeArgumentDataflow(listOfNotNull(
+        producedVariable, producedRead, boxedVariable, resultConstructorRead, resultBlock, terminalRead,
+    ))
+}
+
+private fun IrExpression?.containsSROAIdentity(expected: IrElement): Boolean {
+    val root = this ?: return false
+    var found = false
+    root.acceptVoid(object : IrElementVisitorVoid {
+        override fun visitElement(element: IrElement) {
+            if (element === expected) {
+                found = true
+            } else if (!found) {
+                element.acceptChildrenVoid(this)
+            }
+        }
+
+        override fun visitFunction(declaration: IrFunction) = Unit
+    })
+    return found
 }
 
 private data class ExactSafeContinuationStructuralCalls(
@@ -1302,6 +1545,7 @@ private data class ExactSafeContinuationStructuralCalls(
     val resultBoxIntrinsic: IrCall,
     val resultConstructor: IrCall,
     val unitInstances: List<IrCall>,
+    val resumeDataflowBindings: List<IrElement>,
 )
 
 private fun proveLinearRegion(

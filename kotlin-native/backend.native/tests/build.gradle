@@ -3415,10 +3415,18 @@ standaloneTest("arc_coroutine_locked_read_spill") {
     source = "codegen/arc/coroutineLockedReadSpill.kt"
 }
 
-standaloneTest("arc_safe_continuation_get_or_throw") {
-    enabled = project.target.name == "linux_x64" && isArcMM
-    flags = ["-opt"]
-    useGoldenData = true
+tasks.register("arc_safe_continuation_get_or_throw", KonanDriverTest) {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    flags = ["-opt", "-Xverbose-phases=ArcOwnershipAnalysis"]
+    compilerMessages = true
+    outputChecker = { output ->
+        output.contains("ARC synchronous SafeContinuation SROA production selections: 1; emitted=false") &&
+                output.count("ARC synchronous SafeContinuation SROA selected production site: immediate/safe; emitted=false") == 1 &&
+                !output.contains("selected production site: failing/") &&
+                !output.contains("selected production site: delayed/") &&
+                !output.contains("selected production site: raced/") &&
+                output.contains("OK\n")
+    }
     source = "codegen/arc/safeContinuationGetOrThrow.kt"
 }
 
@@ -3475,6 +3483,19 @@ standaloneTest("arc_coroutine_suspended_scoped_borrow") {
     flags = ["-opt", "-Xverbose-phases=ArcOwnershipAnalysis"]
     outputChecker = { it.contains("ARC_COROUTINE_SUSPENDED_SCOPED_BORROW_OK checksum=42\n") }
     source = "codegen/arc/coroutineSuspendedScopedBorrow.kt"
+}
+
+tasks.register("arc_coroutine_completion_result_proof", KonanDriverTest) {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    flags = ["-opt", "-Xverbose-phases=ArcOwnershipAnalysis"]
+    compilerMessages = true
+    outputChecker = { output ->
+        output.contains("ARC coroutine completion/result production selections: 1; emitted=false") &&
+                output.count("ARC coroutine completion/result selected production function: " +
+                        "kotlin.coroutines.native.internal.BaseContinuationImpl.resumeWith; emitted=false") == 1 &&
+                output.contains("ARC_COROUTINE_COMPLETION_RESULT_PROOF_OK result=41\n")
+    }
+    source = "codegen/arc/coroutineCompletionResultProof.kt"
 }
 
 standaloneTest("arc_immortal_completion_context_propagation") {

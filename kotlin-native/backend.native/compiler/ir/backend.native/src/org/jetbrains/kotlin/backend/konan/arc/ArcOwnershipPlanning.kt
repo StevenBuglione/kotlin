@@ -898,6 +898,34 @@ internal fun runArcOwnershipPlanning(
 ): ArcOwnershipPlanningReport {
     if (generationState.context.memoryModel != MemoryModel.ARC) return ArcOwnershipPlanningReport.Disabled
 
+    // Keep the proof-only SafeContinuation scalar-replacement selector on the production IR path.
+    // This authenticates the real lowered stdlib shape and continuously exposes its exact match
+    // count without authorizing code generation or taking performance credit for logical sites.
+    val safeContinuationSROASelections =
+        selectVerifiedSynchronousSafeContinuationSROA(generationState, input.module)
+    check(safeContinuationSROASelections.flatMap { it.sites }.all { site ->
+        !site.semantic.reduction.emitted && site.semantic.reduction.measuredPhysical == null
+    }) {
+        "proof-only SafeContinuation SROA selection attempted to authorize physical emission"
+    }
+    generationState.context.log {
+        "ARC synchronous SafeContinuation SROA production selections: " +
+                safeContinuationSROASelections.sumOf { it.sites.size } + "; emitted=false"
+    }
+
+    // Exercise the exact lowered BaseContinuationImpl.resumeWith completion/result proof on the
+    // production IR path.  This count is deliberately diagnostic-only until the physical move
+    // ledger has a code-generator consumer.
+    val coroutineCompletionResultSelections =
+        selectVerifiedCoroutineCompletionResultWebs(generationState, input.module)
+    check(coroutineCompletionResultSelections.all { !it.emissionAuthorized }) {
+        "proof-only coroutine completion/result selection attempted to authorize physical emission"
+    }
+    generationState.context.log {
+        "ARC coroutine completion/result production selections: " +
+                coroutineCompletionResultSelections.size + "; emitted=false"
+    }
+
     val plans = mutableListOf<ArcFunctionPlan>()
     var classifications = ArcOwnershipClassificationCounts()
     var optimization = ArcOwnershipOptimizationMetrics()

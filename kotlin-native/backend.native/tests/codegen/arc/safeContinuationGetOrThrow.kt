@@ -14,7 +14,7 @@ import kotlin.native.concurrent.Worker
 private class ExpectedFailure : Exception()
 
 private suspend fun immediate(value: Int): Int =
-    suspendCoroutine { continuation -> continuation.resume(value) }
+    suspendCoroutine { continuation -> continuation.resume(value + 1) }
 
 private suspend fun failing(): Int =
     suspendCoroutine { continuation ->
@@ -144,7 +144,7 @@ private fun raceResultStress(): Long {
 // STRICT: ret %struct.ObjHeader*
 
 fun main() {
-    check(immediateResult(41) == 41)
+    check(immediateResult(41) == 42)
     check(delayedResult(42) == 42)
     check(failureResult() is ExpectedFailure)
     check(raceResultStress() == 1_999_000L)

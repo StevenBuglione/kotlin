@@ -140,6 +140,7 @@ class ArcSafeContinuationSROAIRSelectorTest {
             bindings.copy(resultBoxIntrinsic = bindings.allocation),
             bindings.copy(resultConstructor = bindings.allocation),
             bindings.copy(structuralUnitCalls = listOf(bindings.allocation, Any())),
+            bindings.copy(resumeDataflowBindings = listOf(bindings.allocation)),
             bindings.copy(getOrThrow = bindings.allocation),
             bindings.copy(getOrThrowCall = bindings.allocation),
             bindings.copy(getOrThrowReceiver = bindings.allocation),
@@ -179,7 +180,7 @@ class ArcSafeContinuationSROAIRSelectorTest {
         resultRefField = Any(), resumeWith = Any(), resumeCall = Any(), resumeReceiver = Any(),
         resumeResultArgument = Any(), resumeResultParameter = Any(), resumeValueProducer = Any(),
         resultCompanionGetter = Any(), resultBoxIntrinsic = Any(), resultConstructor = Any(),
-        structuralUnitCalls = listOf(Any(), Any()), getOrThrow = Any(),
+        structuralUnitCalls = listOf(Any(), Any()), resumeDataflowBindings = List(8) { Any() }, getOrThrow = Any(),
         getOrThrowCall = Any(), getOrThrowReceiver = Any(),
         contractBindings = List(16) { Any() },
     )
