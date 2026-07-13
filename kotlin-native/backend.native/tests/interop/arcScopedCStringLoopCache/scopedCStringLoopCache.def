@@ -1,0 +1,11 @@
+package = arc.scopedcstring
+noCallbackFunctions = arc_scoped_cstring_length
+
+---
+
+#include <stddef.h>
+#include <string.h>
+
+static __attribute__((noinline)) size_t arc_scoped_cstring_length(const char *value) {
+    return strlen(value);
+}

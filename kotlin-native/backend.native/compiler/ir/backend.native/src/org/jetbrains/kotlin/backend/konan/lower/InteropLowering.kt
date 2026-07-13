@@ -12,6 +12,7 @@ import org.jetbrains.kotlin.backend.common.peek
 import org.jetbrains.kotlin.backend.common.pop
 import org.jetbrains.kotlin.backend.common.push
 import org.jetbrains.kotlin.backend.konan.*
+import org.jetbrains.kotlin.backend.konan.arc.ArcScopedCStringLoopCacheIRSelector
 import org.jetbrains.kotlin.backend.konan.cgen.*
 import org.jetbrains.kotlin.backend.konan.descriptors.allOverriddenFunctions
 import org.jetbrains.kotlin.backend.konan.descriptors.synthesizedName
@@ -34,6 +35,7 @@ import org.jetbrains.kotlin.ir.expressions.impl.IrConstImpl
 import org.jetbrains.kotlin.ir.expressions.impl.IrDelegatingConstructorCallImpl
 import org.jetbrains.kotlin.ir.expressions.impl.IrFunctionReferenceImpl
 import org.jetbrains.kotlin.ir.expressions.impl.IrReturnImpl
+import org.jetbrains.kotlin.ir.expressions.impl.IrTryImpl
 import org.jetbrains.kotlin.ir.interpreter.toIrConst
 import org.jetbrains.kotlin.ir.symbols.IrClassSymbol
 import org.jetbrains.kotlin.ir.symbols.IrFunctionSymbol
@@ -47,11 +49,13 @@ import org.jetbrains.kotlin.ir.visitors.acceptChildrenVoid
 import org.jetbrains.kotlin.ir.visitors.acceptVoid
 import org.jetbrains.kotlin.ir.visitors.transformChildrenVoid
 import org.jetbrains.kotlin.konan.ForeignExceptionMode
+import org.jetbrains.kotlin.konan.target.KonanTarget
 import org.jetbrains.kotlin.konan.library.KonanLibrary
 import org.jetbrains.kotlin.name.FqName
 import org.jetbrains.kotlin.name.Name
 import org.jetbrains.kotlin.resolve.descriptorUtil.fqNameUnsafe
 import org.jetbrains.kotlin.resolve.descriptorUtil.module
+import java.util.IdentityHashMap
 
 internal class InteropLowering(generationState: NativeGenerationState) : FileLoweringPass {
     // TODO: merge these lowerings.
@@ -798,6 +802,14 @@ private class InteropTransformer(
 
     val symbols = context.ir.symbols
 
+    private data class ActiveScopedCStringLoopCache(
+            val bridges: ScopedCStringLoopCacheBridges,
+            val cacheVariable: IrVariable
+    )
+
+    private val scopedCStringLoopCaches =
+            IdentityHashMap<IrCall, ActiveScopedCStringLoopCache>()
+
     override fun addTopLevel(declaration: IrDeclaration) {
         declaration.parent = irFile
         newTopLevelDeclarations += declaration
@@ -828,6 +840,71 @@ private class InteropTransformer(
             declaration.addChildren(imps)
         }
         return declaration
+    }
+
+    private fun scopedCStringLoopCacheModeIsEnabled(function: IrFunction): Boolean {
+        val config = context.config
+        return config.memoryModel == MemoryModel.ARC &&
+                config.target == KonanTarget.LINUX_X64 &&
+                config.isFinalBinary &&
+                config.optimizationsEnabled &&
+                !context.shouldContainDebugInfo() &&
+                !config.arcDiagnosticsEnabled &&
+                config.sanitizer == null &&
+                !config.undefinedBehaviorSanitizer &&
+                !generationState.coverage.enabled &&
+                !function.isSuspend && !function.isExternal && function.konanLibrary == null
+    }
+
+    override fun visitLoop(loop: IrLoop): IrExpression {
+        val function = builder.scope.scopeOwnerSymbol.owner as? IrFunction
+        if (function == null || !scopedCStringLoopCacheModeIsEnabled(function)) {
+            return super.visitLoop(loop)
+        }
+        val selection = ArcScopedCStringLoopCacheIRSelector.select(
+                function, loop, symbols.string, context.config.isInteropStubs
+        ) ?: return super.visitLoop(loop)
+
+        builder.at(loop)
+        val bridges = generateWithStubs(selection.foreignCall) {
+            generateScopedCStringLoopCacheBridges(builder)
+        }
+        return builder.irBlock(loop) {
+            // InitializeEmptyCache.
+            val cache = irTemporary(
+                    irCall(bridges.create),
+                    nameHint = "arcScopedCStringLoopCache"
+            )
+            val active = ActiveScopedCStringLoopCache(bridges, cache)
+            check(scopedCStringLoopCaches.put(selection.foreignCall, active) == null)
+            try {
+                // TransactionalRefreshOnIdentityChange and UseCachedPointerForForeignCall
+                // are emitted by the exact selected call's C bridge.
+                loop.transformChildrenVoid(this@InteropTransformer)
+            } finally {
+                check(scopedCStringLoopCaches.remove(selection.foreignCall) === active)
+            }
+
+            fun IrBuilderWithScope.disposeCache(): IrExpression = irCall(bridges.dispose).apply {
+                putValueArgument(0, irGet(cache))
+            }
+
+            // Finally lowering has already run. Spell the cleanup frontier as catch+normal cleanup
+            // so both native/Kotlin exceptional exits and the natural loop exit destroy the cache.
+            val guardedLoop = IrTryImpl(startOffset, endOffset, loop.type).apply {
+                tryResult = loop
+                catches += irCatch(context.irBuiltIns.throwableType).apply {
+                    result = irBlock(loop) {
+                        +disposeCache()
+                        +irThrow(irGet(catchParameter))
+                    }
+                }
+            }
+            val result = irTemporary(guardedLoop, nameHint = "arcScopedCStringLoopResult")
+            // DestroyCacheOnNormalAndExceptionalExit.
+            +disposeCache()
+            +irGet(result)
+        }
     }
 
     private fun generateCFunctionPointer(function: IrSimpleFunction, expression: IrExpression): IrExpression =
@@ -1026,14 +1103,23 @@ private class InteropTransformer(
         return initializer.shallowCopy()
     }
 
-    private fun generateCCall(expression: IrCall): IrExpression {
+    private fun generateCCall(
+            expression: IrCall,
+            scopedCStringLoopCache: ActiveScopedCStringLoopCache? = null
+    ): IrExpression {
         val function = expression.symbol.owner
 
         generationState.dependenciesTracker.add(function)
         val exceptionMode = ForeignExceptionMode.byValue(
                 function.konanLibrary?.manifestProperties?.getProperty(ForeignExceptionMode.manifestKey)
         )
-        return generateWithStubs(expression) { generateCCall(expression, builder, isInvoke = false, exceptionMode) }
+        val cacheCall = scopedCStringLoopCache?.let {
+            ScopedCStringLoopCacheCall(it.bridges, builder.irGet(it.cacheVariable))
+        }
+        return generateWithStubs(expression) {
+            generateCCall(expression, builder, isInvoke = false, exceptionMode,
+                    scopedCStringLoopCache = cacheCall)
+        }
     }
 
     override fun visitCall(expression: IrCall): IrExpression {
@@ -1077,7 +1163,7 @@ private class InteropTransformer(
         }
 
         if (function.annotations.hasAnnotation(RuntimeNames.cCall)) {
-            return generateCCall(expression)
+            return generateCCall(expression, scopedCStringLoopCaches[expression])
         }
 
         // TODO: what's the proper condition?

@@ -4437,6 +4437,10 @@ createInterop("cstdio") {
     it.defFile 'interop/basics/cstdio.def'
 }
 
+createInterop("arcScopedCStringLoopCache") {
+    it.defFile 'interop/arcScopedCStringLoopCache/scopedCStringLoopCache.def'
+}
+
 createInterop("sockets") {
     it.defFile 'interop/basics/sockets.def'
 }
@@ -4851,6 +4855,14 @@ interopTest("interop_available_processors") {
     source = 'interop/basics/available_processors.kt'
     arguments = [Runtime.getRuntime().availableProcessors().toString()]
     interop = 'cstdlib'
+}
+
+interopTest("interop_arc_scoped_cstring_loop_cache") {
+    disabled = project.target.name != 'linux_x64' || !isArcMM || cacheTesting != null
+    source = 'interop/arcScopedCStringLoopCache/main.kt'
+    interop = 'arcScopedCStringLoopCache'
+    flags = ['-opt']
+    outputChecker = { it.contains('ARC_SCOPED_CSTRING_LOOP_CACHE_OK') }
 }
 
 interopTest("interop0") {

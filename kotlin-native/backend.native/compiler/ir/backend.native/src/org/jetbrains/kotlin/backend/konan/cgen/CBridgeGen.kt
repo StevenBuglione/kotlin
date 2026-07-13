@@ -64,7 +64,8 @@ private class KotlinToCCallBuilder(
         val stubs: KotlinStubs,
         val isObjCMethod: Boolean,
         foreignExceptionMode: ForeignExceptionMode.Mode,
-        val noCallback: Boolean = false
+        val noCallback: Boolean = false,
+        private val scopedCStringLoopCache: ScopedCStringLoopCacheCall? = null
 ) {
 
     val cBridgeName = stubs.getUniqueCName("knbridge")
@@ -80,6 +81,9 @@ private class KotlinToCCallBuilder(
     val cCallBuilder = CCallBuilder()
     val cFunctionBuilder = CFunctionBuilder()
     private val scopedCStringArguments = mutableListOf<Pair<String, String>>()
+    private var loopCachedCStringArgument: Triple<String, String, String>? = null
+
+    fun hasScopedCStringLoopCache(): Boolean = scopedCStringLoopCache != null
 
     fun passScopedCString(expression: IrExpression, kotlinType: IrType): CExpression {
         val bridgeValue = passThroughBridge(expression, kotlinType, CTypes.voidPtr)
@@ -88,7 +92,41 @@ private class KotlinToCCallBuilder(
         return CExpression(cStringName, CTypes.pointer(CTypes.char))
     }
 
+    fun passLoopCachedCString(expression: IrExpression, kotlinType: IrType): CExpression {
+        check(loopCachedCStringArgument == null) { "only one scoped CString loop-cache argument is supported" }
+        val cache = scopedCStringLoopCache ?: error("missing scoped CString loop cache")
+        val cacheValue = passThroughBridge(cache.cacheHandle, symbols.nativePtrType, CTypes.voidPtr)
+        val bridgeValue = passThroughBridge(expression, kotlinType, CTypes.voidPtr)
+        val cStringName = "loopCachedCString"
+        loopCachedCStringArgument = Triple(cacheValue.name, bridgeValue.name, cStringName)
+        return CExpression(cStringName, CTypes.pointer(CTypes.char))
+    }
+
     fun wrapScopedCStringCall(expression: String, returnType: CType): String {
+        loopCachedCStringArgument?.let { (cacheValue, bridgeValue, cStringName) ->
+            val cache = scopedCStringLoopCache ?: error("missing scoped CString loop cache")
+            return buildString {
+                append("({ ${cache.cTypeName} *loopCache = (${cache.cTypeName}*)$cacheValue; ")
+                append("if (loopCache->sourceIdentity != $bridgeValue) { ")
+                append("char *nextCString = CreateCStringFromStringWithReplacement($bridgeValue); ")
+                append("void *nextStable = CreateStablePointer($bridgeValue); ")
+                append("if (loopCache->cstring != 0) DisposeCString(loopCache->cstring); ")
+                append("if (loopCache->sourceStable != 0) DisposeStablePointer(loopCache->sourceStable); ")
+                append("loopCache->sourceIdentity = $bridgeValue; loopCache->sourceStable = nextStable; ")
+                append("loopCache->cstring = nextCString; } ")
+                append("char *$cStringName = loopCache->cstring; ")
+                if (returnType === CTypes.void) {
+                    append(expression)
+                    append("; ")
+                } else {
+                    append(returnType.render("scopedCStringResult"))
+                    append(" = ")
+                    append(expression)
+                    append("; scopedCStringResult; ")
+                }
+                append("})")
+            }
+        }
         if (scopedCStringArguments.isEmpty()) return expression
         val cleanupFunction = "${cBridgeName}_disposeScopedCString"
         return buildString {
@@ -111,6 +149,14 @@ private class KotlinToCCallBuilder(
     }
 
     fun scopedCStringSupportLines(): List<String> {
+        if (loopCachedCStringArgument != null) {
+            return listOf(
+                    "extern char* CreateCStringFromStringWithReplacement(const void*);",
+                    "extern void DisposeCString(char*);",
+                    "extern void* CreateStablePointer(void*);",
+                    "extern void DisposeStablePointer(void*);"
+            )
+        }
         if (scopedCStringArguments.isEmpty()) return emptyList()
         val cleanupFunction = "${cBridgeName}_disposeScopedCString"
         return listOf(
@@ -120,6 +166,68 @@ private class KotlinToCCallBuilder(
         )
     }
 
+}
+
+internal data class ScopedCStringLoopCacheBridges(
+        val create: IrSimpleFunction,
+        val dispose: IrSimpleFunction,
+        internal val cTypeName: String
+)
+
+internal data class ScopedCStringLoopCacheCall(
+        val bridges: ScopedCStringLoopCacheBridges,
+        val cacheHandle: IrExpression
+) {
+    internal val cTypeName: String get() = bridges.cTypeName
+}
+
+internal fun KotlinStubs.generateScopedCStringLoopCacheBridges(
+        builder: IrBuilderWithScope
+): ScopedCStringLoopCacheBridges {
+    val cTypeName = getUniqueCName("arcScopedCStringLoopCache")
+    val createName = getUniqueCName("arcScopedCStringLoopCacheCreate")
+    val disposeName = getUniqueCName("arcScopedCStringLoopCacheDispose")
+
+    val createBuilder = KotlinCBridgeBuilder(
+            builder.startOffset, builder.endOffset, createName, this,
+            isKotlinToC = true, noCallback = true
+    )
+    createBuilder.setReturnType(symbols.nativePtrType, CTypes.voidPtr)
+    val create = createBuilder.buildKotlinBridge() as IrSimpleFunction
+
+    val disposeBuilder = KotlinCBridgeBuilder(
+            builder.startOffset, builder.endOffset, disposeName, this,
+            isKotlinToC = true, noCallback = true
+    )
+    val disposeParameter = disposeBuilder.addParameter(symbols.nativePtrType, CTypes.voidPtr).second
+    disposeBuilder.setReturnType(irBuiltIns.unitType, CTypes.void)
+    val dispose = disposeBuilder.buildKotlinBridge() as IrSimpleFunction
+
+    addKotlin(create)
+    addKotlin(dispose)
+    addC(listOf(
+            "#include <stdlib.h>",
+            "typedef struct $cTypeName {",
+            "  const void *sourceIdentity;",
+            "  void *sourceStable;",
+            "  char *cstring;",
+            "} $cTypeName;",
+            "extern void DisposeCString(char*);",
+            "extern void DisposeStablePointer(void*);",
+            "${createBuilder.buildCSignature(createName)} {",
+            "  void *cache = calloc(1, sizeof($cTypeName));",
+            "  if (cache == 0) abort();",
+            "  return cache;",
+            "}",
+            "${disposeBuilder.buildCSignature(disposeName)} {",
+            "  $cTypeName *cache = ($cTypeName*)${disposeParameter.name};",
+            "  if (cache == 0) return;",
+            "  if (cache->cstring != 0) DisposeCString(cache->cstring);",
+            "  if (cache->sourceStable != 0) DisposeStablePointer(cache->sourceStable);",
+            "  free(cache);",
+            "}"
+    ))
+    return ScopedCStringLoopCacheBridges(create, dispose, cTypeName)
 }
 
 private fun KotlinToCCallBuilder.passThroughBridge(argument: IrExpression, kotlinType: IrType, cType: CType): CVariable {
@@ -158,7 +266,8 @@ private fun KotlinToCCallBuilder.buildKotlinBridgeCall(transformCall: (IrMemberA
 private fun IrType.isCppClass(): Boolean= this.classOrNull?.owner?.hasAnnotation(RuntimeNames.cppClass) ?: false
 
 internal fun KotlinStubs.generateCCall(expression: IrCall, builder: IrBuilderWithScope, isInvoke: Boolean,
-                                       foreignExceptionMode: ForeignExceptionMode.Mode = ForeignExceptionMode.default): IrExpression {
+                                       foreignExceptionMode: ForeignExceptionMode.Mode = ForeignExceptionMode.default,
+                                       scopedCStringLoopCache: ScopedCStringLoopCacheCall? = null): IrExpression {
     val callee = expression.symbol.owner
     val callBuilder = KotlinToCCallBuilder(
             builder,
@@ -166,7 +275,8 @@ internal fun KotlinStubs.generateCCall(expression: IrCall, builder: IrBuilderWit
             isObjCMethod = false,
             foreignExceptionMode,
             noCallback = !isInvoke &&
-                    callee.isAuthenticatedNoCallbackCFunction(isInteropStubsCompilation)
+                    callee.isAuthenticatedNoCallbackCFunction(isInteropStubsCompilation),
+            scopedCStringLoopCache = scopedCStringLoopCache
     )
 
     // TODO: consider computing all arguments before converting.
@@ -1398,6 +1508,10 @@ private class CStringArgumentPassing(
             expression.asStaticAsciiCString()?.let {
                 return CExpression(it, CTypes.pointer(CTypes.char))
             }
+        }
+
+        if (allowScopedCString && hasScopedCStringLoopCache()) {
+            return passLoopCachedCString(expression, kotlinType)
         }
 
         if (allowScopedCString) {
