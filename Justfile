@@ -67,9 +67,7 @@ remote-arc-sanitize-tsan: remote-snapshot
     {{python}} tools/arc/arc.py run arc-sanitize-tsan
 
 remote-arc-bench wave: remote-snapshot
-    {{python}} tools/arc/arc.py run arc-bench-candidate
-    {{python}} tools/arc/arc.py run arc-bench-baseline
-    status=0; {{python}} tools/arc/arc.py run arc-bench || status=$?; {{python}} tools/arc/arc.py benchmark-bundle {{wave}}; exit "$status"
+    {{python}} tools/arc/arc.py benchmark-wave {{wave}}
 
 remote-status profile:
     {{python}} tools/arc/arc.py status {{profile}}
@@ -127,9 +125,7 @@ ci2-bench-snapshot: ci2-bench-init
     {{python}} tools/arc/arc.py --machine ci2-bench remote-snapshot
 
 ci2-arc-bench wave: ci2-bench-snapshot
-    {{python}} tools/arc/arc.py --machine ci2-bench run arc-bench-candidate
-    {{python}} tools/arc/arc.py --machine ci2-bench run arc-bench-baseline
-    status=0; {{python}} tools/arc/arc.py --machine ci2-bench run arc-bench || status=$?; {{python}} tools/arc/arc.py --machine ci2-bench benchmark-bundle {{wave}}; exit "$status"
+    {{python}} tools/arc/arc.py --machine ci2-bench benchmark-wave {{wave}}
 
 # Fast development oracle: cached distributions, one compile, three pinned runs, no warmup,
 # and no release-gate failure. One remote profile holds the host lock for the complete run.
@@ -156,14 +152,14 @@ primary-arc-bench-shard shard count scenarios:
     {{python}} tools/arc/arc.py --machine primary-bench remote-snapshot --paths Justfile tools/arc/arc.py tools/arc/benchmark_baseline.sh tools/arc/benchmark_candidate.sh tools/arc/benchmark_cache.py tools/arc/benchmark_compare.sh tools/arc/benchmark_plan.py tools/arc/benchmark_report.py tools/arc/benchmark_shards.py tools/arc/fixtures/benchmark.kt tools/arc/fixtures/benchmark_cinterop.def tools/arc/fixtures/benchmark_cinterop.h tools/arc/test_arc.py
     {{python}} tools/arc/arc.py --machine primary-bench run arc-bench-candidate --shard-id "{{shard}}" --shard-count {{count}} --scenarios "{{scenarios}}"
     {{python}} tools/arc/arc.py --machine primary-bench run arc-bench-baseline --shard-id "{{shard}}" --shard-count {{count}} --scenarios "{{scenarios}}"
-    status=0; {{python}} tools/arc/arc.py --machine primary-bench run arc-bench --shard-id "{{shard}}" --shard-count {{count}} --scenarios "{{scenarios}}" || status=$?; exit "$status"
+    {{python}} tools/arc/arc.py --machine primary-bench run arc-bench --shard-id "{{shard}}" --shard-count {{count}} --scenarios "{{scenarios}}"
 
 ci2-arc-bench-shard shard count scenarios:
     {{python}} tools/arc/arc.py --machine ci2-cstring remote-init
     {{python}} tools/arc/arc.py --machine ci2-cstring remote-snapshot --paths Justfile tools/arc/arc.py tools/arc/benchmark_baseline.sh tools/arc/benchmark_candidate.sh tools/arc/benchmark_cache.py tools/arc/benchmark_compare.sh tools/arc/benchmark_plan.py tools/arc/benchmark_report.py tools/arc/benchmark_shards.py tools/arc/fixtures/benchmark.kt tools/arc/fixtures/benchmark_cinterop.def tools/arc/fixtures/benchmark_cinterop.h tools/arc/test_arc.py
     {{python}} tools/arc/arc.py --machine ci2-cstring run arc-bench-candidate --shard-id "{{shard}}" --shard-count {{count}} --scenarios "{{scenarios}}"
     {{python}} tools/arc/arc.py --machine ci2-cstring run arc-bench-baseline --shard-id "{{shard}}" --shard-count {{count}} --scenarios "{{scenarios}}"
-    status=0; {{python}} tools/arc/arc.py --machine ci2-cstring run arc-bench --shard-id "{{shard}}" --shard-count {{count}} --scenarios "{{scenarios}}" || status=$?; exit "$status"
+    {{python}} tools/arc/arc.py --machine ci2-cstring run arc-bench --shard-id "{{shard}}" --shard-count {{count}} --scenarios "{{scenarios}}"
 
 # Backward-compatible explicit assignment for hardware-specific investigations.
 parallel-arc-bench wave primary_scenarios secondary_scenarios:

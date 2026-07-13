@@ -164,7 +164,18 @@ internal class ArcCoroutineEmptyContextReturnConsumptionLedger<T : Any>(
     private var consumed = false
 
     fun consume(getterBinding: T, objectBinding: T, returnBinding: T) {
-        consumeExact(listOf(getterBinding, objectBinding, returnBinding))
+        check(!consumed) { "EmptyCoroutineContext immortal return consumed twice" }
+        val candidate = selection.candidate
+        check(getterBinding === candidate.getterBinding) {
+            "EmptyCoroutineContext getter identity drifted"
+        }
+        check(objectBinding === candidate.objectBinding) {
+            "EmptyCoroutineContext object identity drifted"
+        }
+        check(returnBinding === candidate.returnBinding) {
+            "EmptyCoroutineContext return identity drifted"
+        }
+        consumed = true
     }
 
     fun consumeExact(identityBindings: List<T>) {

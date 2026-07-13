@@ -7,7 +7,7 @@ from contextlib import redirect_stderr, redirect_stdout
 import io
 import json
 import unittest
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -488,7 +488,7 @@ class ArcProfileTest(unittest.TestCase):
         recipe = justfile.split("ci2-arc-bench wave: ci2-bench-snapshot", 1)[1].split(
             "ci2-arc-bench-quick scenarios:", 1
         )[0]
-        self.assertEqual(4, recipe.count("--machine ci2-bench"))
+        self.assertEqual(1, recipe.count("--machine ci2-bench"))
         self.assertNotIn("--machine ci2 ", recipe)
 
     def test_quick_benchmark_preset_is_explicit_and_non_evidence_producing(self):
@@ -1650,15 +1650,37 @@ class ArcProfileTest(unittest.TestCase):
     def test_benchmark_recipe_exports_commit_ready_wave_even_on_gate_failure(self):
         justfile = (Path(__file__).parents[2] / "Justfile").read_text()
         self.assertIn("remote-arc-bench wave: remote-snapshot", justfile)
-        self.assertIn("run arc-bench-candidate", justfile)
-        self.assertIn("run arc-bench-baseline", justfile)
-        self.assertIn("benchmark-bundle {{wave}}", justfile)
+        self.assertIn("benchmark-wave {{wave}}", justfile)
+        self.assertNotIn("status=0;", justfile)
+        harness = (Path(__file__).parent / "arc.py").read_text()
+        self.assertIn('remote_run("arc-bench-candidate")', harness)
+        self.assertIn('remote_run("arc-bench-baseline")', harness)
+        self.assertIn('remote_run("arc-bench")', harness)
+        self.assertIn("benchmark_bundle(wave)", harness)
         script = (Path(__file__).parent / "benchmark_compare.sh").read_text()
         for artifact in (
             "inputs.json", "hardware.json", "raw.tsv", "raw.json", "compile-raw.tsv",
             "comparison.md", "gate.json", "schedule.json", "correctness.json",
         ):
             self.assertIn(artifact, script)
+            self.assertIn(artifact, harness)
+
+    def test_benchmark_wave_bundles_before_propagating_a_gate_failure(self):
+        with patch.object(arc, "remote_run", side_effect=[None, None, SystemExit(7)]) as remote_run, \
+                patch.object(arc, "benchmark_bundle") as bundle:
+            with self.assertRaises(SystemExit) as failure:
+                arc.benchmark_wave("wave-7")
+
+        self.assertEqual(7, failure.exception.code)
+        self.assertEqual(
+            [
+                call("arc-bench-candidate"),
+                call("arc-bench-baseline"),
+                call("arc-bench"),
+            ],
+            remote_run.call_args_list,
+        )
+        bundle.assert_called_once_with("wave-7")
 
     def test_benchmark_shard_snapshots_include_every_runtime_dependency(self):
         justfile = (Path(__file__).parents[2] / "Justfile").read_text()

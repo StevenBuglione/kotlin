@@ -202,7 +202,7 @@ class ArcCoroutineGuaranteedPhiWebTest {
     }
 
     @Test
-    fun lateBackedgeChangingFrozenPhiCoverageIsRejected() {
+    fun lateBackedgeChangingFrozenPhiCoverageFailsIdentityAuthentication() {
         val fixture = baseContinuationFixture()
         val current = fixture.candidates.single { it.join.name == fixture.currentJoin.name }
         val extra = ArcBlockId("extraBackedge")
@@ -213,7 +213,7 @@ class ArcCoroutineGuaranteedPhiWebTest {
         val result = ArcCoroutineGuaranteedPhiWebAnalysis.analyze(listOf(current.copy(cfg = malformed)))
 
         assertTrue(result.accepted.isEmpty())
-        assertEquals(ArcCoroutineGuaranteedPhiRejectionReason.InvalidPeerControlJoinProof, result.rejected.single().reason)
+        assertEquals(ArcCoroutineGuaranteedPhiRejectionReason.UnresolvedRCIdentity, result.rejected.single().reason)
     }
 
     private data class Fixture(

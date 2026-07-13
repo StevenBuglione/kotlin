@@ -595,7 +595,7 @@ def benchmark_bundle(wave: str) -> None:
     required = {
         "inputs.json", "hardware.json", "candidate-provenance.json", "baseline-provenance.json",
         "raw.tsv", "raw.json", "compile-raw.tsv", "static.tsv", "summary.tsv", "summary.json", "comparison.md",
-        "shard.json",
+        "correctness.json", "gate.json", "schedule.json", "shard.json",
     }
     with tempfile.TemporaryDirectory(prefix="arc-benchmark-bundle-") as temporary:
         temporary_path = Path(temporary)
@@ -622,6 +622,20 @@ def benchmark_bundle(wave: str) -> None:
     print(f"Benchmark wave bundle: {destination}")
 
 
+def benchmark_wave(wave: str) -> None:
+    """Run one evidence benchmark and always bundle a completed comparison, even on a gate failure."""
+    remote_run("arc-bench-candidate")
+    remote_run("arc-bench-baseline")
+    comparison_status = 0
+    try:
+        remote_run("arc-bench")
+    except SystemExit as error:
+        comparison_status = int(error.code or 1)
+    benchmark_bundle(wave)
+    if comparison_status:
+        raise SystemExit(comparison_status)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -637,6 +651,8 @@ def main() -> None:
     snapshot_parser.add_argument("--paths", nargs="+", help="snapshot only HEAD plus these lane-owned paths")
     bundle_parser = subparsers.add_parser("benchmark-bundle")
     bundle_parser.add_argument("wave")
+    wave_parser = subparsers.add_parser("benchmark-wave")
+    wave_parser.add_argument("wave")
     run_parser = subparsers.add_parser("run")
     run_parser.add_argument("profile", choices=PROFILES)
     run_parser.add_argument("--quick", action="store_true", help="use the non-enforcing development benchmark preset")
@@ -662,6 +678,8 @@ def main() -> None:
         remote_snapshot(arguments.paths)
     elif arguments.command == "benchmark-bundle":
         benchmark_bundle(arguments.wave)
+    elif arguments.command == "benchmark-wave":
+        benchmark_wave(arguments.wave)
     elif arguments.command == "status":
         remote_status(arguments.profile)
     elif arguments.command == "log":
