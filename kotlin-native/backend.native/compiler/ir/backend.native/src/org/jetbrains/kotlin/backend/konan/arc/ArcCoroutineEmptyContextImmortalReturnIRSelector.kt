@@ -21,7 +21,6 @@ import org.jetbrains.kotlin.ir.declarations.IrModuleFragment
 import org.jetbrains.kotlin.ir.declarations.IrProperty
 import org.jetbrains.kotlin.ir.declarations.IrSimpleFunction
 import org.jetbrains.kotlin.ir.expressions.IrBlockBody
-import org.jetbrains.kotlin.ir.expressions.IrCall
 import org.jetbrains.kotlin.ir.expressions.IrConstantObject
 import org.jetbrains.kotlin.ir.expressions.IrGetField
 import org.jetbrains.kotlin.ir.expressions.IrReturn
@@ -41,8 +40,13 @@ import java.util.IdentityHashMap
 internal data class ArcCoroutineEmptyContextReturnIRBindings<T : Any>(
     val function: T,
     val restrictedContinuationClass: T,
+    val baseContinuationClass: T,
     val continuationClass: T,
+    val restrictedContextProperty: T,
+    val baseContextGetter: T,
+    val baseContextProperty: T,
     val continuationContextGetter: T,
+    val continuationContextProperty: T,
     val returned: T,
     val objectGetterCall: T,
     val emptyContextClass: T,
@@ -55,10 +59,33 @@ internal data class ArcCoroutineEmptyContextReturnIRBindings<T : Any>(
     val constantConstructor: T,
 )
 
+internal fun <T : Any> ArcCoroutineEmptyContextReturnIRBindings<T>.exactIdentityInventory(): List<T> = listOf(
+    function,
+    restrictedContinuationClass,
+    baseContinuationClass,
+    continuationClass,
+    restrictedContextProperty,
+    baseContextGetter,
+    baseContextProperty,
+    continuationContextGetter,
+    continuationContextProperty,
+    returned,
+    objectGetterCall,
+    emptyContextClass,
+    objectProperty,
+    objectGetter,
+    rootField,
+    rootGetterReturn,
+    rootLoad,
+    constantObject,
+    constantConstructor,
+)
+
 /** Facts proven by the real IR walker before entering the semantic ownership selector. */
 internal data class ArcCoroutineEmptyContextReturnIRShape(
     val exactRestrictedContinuationDeclaration: Boolean,
     val exactContinuationContextOverride: Boolean,
+    val continuationPropertyGetterStripped: Boolean,
     val exactSingleReturnBody: Boolean,
     val exactSyntheticObjectGetterCall: Boolean,
     val exactEmptyCoroutineContextDeclaration: Boolean,
@@ -71,6 +98,7 @@ internal data class ArcCoroutineEmptyContextReturnIRShape(
 
 private fun ArcCoroutineEmptyContextReturnIRShape.isExact(): Boolean =
     exactRestrictedContinuationDeclaration && exactContinuationContextOverride &&
+            continuationPropertyGetterStripped &&
             exactSingleReturnBody && exactSyntheticObjectGetterCall &&
             exactEmptyCoroutineContextDeclaration && exactPrivateFinalStaticRoot &&
             exactRootGetterBody && exactConstantObjectInitializer && noRootWrites &&
@@ -104,22 +132,7 @@ internal fun <T : Any> adaptVerifiedCoroutineEmptyContextReturnIR(
         ArcCoroutineEmptyContextReturnIRRejectionReason.InvalidStructuralProof,
     )
 
-    val identities = listOf(
-        bindings.function,
-        bindings.restrictedContinuationClass,
-        bindings.continuationClass,
-        bindings.continuationContextGetter,
-        bindings.returned,
-        bindings.objectGetterCall,
-        bindings.emptyContextClass,
-        bindings.objectProperty,
-        bindings.objectGetter,
-        bindings.rootField,
-        bindings.rootGetterReturn,
-        bindings.rootLoad,
-        bindings.constantObject,
-        bindings.constantConstructor,
-    )
+    val identities = bindings.exactIdentityInventory()
     val unique = Collections.newSetFromMap(IdentityHashMap<T, Boolean>())
     if (identities.any { !unique.add(it) }) return ArcCoroutineEmptyContextReturnIRSelectorResult(
         null,
@@ -131,6 +144,7 @@ internal fun <T : Any> adaptVerifiedCoroutineEmptyContextReturnIR(
             getterBinding = bindings.function,
             objectBinding = bindings.constantObject,
             returnBinding = bindings.returned,
+            exactIdentityBindings = identities,
             mode = mode,
             identity = ArcCoroutineEmptyContextReturnIdentityProof(
                 exactStdlibLibrary = true,
@@ -171,7 +185,7 @@ internal fun <T : Any> adaptVerifiedCoroutineEmptyContextReturnIR(
 internal data class ArcCoroutineEmptyContextReturnKotlinIRSelection(
     val function: IrSimpleFunction,
     val returned: IrReturn,
-    val objectGetterCall: IrCall,
+    val directRootLoad: IrGetField,
     val emptyContextClass: IrClass,
     val objectGetter: IrSimpleFunction,
     val rootField: IrField,
@@ -183,7 +197,7 @@ internal data class ArcCoroutineEmptyContextReturnKotlinIRSelection(
 /**
  * Authenticate the post-ObjectClassLowering form of the exact Native stdlib getter:
  *
- *     RestrictedContinuationImpl.context -> EmptyCoroutineContext.instance()
+ *     RestrictedContinuationImpl.context -> EmptyCoroutineContext.$instance
  *     EmptyCoroutineContext.instance() -> static final constant-object root
  *
  * [IrConstantObject] is emitted by Kotlin/Native static data with a permanent object-header tag;
@@ -209,15 +223,18 @@ internal fun selectVerifiedCoroutineEmptyContextImmortalReturn(
     )
     val stdlib = context.stdlibModule.konanLibrary ?: return null
     val restricted = context.ir.symbols.restrictedContinuationImpl.owner
+    val baseContinuation = context.ir.symbols.baseContinuationImpl.owner
     val continuation = context.ir.symbols.continuationClass.owner
-    if (restricted.konanLibrary !== stdlib || continuation.konanLibrary !== stdlib ||
+    if (restricted.konanLibrary !== stdlib || baseContinuation.konanLibrary !== stdlib ||
+        continuation.konanLibrary !== stdlib ||
         restricted.fqNameForIrSerialization.asString() !=
             "kotlin.coroutines.native.internal.RestrictedContinuationImpl" ||
+        baseContinuation.fqNameForIrSerialization.asString() !=
+            "kotlin.coroutines.native.internal.BaseContinuationImpl" ||
         continuation.fqNameForIrSerialization.asString() != "kotlin.coroutines.Continuation" ||
         restricted.kind != ClassKind.CLASS || restricted.modality != Modality.ABSTRACT ||
         continuation.kind != ClassKind.INTERFACE ||
-        restricted.superTypes.singleOrNull()?.classifierOrNull !=
-            context.ir.symbols.baseContinuationImpl
+        restricted.superTypes.singleOrNull()?.classifierOrNull != baseContinuation.symbol
     ) return null
 
     fun reject(reason: String): ArcCoroutineEmptyContextReturnKotlinIRSelection? {
@@ -225,39 +242,104 @@ internal fun selectVerifiedCoroutineEmptyContextImmortalReturn(
         return null
     }
 
-    val continuationContextGetter = continuation.properties.singleOrNull {
-        it.name.asString() == "context"
-    }?.getter?.takeIf {
-        it.parent === continuation && it.konanLibrary === stdlib &&
-                it.modality == Modality.ABSTRACT && !it.isExternal && !it.isSuspend &&
-                it.dispatchReceiverParameter != null && it.extensionReceiverParameter == null &&
-                it.valueParameters.isEmpty() && it.typeParameters.isEmpty() &&
-                it.returnType.binaryTypeIsReference()
-    } ?: return reject("Continuation.context declaration")
+    // Authenticate through the exact linked property. Its accessor is not necessarily a direct
+    // class declaration after Native property lowering, so declaration-name scans fail closed.
+    val contextProperty = restricted.properties.singleOrNull { it.name.asString() == "context" }
+        ?: return reject("RestrictedContinuationImpl.context property")
+    val function = contextProperty.getter
+        ?: return reject("RestrictedContinuationImpl.context getter")
+    if (contextProperty.parent !== restricted || contextProperty.konanLibrary !== stdlib ||
+        function.konanLibrary !== stdlib || function.modality != Modality.OPEN ||
+        function.isExternal || function.isSuspend ||
+        function.dispatchReceiverParameter?.type?.classifierOrNull != restricted.symbol ||
+        function.extensionReceiverParameter != null || function.valueParameters.isNotEmpty() ||
+        function.typeParameters.isNotEmpty() || !function.returnType.binaryTypeIsReference()
+    ) return reject(
+        "RestrictedContinuationImpl.context shape " +
+                "parent=${contextProperty.parent === restricted}, library=${function.konanLibrary === stdlib}, " +
+                "modality=${function.modality}, external=${function.isExternal}, suspend=${function.isSuspend}, " +
+                "dispatch=${function.dispatchReceiverParameter?.type?.classifierOrNull == restricted.symbol}, " +
+                "extension=${function.extensionReceiverParameter != null}, values=${function.valueParameters.size}, " +
+                "types=${function.typeParameters.size}, reference=${function.returnType.binaryTypeIsReference()}",
+    )
+    val baseContextGetter = function.overriddenSymbols.singleOrNull()?.owner
+        ?: return reject("BaseContinuationImpl.context overrides=${function.overriddenSymbols.size}")
+    val baseContextProperty = baseContextGetter.correspondingPropertySymbol?.owner
+        ?: return reject("BaseContinuationImpl.context property identity")
+    // Native fake-override lowering keeps this property parented by BaseContinuationImpl while
+    // its dispatch receiver retains the originating Continuation classifier. Both identities are
+    // deliberate parts of the sealed lowered shape.
+    if (baseContextProperty.parent !== baseContinuation ||
+        baseContextProperty.getter !== baseContextGetter ||
+        baseContextGetter.konanLibrary !== stdlib ||
+        baseContextProperty.name.asString() != "context" ||
+        baseContextGetter.modality != Modality.ABSTRACT ||
+        baseContextGetter.isExternal || baseContextGetter.isSuspend ||
+        baseContextGetter.dispatchReceiverParameter?.type?.classifierOrNull != continuation.symbol ||
+        baseContextGetter.extensionReceiverParameter != null ||
+        baseContextGetter.valueParameters.isNotEmpty() ||
+        baseContextGetter.typeParameters.isNotEmpty() ||
+        baseContextGetter.returnType.classifierOrNull != function.returnType.classifierOrNull
+    ) return reject(
+        "BaseContinuationImpl.context shape " +
+                "parent=${baseContextProperty.parent === baseContinuation}, " +
+                "getter=${baseContextProperty.getter === baseContextGetter}, " +
+                "library=${baseContextGetter.konanLibrary === stdlib}, " +
+                "property=${baseContextProperty.name}, modality=${baseContextGetter.modality}, " +
+                "external=${baseContextGetter.isExternal}, suspend=${baseContextGetter.isSuspend}, " +
+                "dispatch=${baseContextGetter.dispatchReceiverParameter?.type?.classifierOrNull == continuation.symbol}, " +
+                "dispatchClass=${(baseContextGetter.dispatchReceiverParameter?.type?.classifierOrNull?.owner as? IrClass)?.fqNameForIrSerialization}, " +
+                "extension=${baseContextGetter.extensionReceiverParameter != null}, " +
+                "values=${baseContextGetter.valueParameters.size}, types=${baseContextGetter.typeParameters.size}, " +
+                "return=${baseContextGetter.returnType.classifierOrNull == function.returnType.classifierOrNull}",
+    )
 
-    val function = restricted.properties.singleOrNull { it.name.asString() == "context" }
-        ?.getter?.takeIf {
-            it.parent === restricted && it.konanLibrary === stdlib &&
-                    it.modality == Modality.OPEN && !it.isExternal && !it.isSuspend &&
-                    it.dispatchReceiverParameter?.type?.classifierOrNull == restricted.symbol &&
-                    it.extensionReceiverParameter == null && it.valueParameters.isEmpty() &&
-                    it.typeParameters.isEmpty() &&
-                    it.returnType.classifierOrNull == continuationContextGetter.returnType.classifierOrNull &&
-                    it.overriddenSymbols.singleOrNull() == continuationContextGetter.symbol
-        } ?: return reject("RestrictedContinuationImpl.context override")
+    val continuationContextGetter = baseContextGetter.overriddenSymbols.singleOrNull()?.owner
+        ?: return reject("Continuation.context overrides=${baseContextGetter.overriddenSymbols.size}")
+    val continuationContextProperty = continuationContextGetter.correspondingPropertySymbol?.owner
+        ?: return reject("Continuation.context property identity")
+    // Property lowering strips the canonical interface-property getter but preserves the exact
+    // abstract override-chain target with a corresponding-property symbol. Seal both facts.
+    if (continuationContextProperty.parent !== continuation ||
+        continuationContextProperty.getter != null ||
+        continuationContextGetter.konanLibrary !== stdlib ||
+        continuationContextProperty.name.asString() != "context" ||
+        continuationContextGetter.modality != Modality.ABSTRACT ||
+        continuationContextGetter.isExternal || continuationContextGetter.isSuspend ||
+        continuationContextGetter.dispatchReceiverParameter?.type?.classifierOrNull != continuation.symbol ||
+        continuationContextGetter.extensionReceiverParameter != null ||
+        continuationContextGetter.valueParameters.isNotEmpty() ||
+        continuationContextGetter.typeParameters.isNotEmpty() ||
+        continuationContextGetter.returnType.classifierOrNull != function.returnType.classifierOrNull
+    ) return reject(
+        "Continuation.context shape " +
+                "parent=${continuationContextProperty.parent === continuation}, " +
+                "getterStripped=${continuationContextProperty.getter == null}, " +
+                "library=${continuationContextGetter.konanLibrary === stdlib}, " +
+                "property=${continuationContextGetter.correspondingPropertySymbol?.owner?.name}, " +
+                "name=${continuationContextGetter.name}, modality=${continuationContextGetter.modality}, " +
+                "external=${continuationContextGetter.isExternal}, suspend=${continuationContextGetter.isSuspend}, " +
+                "dispatch=${continuationContextGetter.dispatchReceiverParameter?.type?.classifierOrNull == continuation.symbol}, " +
+                "extension=${continuationContextGetter.extensionReceiverParameter != null}, " +
+                "values=${continuationContextGetter.valueParameters.size}, " +
+                "types=${continuationContextGetter.typeParameters.size}, " +
+                "return=${continuationContextGetter.returnType.classifierOrNull == function.returnType.classifierOrNull}",
+    )
 
     val returned = (function.body as? IrBlockBody)?.statements?.singleOrNull() as? IrReturn
         ?: return reject("single return body")
     if (returned.returnTargetSymbol != function.symbol) return reject("return target")
-    val objectGetterCall = returned.value as? IrCall ?: return reject("object getter call")
-    if (objectGetterCall.dispatchReceiver != null || objectGetterCall.extensionReceiver != null ||
-        objectGetterCall.valueArgumentsCount != 0 || objectGetterCall.typeArgumentsCount != 0
-    ) return reject("zero-argument object getter call")
-
-    val objectGetter = objectGetterCall.symbol.owner
-    val objectProperty = objectGetter.correspondingPropertySymbol?.owner
-        ?: return reject("object getter property")
-    val emptyContext = objectGetter.parent as? IrClass ?: return reject("object getter class")
+    // ObjectClassLowering has already folded the synthetic object getter call in this body to the
+    // exact static root load. Authenticate the retained object property/getter independently so
+    // both the load and its permanent initializer remain sealed by declaration identity.
+    val directRootLoad = returned.value as? IrGetField
+        ?: return reject("direct object root load value=${returned.value.javaClass.name}")
+    if (directRootLoad.receiver != null) return reject("direct object root load receiver")
+    val rootField = directRootLoad.symbol.owner
+    val objectProperty = rootField.correspondingPropertySymbol?.owner
+        ?: return reject("object root property")
+    val emptyContext = objectProperty.parent as? IrClass ?: return reject("object getter class")
+    val objectGetter = objectProperty.getter ?: return reject("object getter")
     if (emptyContext.konanLibrary !== stdlib ||
         emptyContext.fqNameForIrSerialization.asString() != "kotlin.coroutines.EmptyCoroutineContext" ||
         emptyContext.kind != ClassKind.OBJECT || emptyContext.modality != Modality.FINAL ||
@@ -268,10 +350,11 @@ internal fun selectVerifiedCoroutineEmptyContextImmortalReturn(
         objectGetter.dispatchReceiverParameter != null || objectGetter.extensionReceiverParameter != null ||
         objectGetter.valueParameters.isNotEmpty() || objectGetter.typeParameters.isNotEmpty() ||
         objectGetter.returnType.classifierOrNull != emptyContext.symbol ||
-        objectGetterCall.type.classifierOrNull != emptyContext.symbol
+        directRootLoad.type.classifierOrNull != emptyContext.symbol
     ) return reject("EmptyCoroutineContext object/getter identity")
 
-    val rootField = objectProperty.backingField?.takeIf {
+    objectProperty.backingField?.takeIf {
+        it === rootField &&
         it.parent === emptyContext && it.konanLibrary === stdlib && it.isStatic && it.isFinal &&
                 it.visibility == DescriptorVisibilities.PRIVATE &&
                 it.type.classifierOrNull == emptyContext.symbol
@@ -306,10 +389,15 @@ internal fun selectVerifiedCoroutineEmptyContextImmortalReturn(
     val bindings = ArcCoroutineEmptyContextReturnIRBindings<IrElement>(
         function,
         restricted,
+        baseContinuation,
         continuation,
+        contextProperty,
+        baseContextGetter,
+        baseContextProperty,
         continuationContextGetter,
+        continuationContextProperty,
         returned,
-        objectGetterCall,
+        directRootLoad,
         emptyContext,
         objectProperty,
         objectGetter,
@@ -325,6 +413,7 @@ internal fun selectVerifiedCoroutineEmptyContextImmortalReturn(
         ArcCoroutineEmptyContextReturnIRShape(
             exactRestrictedContinuationDeclaration = true,
             exactContinuationContextOverride = true,
+            continuationPropertyGetterStripped = true,
             exactSingleReturnBody = true,
             exactSyntheticObjectGetterCall = true,
             exactEmptyCoroutineContextDeclaration = true,
@@ -341,7 +430,7 @@ internal fun selectVerifiedCoroutineEmptyContextImmortalReturn(
     return ArcCoroutineEmptyContextReturnKotlinIRSelection(
         function,
         returned,
-        objectGetterCall,
+        directRootLoad,
         emptyContext,
         objectGetter,
         rootField,

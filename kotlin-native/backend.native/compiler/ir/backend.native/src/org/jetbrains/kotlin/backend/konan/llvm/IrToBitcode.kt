@@ -33,6 +33,9 @@ import org.jetbrains.kotlin.backend.konan.arc.ArcStringBuilderBackingArrayProjec
 import org.jetbrains.kotlin.backend.konan.arc.ArcOwnedResultHeapStoreConsumptionLedger
 import org.jetbrains.kotlin.backend.konan.arc.ArcOwnedResultHeapStoreIRBindingRole
 import org.jetbrains.kotlin.backend.konan.arc.ArcOwnedResultHeapStoreKotlinIRSelection
+import org.jetbrains.kotlin.backend.konan.arc.ArcCoroutineEmptyContextReturnConsumptionLedger
+import org.jetbrains.kotlin.backend.konan.arc.ArcCoroutineEmptyContextReturnKotlinIRSelection
+import org.jetbrains.kotlin.backend.konan.arc.exactIdentityInventory
 import org.jetbrains.kotlin.backend.konan.arc.hasExactCoroutinePhysicalBackedge
 import org.jetbrains.kotlin.backend.konan.arc.unwrapExactArcCoroutineSpillRead
 import org.jetbrains.kotlin.backend.konan.optimizations.ARC_SELECTIVE_INLINE_METADATA
@@ -264,6 +267,60 @@ internal class CodeGeneratorVisitor(
     private var currentStringBuilderBackingArrayProjectionEmission:
             StringBuilderBackingArrayProjectionEmission? = null
     private var currentOwnedResultHeapStoreEmission: OwnedResultHeapStoreEmission? = null
+    private var currentCoroutineEmptyContextImmortalReturnEmission:
+            CoroutineEmptyContextImmortalReturnEmission? = null
+
+    /** Publishes one exact permanent EmptyCoroutineContext root without retaining it. */
+    private inner class CoroutineEmptyContextImmortalReturnEmission(
+        val selection: ArcCoroutineEmptyContextReturnKotlinIRSelection,
+    ) {
+        private val ledger = ArcCoroutineEmptyContextReturnConsumptionLedger(
+            selection.selection.ownership,
+        )
+        private var emitted = false
+
+        fun emit(returned: IrReturn, targetReturnSlot: LLVMValueRef): LLVMValueRef {
+            check(!emitted && returned === selection.returned &&
+                    returned.returnTargetSymbol.owner === selection.function) {
+                "EmptyCoroutineContext immortal return identity drifted: ${ir2string(returned)}"
+            }
+            val root = selection.rootField
+            check(root.isStatic && root.isFinal && root.type.binaryTypeIsReference() &&
+                    selection.directRootLoad.symbol.owner === root && selection.directRootLoad.receiver == null &&
+                    selection.rootLoad.symbol.owner === root && selection.rootLoad.receiver == null) {
+                "EmptyCoroutineContext permanent root shape drifted"
+            }
+            if (context.config.threadsAreAllowed && root.isGlobalNonPrimitive(context)) {
+                functionGenerationContext.checkGlobalsAccessible(currentCodeContext.exceptionHandler)
+            }
+            val permanent = functionGenerationContext.loadSlot(
+                staticFieldPtr(root, functionGenerationContext),
+                false,
+                null,
+                alignment = generationState.llvmDeclarations.forStaticField(root).alignment,
+            )
+
+            // The object-result slot may already own a value. This ARC helper performs a raw
+            // publish of the immortal pointer and releases only that old slot value; unlike
+            // UpdateReturnRef it never retains the permanent new value.
+            val publish = llvm.externalNativeRuntimeFunction(
+                "MoveReferenceIntoReturnSlotArc",
+                LlvmRetType(llvm.voidType),
+                listOf(LlvmParamType(codegen.kObjHeaderPtrPtr), LlvmParamType(codegen.kObjHeaderPtr)),
+                functionAttributes = listOf(LlvmFunctionAttribute.NoUnwind),
+            )
+            functionGenerationContext.call(publish, listOf(targetReturnSlot, permanent))
+            functionGenerationContext.markReturnValueAlreadyInReturnSlot()
+            ledger.consumeExact(selection.selection.bindings.exactIdentityInventory())
+            emitted = true
+            return permanent
+        }
+
+        fun verifyConsumed() {
+            check(emitted) { "selected EmptyCoroutineContext immortal return was not emitted" }
+            ledger.verifyComplete()
+        }
+    }
 
     /** Moves one exact owned Result-box call result from its physical result slot into Ref.element. */
     private inner class OwnedResultHeapStoreEmission(
@@ -1263,6 +1320,8 @@ internal class CodeGeneratorVisitor(
         val previousStringBuilderBackingArrayProjectionEmission =
                 currentStringBuilderBackingArrayProjectionEmission
         val previousOwnedResultHeapStoreEmission = currentOwnedResultHeapStoreEmission
+        val previousCoroutineEmptyContextImmortalReturnEmission =
+            currentCoroutineEmptyContextImmortalReturnEmission
         currentDiscardedReturnedReceiverSeedSlots = IdentityHashMap()
         currentCoroutineGuaranteedPhiEmission = (declaration as? IrSimpleFunction)?.let {
             arcOwnership.coroutineGuaranteedPhiSelections[it]
@@ -1282,6 +1341,9 @@ internal class CodeGeneratorVisitor(
         currentOwnedResultHeapStoreEmission = (declaration as? IrSimpleFunction)?.let {
             arcOwnership.ownedResultHeapStoreSelections[it]
         }?.let(::OwnedResultHeapStoreEmission)
+        currentCoroutineEmptyContextImmortalReturnEmission = (declaration as? IrSimpleFunction)?.let {
+            arcOwnership.coroutineEmptyContextImmortalReturns[it]
+        }?.let(::CoroutineEmptyContextImmortalReturnEmission)
         currentArcOwnedResultForwarding = if (!context.shouldContainDebugInfo()) {
             (declaration as? IrSimpleFunction)?.let { arcOwnership.ownedResultForwarding[it] }
         } else {
@@ -1326,6 +1388,7 @@ internal class CodeGeneratorVisitor(
                                 currentBranchGuaranteedPhiEmission?.verifyConsumed()
                                 currentStringBuilderBackingArrayProjectionEmission?.verifyConsumed()
                                 currentOwnedResultHeapStoreEmission?.verifyConsumed()
+                                currentCoroutineEmptyContextImmortalReturnEmission?.verifyConsumed()
                             }
                         }
                     }
@@ -1341,6 +1404,8 @@ internal class CodeGeneratorVisitor(
             currentStringBuilderBackingArrayProjectionEmission =
                     previousStringBuilderBackingArrayProjectionEmission
             currentOwnedResultHeapStoreEmission = previousOwnedResultHeapStoreEmission
+            currentCoroutineEmptyContextImmortalReturnEmission =
+                    previousCoroutineEmptyContextImmortalReturnEmission
         }
 
 
@@ -2800,6 +2865,16 @@ internal class CodeGeneratorVisitor(
         val containsSelectedCoroutineTailCall = value.containsSelectedCoroutineTailCall()
 
         val targetReturnSlot = currentCodeContext.getReturnSlot(target)
+        currentCoroutineEmptyContextImmortalReturnEmission?.takeIf {
+            expression === it.selection.returned
+        }?.let { emission ->
+            require(target === emission.selection.function && targetReturnSlot != null) {
+                "EmptyCoroutineContext immortal return escaped its exact function result ABI"
+            }
+            val permanent = emission.emit(expression, targetReturnSlot)
+            currentCodeContext.genReturn(target, permanent)
+            return codegen.kNothingFakeValue
+        }
         val coroutineSpillMove = arcOwnership.coroutineSpillMovesByReturn[expression]
         val evaluated = evaluateExpression(value, if (coroutineSpillMove == null) targetReturnSlot else null)
         if (coroutineSpillMove != null) {

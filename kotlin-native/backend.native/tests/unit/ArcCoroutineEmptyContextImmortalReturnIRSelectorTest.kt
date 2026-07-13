@@ -37,6 +37,8 @@ class ArcCoroutineEmptyContextImmortalReturnIRSelectorTest {
         listOf(
             shape.copy(exactRestrictedContinuationDeclaration = false),
             shape.copy(exactContinuationContextOverride = false),
+            // A non-null/different canonical accessor is not the sealed Native lowered form.
+            shape.copy(continuationPropertyGetterStripped = false),
             shape.copy(exactSingleReturnBody = false),
             shape.copy(exactSyntheticObjectGetterCall = false),
             shape.copy(exactEmptyCoroutineContextDeclaration = false),
@@ -62,15 +64,21 @@ class ArcCoroutineEmptyContextImmortalReturnIRSelectorTest {
     @Test
     fun duplicateNodeIdentityRejectsBeforeOwnershipAnalysis() {
         val bindings = validBindings()
-        val duplicate = bindings.copy(rootLoad = bindings.rootGetterReturn)
-
-        val result = adaptVerifiedCoroutineEmptyContextReturnIR(duplicate, validMode(), validShape())
-
-        assertNull(result.selection)
-        assertEquals(
-            ArcCoroutineEmptyContextReturnIRRejectionReason.DuplicateStructuralIdentity,
-            result.rejection,
-        )
+        listOf(
+            bindings.copy(baseContinuationClass = bindings.restrictedContinuationClass),
+            bindings.copy(restrictedContextProperty = bindings.function),
+            bindings.copy(baseContextGetter = bindings.function),
+            bindings.copy(baseContextProperty = bindings.restrictedContextProperty),
+            bindings.copy(continuationContextProperty = bindings.baseContextProperty),
+            bindings.copy(rootLoad = bindings.rootGetterReturn),
+        ).forEach { duplicate ->
+            val result = adaptVerifiedCoroutineEmptyContextReturnIR(duplicate, validMode(), validShape())
+            assertNull(result.selection)
+            assertEquals(
+                ArcCoroutineEmptyContextReturnIRRejectionReason.DuplicateStructuralIdentity,
+                result.rejection,
+            )
+        }
     }
 
     @Test
@@ -112,19 +120,41 @@ class ArcCoroutineEmptyContextImmortalReturnIRSelectorTest {
         val bindings = selection.bindings
         val ledger = ArcCoroutineEmptyContextReturnConsumptionLedger(selection.ownership)
 
-        ledger.consume(bindings.function, bindings.constantObject, bindings.returned)
+        ledger.consumeExact(bindings.exactIdentityInventory())
         ledger.verifyComplete()
         assertTrue(selection.ownership.candidate.getterBinding === bindings.function)
         assertTrue(selection.ownership.candidate.objectBinding === bindings.constantObject)
         assertTrue(selection.ownership.candidate.returnBinding === bindings.returned)
     }
 
+    @Test
+    fun emissionLedgerRejectsDriftInEveryLoweredIdentity() {
+        val selection = adaptVerifiedCoroutineEmptyContextReturnIR(
+            validBindings(),
+            validMode(),
+            validShape(),
+        ).selection!!
+        val exact = selection.bindings.exactIdentityInventory()
+        exact.indices.forEach { index ->
+            val drifted = exact.toMutableList().also { it[index] = Any() }
+            expectFailure("exact identity inventory drifted") {
+                ArcCoroutineEmptyContextReturnConsumptionLedger(selection.ownership)
+                    .consumeExact(drifted)
+            }
+        }
+    }
+
     private fun validBindings(): ArcCoroutineEmptyContextReturnIRBindings<Any> =
         ArcCoroutineEmptyContextReturnIRBindings(
             function = Any(),
             restrictedContinuationClass = Any(),
+            baseContinuationClass = Any(),
             continuationClass = Any(),
+            restrictedContextProperty = Any(),
+            baseContextGetter = Any(),
+            baseContextProperty = Any(),
             continuationContextGetter = Any(),
+            continuationContextProperty = Any(),
             returned = Any(),
             objectGetterCall = Any(),
             emptyContextClass = Any(),
@@ -140,6 +170,7 @@ class ArcCoroutineEmptyContextImmortalReturnIRSelectorTest {
     private fun validShape() = ArcCoroutineEmptyContextReturnIRShape(
         exactRestrictedContinuationDeclaration = true,
         exactContinuationContextOverride = true,
+        continuationPropertyGetterStripped = true,
         exactSingleReturnBody = true,
         exactSyntheticObjectGetterCall = true,
         exactEmptyCoroutineContextDeclaration = true,
@@ -162,4 +193,10 @@ class ArcCoroutineEmptyContextImmortalReturnIRSelectorTest {
         nonSuspendFunction = true,
         nonExternalFunction = true,
     )
+
+    private fun expectFailure(message: String, block: () -> Unit) {
+        val failure = runCatching(block).exceptionOrNull()
+        assertTrue("expected failure containing '$message'", failure != null)
+        assertTrue(failure!!.message.orEmpty().contains(message))
+    }
 }

@@ -61,6 +61,7 @@ internal data class ArcCoroutineEmptyContextReturnCandidate<T : Any>(
     val getterBinding: T,
     val objectBinding: T,
     val returnBinding: T,
+    val exactIdentityBindings: List<T> = listOf(getterBinding, objectBinding, returnBinding),
     val mode: ArcCoroutineEmptyContextReturnMode,
     val identity: ArcCoroutineEmptyContextReturnIdentityProof,
     val body: ArcCoroutineEmptyContextReturnBodyProof,
@@ -163,15 +164,15 @@ internal class ArcCoroutineEmptyContextReturnConsumptionLedger<T : Any>(
     private var consumed = false
 
     fun consume(getterBinding: T, objectBinding: T, returnBinding: T) {
+        consumeExact(listOf(getterBinding, objectBinding, returnBinding))
+    }
+
+    fun consumeExact(identityBindings: List<T>) {
         check(!consumed) { "EmptyCoroutineContext immortal return consumed twice" }
-        check(getterBinding === selection.candidate.getterBinding) {
-            "EmptyCoroutineContext getter identity drifted"
-        }
-        check(objectBinding === selection.candidate.objectBinding) {
-            "EmptyCoroutineContext object identity drifted"
-        }
-        check(returnBinding === selection.candidate.returnBinding) {
-            "EmptyCoroutineContext return identity drifted"
+        val expected = selection.candidate.exactIdentityBindings
+        check(identityBindings.size == expected.size &&
+                identityBindings.indices.all { identityBindings[it] === expected[it] }) {
+            "EmptyCoroutineContext exact identity inventory drifted"
         }
         consumed = true
     }

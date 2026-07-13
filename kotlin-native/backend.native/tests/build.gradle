@@ -3463,6 +3463,13 @@ standaloneTest("arc_owned_result_heap_store") {
     source = "codegen/arc/ownedResultHeapStore.kt"
 }
 
+standaloneTest("arc_coroutine_empty_context_immortal_return") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    flags = ["-opt"]
+    outputChecker = { it.contains("ARC_EMPTY_CONTEXT_IMMORTAL_RETURN_OK checksum=42\n") }
+    source = "codegen/arc/coroutineEmptyContextImmortalReturn.kt"
+}
+
 standaloneTest("arc_rooted_loop_borrowing") {
     enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
     flags = ["-opt", "-Xverbose-phases=ArcOwnershipAnalysis"]
@@ -6928,6 +6935,38 @@ fileCheckTest("filecheck_arc_owned_result_heap_store_diagnostics") {
 fileCheckTest("filecheck_arc_owned_result_heap_store_strict") {
     enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
     annotatedSource = project.file('codegen/arc/ownedResultHeapStore.kt')
+    checkPrefix = "STRICT"
+    extraOpts = ["-opt", "-memory-model", "strict"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_coroutine_empty_context_immortal_return") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('codegen/arc/coroutineEmptyContextImmortalReturn.kt')
+    checkPrefix = "OPT"
+    extraOpts = ["-opt"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_coroutine_empty_context_immortal_return_debug") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('codegen/arc/coroutineEmptyContextImmortalReturn.kt')
+    checkPrefix = "DEBUG"
+    extraOpts = ["-opt", "-g"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_coroutine_empty_context_immortal_return_diagnostics") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('codegen/arc/coroutineEmptyContextImmortalReturn.kt')
+    checkPrefix = "DIAGNOSTIC"
+    extraOpts = ["-opt", "-Xbinary=arcLeakCheck=report"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_coroutine_empty_context_immortal_return_strict") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('codegen/arc/coroutineEmptyContextImmortalReturn.kt')
     checkPrefix = "STRICT"
     extraOpts = ["-opt", "-memory-model", "strict"]
     phaseToCheck = "Codegen"

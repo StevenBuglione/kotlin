@@ -355,6 +355,8 @@ internal data class ArcCodegenOwnershipPlan(
     val branchGuaranteedPhiSelections: Map<IrSimpleFunction, ArcOwnedToGuaranteedPhiKotlinIRSelection>,
     val stringBuilderBackingArrayProjectionPlans: Map<IrSimpleFunction, ArcStringBuilderBackingArrayProjectionPlan>,
     val ownedResultHeapStoreSelections: Map<IrSimpleFunction, ArcOwnedResultHeapStoreKotlinIRSelection>,
+    val coroutineEmptyContextImmortalReturns:
+            Map<IrSimpleFunction, ArcCoroutineEmptyContextReturnKotlinIRSelection>,
 ) {
     val scopedArcReferenceLoadBoundaries: Set<IrExpression> =
         Collections.newSetFromMap(IdentityHashMap<IrExpression, Boolean>()).apply {
@@ -413,6 +415,7 @@ internal data class ArcCodegenOwnershipPlan(
             branchGuaranteedPhiSelections = emptyMap(),
             stringBuilderBackingArrayProjectionPlans = emptyMap(),
             ownedResultHeapStoreSelections = emptyMap(),
+            coroutineEmptyContextImmortalReturns = emptyMap(),
         )
     }
 }
@@ -944,6 +947,17 @@ internal fun runArcOwnershipPlanning(
         IdentityHashMap<IrSimpleFunction, ArcStringBuilderBackingArrayProjectionPlan>()
     val ownedResultHeapStoreSelections =
         IdentityHashMap<IrSimpleFunction, ArcOwnedResultHeapStoreKotlinIRSelection>()
+    val coroutineEmptyContextImmortalReturns =
+        IdentityHashMap<IrSimpleFunction, ArcCoroutineEmptyContextReturnKotlinIRSelection>()
+    selectVerifiedCoroutineEmptyContextImmortalReturn(generationState, input.module)?.let { selection ->
+        check(coroutineEmptyContextImmortalReturns.put(selection.function, selection) == null) {
+            "duplicate EmptyCoroutineContext immortal return: ${selection.function.fqNameForIrSerialization}"
+        }
+        generationState.context.log {
+            "ARC EmptyCoroutineContext immortal return " +
+                    "${selection.function.fqNameForIrSerialization.asString()}: selected=1"
+        }
+    }
     val canonicalLockedReadPlans = resolveCanonicalLockedReadPlans(generationState, input.module)
     canonicalLockedReadPlans.forEach { plan ->
         lockedReadResultSlotForwardingCalls[plan.tailCall] = plan
@@ -1197,6 +1211,7 @@ internal fun runArcOwnershipPlanning(
             branchGuaranteedPhiSelections,
             stringBuilderBackingArrayProjectionPlans,
             ownedResultHeapStoreSelections,
+            coroutineEmptyContextImmortalReturns,
         ),
     )
 }
