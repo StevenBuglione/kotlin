@@ -631,6 +631,9 @@ internal fun runArcOwnershipPlanning(
         borrowedMutableReads += plan.borrowedResultReads.filterNot { it === plan.movedResultRead }
         borrowedStrongFieldLoads += plan.borrowedResultRefLoads
     }
+    selectVerifiedBaseContinuationParamBorrow(generationState)?.let { plan ->
+        borrowedMutableReads += plan.borrowedRead
+    }
     // The historical curated-plan visitor below intentionally analyzes top-level functions only.
     // This selector targets an exact class-member pattern, so give it an independent recursive
     // walk instead of silently broadening every existing ownership-plan family to class members.
