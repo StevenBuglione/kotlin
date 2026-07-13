@@ -13,6 +13,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).parent))
 import arc
 import benchmark_cache
+import benchmark_plan
 import benchmark_report
 import benchmark_shards
 import no_collector_symbols
@@ -401,6 +402,14 @@ class ArcProfileTest(unittest.TestCase):
         self.assertIn('common_flags=(-target linux_x64 -opt)', script)
         self.assertIn('validate_provenance "$candidate_provenance"', script)
         self.assertIn('validate_provenance "$baseline_dist/.arc-benchmark-provenance.json"', script)
+        self.assertLess(
+            script.index("for ((iteration = 1; iteration <= compile_repetitions; iteration++))"),
+            script.index("finalize_compile baseline-strict"),
+        )
+        self.assertLess(
+            script.index("finalize_compile candidate-arc"),
+            script.index("pre-measurement correctness gate"),
+        )
 
     def test_benchmark_profile_forwards_only_declared_measurement_settings(self):
         with patch.dict(os.environ, {"ARC_BENCH_SCENARIOS": "call-arguments,fields", "UNRELATED": "no"}, clear=True):
@@ -455,9 +464,20 @@ class ArcProfileTest(unittest.TestCase):
                 (source / "baseline-provenance.json").write_text(
                     '{"role":"baseline-strict","commit":"baseline","tree":"baseline-tree"}'
                 )
+                (source / "correctness.json").write_text(json.dumps({
+                    "passed": True,
+                    "results": [
+                        {"scenario": "strings", "model": benchmark_report.BASELINE},
+                        {"scenario": "strings", "model": benchmark_report.CANDIDATE},
+                    ],
+                }))
+                (source / "schedule.json").write_text(json.dumps(
+                    benchmark_plan.execution_schedule("strings", 1, 3, 3)
+                ))
                 for name in benchmark_shards.REQUIRED - {
                     "shard.json", "inputs.json", "hardware.json",
                     "candidate-provenance.json", "baseline-provenance.json",
+                    "correctness.json", "schedule.json",
                 }:
                     (source / name).write_text("{}")
                 (source / "raw.tsv").write_text(
@@ -1100,6 +1120,10 @@ class ArcProfileTest(unittest.TestCase):
             summary = (root / "out" / "summary.json").read_text()
             self.assertIn('"compileSecondsDeltaPercent": 900.0', summary)
             self.assertIn('"retainCallsitesDeltaPercent": 9900.0', summary)
+            gate = json.loads((root / "out" / "gate.json").read_text())
+            self.assertTrue(gate["passed"])
+            self.assertEqual("candidate", gate["candidateCommit"])
+            self.assertEqual(["fields"], list(gate["scenarios"]))
 
     def test_benchmark_hard_defaults_reject_more_than_five_percent_latency(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1126,6 +1150,104 @@ class ArcProfileTest(unittest.TestCase):
                     )
             self.assertEqual(1, result)
             self.assertIn("latency regression 6.000% > 5.000%", (root / "out" / "comparison.md").read_text())
+            gate = json.loads((root / "out" / "gate.json").read_text())
+            self.assertFalse(gate["passed"])
+            self.assertIn("latency regression", gate["failures"][0])
+
+    def test_benchmark_gate_uses_same_repetition_paired_ratios(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            rows = [
+                "model\tscenario\trepetition\telapsed_seconds\tthroughput_ops_per_second\tmax_rss_kib\toperations\tlogical_allocations",
+                "baseline-strict\tfields\t1\t1\t100\t100\t100\t1",
+                "candidate-arc\tfields\t1\t2\t50\t100\t100\t1",
+                "baseline-strict\tfields\t2\t100\t1\t100\t100\t1",
+                "candidate-arc\tfields\t2\t110\t0.909090909\t100\t100\t1",
+                "baseline-strict\tfields\t3\t101\t0.99009901\t100\t100\t1",
+                "candidate-arc\tfields\t3\t105\t0.952380952\t100\t100\t1",
+            ]
+            (root / "raw.tsv").write_text("\n".join(rows) + "\n")
+            (root / "compile.tsv").write_text(
+                "model\trepetition\tcompile_seconds\tcompile_max_rss_kib\n"
+                "baseline-strict\t1\t1\t100\n"
+                "candidate-arc\t1\t1\t100\n"
+            )
+            (root / "static.tsv").write_text(
+                "model\tcompile_seconds\tcompile_max_rss_kib\tbinary_bytes\tretain_callsites\trelease_callsites\tallocation_callsites\tcompiler_commit\tmemory_model\tcompiler\n"
+                "baseline-strict\t1\t100\t1000\t1\t1\t1\tbase\tstrict\t/base/konanc\n"
+                "candidate-arc\t1\t100\t1000\t1\t1\t1\tcandidate\tarc\t/candidate/konanc\n"
+            )
+            with patch.dict(os.environ, {}, clear=True), \
+                    redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                result = benchmark_report.report(
+                    root / "raw.tsv", root / "compile.tsv", root / "static.tsv", root / "out"
+                )
+            self.assertEqual(1, result)
+            summary = json.loads((root / "out" / "summary.json").read_text())
+            scenario = summary["scenarios"][0]
+            # Ratio-of-independent-medians would be exactly 5%; the paired
+            # median correctly exposes the 10% same-repetition regression.
+            self.assertAlmostEqual(10.0, scenario["latencyDeltaPercent"])
+            self.assertEqual([2.0, 1.1, 105 / 101], scenario["pairedLatencyRatios"])
+
+    def test_benchmark_rss_gate_compares_candidate_peak_to_baseline_peak(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "raw.tsv").write_text(
+                "model\tscenario\trepetition\telapsed_seconds\tthroughput_ops_per_second\tmax_rss_kib\toperations\tlogical_allocations\n"
+                "baseline-strict\tfields\t1\t1\t100\t100\t100\t1\n"
+                "candidate-arc\tfields\t1\t1\t100\t110\t100\t1\n"
+                "baseline-strict\tfields\t2\t1\t100\t200\t100\t1\n"
+                "candidate-arc\tfields\t2\t1\t100\t190\t100\t1\n"
+            )
+            (root / "compile.tsv").write_text(
+                "model\trepetition\tcompile_seconds\tcompile_max_rss_kib\n"
+                "baseline-strict\t1\t1\t100\n"
+                "candidate-arc\t1\t1\t100\n"
+            )
+            (root / "static.tsv").write_text(
+                "model\tcompile_seconds\tcompile_max_rss_kib\tbinary_bytes\tretain_callsites\trelease_callsites\tallocation_callsites\tcompiler_commit\tmemory_model\tcompiler\n"
+                "baseline-strict\t1\t100\t1000\t1\t1\t1\tbase\tstrict\t/base\n"
+                "candidate-arc\t1\t100\t1000\t1\t1\t1\tcandidate\tarc\t/candidate\n"
+            )
+            with patch.dict(os.environ, {}, clear=True), \
+                    redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                result = benchmark_report.report(
+                    root / "raw.tsv", root / "compile.tsv", root / "static.tsv", root / "out"
+                )
+            self.assertEqual(0, result)
+            scenario = json.loads((root / "out" / "summary.json").read_text())["scenarios"][0]
+            self.assertAlmostEqual(-5.0, scenario["rssDeltaPercent"])
+            self.assertEqual([1.1, 0.95], scenario["pairedRssRatios"])
+
+    def test_benchmark_report_rejects_duplicate_or_noncontiguous_repetitions(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "raw.tsv").write_text(
+                "model\tscenario\trepetition\telapsed_seconds\tthroughput_ops_per_second\tmax_rss_kib\toperations\tlogical_allocations\n"
+                "baseline-strict\tfields\t1\t1\t1\t1\t1\t1\n"
+                "baseline-strict\tfields\t1\t1\t1\t1\t1\t1\n"
+                "candidate-arc\tfields\t2\t1\t1\t1\t1\t1\n"
+            )
+            (root / "compile.tsv").write_text(
+                "model\trepetition\tcompile_seconds\tcompile_max_rss_kib\n"
+                "baseline-strict\t1\t1\t1\n"
+                "candidate-arc\t1\t1\t1\n"
+            )
+            (root / "static.tsv").write_text(
+                "model\tcompile_seconds\tcompile_max_rss_kib\tbinary_bytes\tretain_callsites\trelease_callsites\tallocation_callsites\tcompiler_commit\tmemory_model\tcompiler\n"
+                "baseline-strict\t1\t1\t1\t1\t1\t1\tbase\tstrict\t/base\n"
+                "candidate-arc\t1\t1\t1\t1\t1\t1\tcandidate\tarc\t/candidate\n"
+            )
+            with patch.dict(os.environ, {}, clear=True), \
+                    redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                result = benchmark_report.report(
+                    root / "raw.tsv", root / "compile.tsv", root / "static.tsv", root / "out"
+                )
+            self.assertEqual(1, result)
+            failures = json.loads((root / "out" / "summary.json").read_text())["failures"]
+            self.assertTrue(any("duplicate" in failure for failure in failures))
+            self.assertTrue(any("non-contiguous" in failure for failure in failures))
 
     def test_benchmark_recipe_exports_commit_ready_wave_even_on_gate_failure(self):
         justfile = (Path(__file__).parents[2] / "Justfile").read_text()
@@ -1134,8 +1256,38 @@ class ArcProfileTest(unittest.TestCase):
         self.assertIn("run arc-bench-baseline", justfile)
         self.assertIn("benchmark-bundle {{wave}}", justfile)
         script = (Path(__file__).parent / "benchmark_compare.sh").read_text()
-        for artifact in ("inputs.json", "hardware.json", "raw.tsv", "raw.json", "compile-raw.tsv", "comparison.md"):
+        for artifact in (
+            "inputs.json", "hardware.json", "raw.tsv", "raw.json", "compile-raw.tsv",
+            "comparison.md", "gate.json", "schedule.json", "correctness.json",
+        ):
             self.assertIn(artifact, script)
+
+    def test_benchmark_shard_snapshots_include_every_runtime_dependency(self):
+        justfile = (Path(__file__).parents[2] / "Justfile").read_text()
+        self.assertIn("parallel-arc-bench wave primary_scenarios secondary_scenarios:", justfile)
+        self.assertIn("parallel-arc-bench-auto wave scenarios:", justfile)
+        snapshot_lines = [
+            line for line in justfile.splitlines()
+            if "remote-snapshot --paths" in line and "bench" in line
+        ]
+        self.assertEqual(2, len(snapshot_lines))
+        dependencies = {
+            "Justfile",
+            "tools/arc/arc.py",
+            "tools/arc/benchmark_baseline.sh",
+            "tools/arc/benchmark_candidate.sh",
+            "tools/arc/benchmark_cache.py",
+            "tools/arc/benchmark_compare.sh",
+            "tools/arc/benchmark_plan.py",
+            "tools/arc/benchmark_report.py",
+            "tools/arc/benchmark_shards.py",
+            "tools/arc/fixtures/benchmark.kt",
+            "tools/arc/fixtures/benchmark_cinterop.def",
+            "tools/arc/fixtures/benchmark_cinterop.h",
+        }
+        for line in snapshot_lines:
+            for dependency in dependencies:
+                self.assertIn(dependency, line)
 
     def test_sanitizer_probe_requires_binary_instrumentation_evidence(self):
         script = (Path(__file__).parent / "sanitizer_probe.sh").read_text()

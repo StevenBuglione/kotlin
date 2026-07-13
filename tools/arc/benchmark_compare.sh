@@ -20,6 +20,7 @@ interop_def="$root/tools/arc/fixtures/benchmark_cinterop.def"
 interop_include="$root/tools/arc/fixtures"
 reporter="$root/tools/arc/benchmark_report.py"
 cache_tool="$root/tools/arc/benchmark_cache.py"
+plan_tool="$root/tools/arc/benchmark_plan.py"
 artifacts="$state/artifacts"
 quick=${ARC_BENCH_QUICK:-0}
 shard_id=${ARC_BENCH_SHARD_ID:-full}
@@ -59,6 +60,7 @@ minimum_compile_repetitions=3
     exit 1
 }
 command -v python3 >/dev/null || { echo "python3 is required" >&2; exit 1; }
+[[ -f "$plan_tool" ]] || { echo "benchmark plan generator is missing: $plan_tool" >&2; exit 1; }
 objdump=${ARC_BENCH_OBJDUMP:-objdump}
 reserved_code_cache_size=${ARC_BENCH_RESERVED_CODE_CACHE_SIZE:-256m}
 [[ "$reserved_code_cache_size" =~ ^[1-9][0-9]*[kKmMgG]?$ ]] || {
@@ -173,9 +175,22 @@ python3 "$cache_tool" "$baseline_cache_action" "$baseline_dist/.arc-benchmark-ba
     exit 1
 }
 
+default_scenarios='allocation destruction fields arrays strings virtual-dispatch call-arguments closures exceptions coroutines workers atomics platform-c-interop platform-c-leaf platform-c-dynamic-cstring bounded-cycles'
+scenario_selection=${ARC_BENCH_SCENARIOS:-$default_scenarios}
+read -r -a scenarios <<<"${scenario_selection//,/ }"
+[[ ${#scenarios[@]} -gt 0 ]] || { echo "ARC_BENCH_SCENARIOS selected no scenarios" >&2; exit 2; }
+declare -A selected_scenarios=()
+for scenario in "${scenarios[@]}"; do
+    [[ " $default_scenarios " == *" $scenario "* ]] || { echo "unknown benchmark scenario: $scenario" >&2; exit 2; }
+    [[ -z "${selected_scenarios[$scenario]:-}" ]] || { echo "duplicate benchmark scenario: $scenario" >&2; exit 2; }
+    selected_scenarios[$scenario]=1
+done
+
 mkdir -p "$artifacts"
 rm -f "$artifacts"/raw.tsv "$artifacts"/raw.json "$artifacts"/static.tsv \
-    "$artifacts"/summary.tsv "$artifacts"/summary.json "$artifacts"/comparison.md \
+    "$artifacts"/summary.tsv "$artifacts"/summary.json "$artifacts"/gate.json \
+    "$artifacts"/comparison.md "$artifacts"/schedule.json "$artifacts"/correctness.json \
+    "$artifacts"/correctness.tsv \
     "$artifacts"/*-benchmark "$artifacts"/*-benchmark.kexe "$artifacts"/*.time \
     "$artifacts"/*.log "$artifacts"/*.disassembly "$artifacts"/*-benchmark-cinterop.klib
 printf 'model\tscenario\trepetition\telapsed_seconds\tthroughput_ops_per_second\tmax_rss_kib\toperations\tlogical_allocations\n' \
@@ -183,6 +198,10 @@ printf 'model\tscenario\trepetition\telapsed_seconds\tthroughput_ops_per_second\
 printf 'model\tcompile_seconds\tcompile_max_rss_kib\tbinary_bytes\tretain_callsites\trelease_callsites\tallocation_callsites\tcompiler_commit\tmemory_model\tcompiler\n' \
     >"$artifacts/static.tsv"
 printf 'model\trepetition\tcompile_seconds\tcompile_max_rss_kib\n' >"$artifacts/compile-raw.tsv"
+printf 'scenario\tmodel\toutput_sha256\n' >"$artifacts/correctness.tsv"
+python3 "$plan_tool" schedule --scenarios "${scenarios[*]}" --warmups "$warmups" \
+    --repetitions "$repetitions" --compile-repetitions "$compile_repetitions" \
+    --output "$artifacts/schedule.json"
 
 run_prefix=()
 if command -v taskset >/dev/null; then
@@ -200,6 +219,14 @@ if command -v taskset >/dev/null; then
 fi
 
 common_flags=(-target linux_x64 -opt)
+pair_labels() {
+    local scenario_index=$1 pair_ordinal=$2
+    if (( (scenario_index + pair_ordinal) % 2 == 1 )); then
+        labels=(baseline-strict candidate-arc)
+    else
+        labels=(candidate-arc baseline-strict)
+    fi
+}
 prepare_interop() {
     local label=$1 compiler=$2
     local cinterop
@@ -257,47 +284,97 @@ finalize_compile() {
         "$commit" "$memory_model" "$compiler" >>"$artifacts/static.tsv"
 }
 
+compile_pair() {
+    local iteration=$1 label
+    pair_labels 0 "$iteration"
+    for label in "${labels[@]}"; do
+        if [[ "$label" == baseline-strict ]]; then
+            compile_one "$label" "$baseline_compiler" strict "$iteration"
+        else
+            compile_one "$label" "$candidate_compiler" arc "$iteration"
+        fi
+    done
+}
+
 # The only varying compiler flag is the memory model required by each independently built dist.
 # In particular, candidate strict is never compiled: the strict executable always comes from v1.9.10.
 prepare_interop baseline-strict "$baseline_compiler"
 prepare_interop candidate-arc "$candidate_compiler"
 for ((iteration = 1; iteration <= compile_repetitions; iteration++)); do
-    if (( iteration % 2 == 1 )); then
-        compile_one baseline-strict "$baseline_compiler" strict "$iteration"
-        compile_one candidate-arc "$candidate_compiler" arc "$iteration"
-    else
-        compile_one candidate-arc "$candidate_compiler" arc "$iteration"
-        compile_one baseline-strict "$baseline_compiler" strict "$iteration"
-    fi
+    compile_pair "$iteration"
 done
 finalize_compile baseline-strict "$baseline_compiler" strict "$baseline_head"
 finalize_compile candidate-arc "$candidate_compiler" arc "$candidate_head"
 
-default_scenarios='allocation destruction fields arrays strings virtual-dispatch call-arguments closures exceptions coroutines workers atomics platform-c-interop platform-c-leaf platform-c-dynamic-cstring bounded-cycles'
-scenario_selection=${ARC_BENCH_SCENARIOS:-$default_scenarios}
-read -r -a scenarios <<<"${scenario_selection//,/ }"
-[[ ${#scenarios[@]} -gt 0 ]] || { echo "ARC_BENCH_SCENARIOS selected no scenarios" >&2; exit 2; }
-declare -A selected_scenarios=()
-for scenario in "${scenarios[@]}"; do
-    [[ " $default_scenarios " == *" $scenario "* ]] || { echo "unknown benchmark scenario: $scenario" >&2; exit 2; }
-    [[ -z "${selected_scenarios[$scenario]:-}" ]] || { echo "duplicate benchmark scenario: $scenario" >&2; exit 2; }
-    selected_scenarios[$scenario]=1
+# Run the final executables from the last compile pair under both models before
+# spending time on additional warmups or measurements. This is an
+# observable-behaviour gate, not a sample.
+for scenario_index in "${!scenarios[@]}"; do
+    scenario=${scenarios[$scenario_index]}
+    scenario_prefix=("${run_prefix[@]}")
+    [[ "$scenario" == workers ]] && scenario_prefix=()
+    expected="$artifacts/$scenario.expected"
+    rm -f "$expected"
+    pair_labels "$scenario_index" 1
+    for label in "${labels[@]}"; do
+        executable="$artifacts/$label-benchmark.kexe"
+        [[ -x "$executable" ]] || executable="$artifacts/$label-benchmark"
+        correctness_log="$artifacts/$label-$scenario-correctness.log"
+        "${scenario_prefix[@]}" "$executable" "$scenario" >"$correctness_log"
+        runtime_output=$(cat "$correctness_log")
+        if [[ ! "$runtime_output" =~ ^ARC_BENCH_OK[[:space:]]scenario=$scenario[[:space:]]checksum=-?[0-9]+[[:space:]]operations=[0-9]+[[:space:]]allocations=[0-9]+$ ]]; then
+            echo "$label/$scenario failed the pre-measurement correctness gate: $runtime_output" >&2
+            exit 1
+        fi
+        if [[ ! -f "$expected" ]]; then
+            printf '%s\n' "$runtime_output" >"$expected"
+        elif [[ "$runtime_output" != "$(cat "$expected")" ]]; then
+            echo "observable output differs for $label/$scenario before measurement" >&2
+            exit 1
+        fi
+        output_sha256=$(printf '%s' "$runtime_output" | sha256sum | awk '{print $1}')
+        printf '%s\t%s\t%s\n' "$scenario" "$label" "$output_sha256" >>"$artifacts/correctness.tsv"
+    done
+done
+python3 - "$artifacts/correctness.tsv" "$artifacts/correctness.json" <<'PY'
+import csv
+import json
+from pathlib import Path
+import sys
+
+source, destination = map(Path, sys.argv[1:])
+with source.open(encoding="utf-8", newline="") as stream:
+    rows = list(csv.DictReader(stream, delimiter="\t"))
+payload = {
+    "schemaVersion": 1,
+    "passed": True,
+    "policy": "exact-observable-output-before-warmup-or-timing",
+    "results": rows,
+}
+destination.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+
+for scenario_index in "${!scenarios[@]}"; do
+    scenario=${scenarios[$scenario_index]}
     scenario_prefix=("${run_prefix[@]}")
     # Pin single-threaded scenarios for lower scheduler noise. Worker throughput intentionally retains
     # the machine's inherited CPU set so the worker scenario continues to measure real parallelism.
     [[ "$scenario" == workers ]] && scenario_prefix=()
     expected="$artifacts/$scenario.expected"
-    rm -f "$expected"
-    for ((iteration = 1; iteration <= warmups; iteration++)); do
-        (( iteration % 2 == 1 )) && labels=(baseline-strict candidate-arc) || labels=(candidate-arc baseline-strict)
+    # The correctness pass is also the first untimed warm execution, so the
+    # default single warmup does not add another complete scenario pair.
+    for ((iteration = 2; iteration <= warmups; iteration++)); do
+        pair_labels "$scenario_index" "$iteration"
         for label in "${labels[@]}"; do
             executable="$artifacts/$label-benchmark.kexe"
             [[ -x "$executable" ]] || executable="$artifacts/$label-benchmark"
             "${scenario_prefix[@]}" "$executable" "$scenario" >"$artifacts/$label-$scenario-warmup-$iteration.log"
         done
     done
+    effective_warmups=$warmups
+    (( effective_warmups < 1 )) && effective_warmups=1
     for ((iteration = 1; iteration <= repetitions; iteration++)); do
-        (( iteration % 2 == 1 )) && labels=(baseline-strict candidate-arc) || labels=(candidate-arc baseline-strict)
+        pair_labels "$scenario_index" "$((effective_warmups + iteration))"
         for label in "${labels[@]}"; do
             executable="$artifacts/$label-benchmark.kexe"
             [[ -x "$executable" ]] || executable="$artifacts/$label-benchmark"
@@ -380,6 +457,8 @@ inputs = {
     "interopHeaderSha256": hashlib.sha256(interop_header.read_bytes()).hexdigest(),
     "repetitions": int(repetitions),
     "warmups": int(warmups),
+    "correctnessRunsPerModel": 1,
+    "correctnessConsumesFirstWarmup": True,
     "compileRepetitions": int(compile_repetitions),
     "quickDiagnostic": os.environ.get("ARC_BENCH_QUICK", "0") == "1",
     "executionPrefix": affinity.split(),
@@ -454,7 +533,8 @@ payload = {
     "baselineTree": baseline_tree,
     "hostname": platform.node(),
     "machineProfile": machine_profile,
-    "pairing": "same-host-interleaved-baseline-candidate",
+    "pairing": "same-host-scenario-balanced-deterministic-paired-ab",
+    "correctnessGate": "exact-output-before-warmup-or-timing",
 }
 Path(path).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
@@ -468,7 +548,8 @@ wave="$artifacts/wave"
 rm -rf "$wave"
 mkdir -p "$wave"
 cp "$artifacts"/inputs.json "$artifacts"/hardware.json "$artifacts"/raw.tsv "$artifacts"/raw.json "$artifacts"/compile-raw.tsv \
-    "$artifacts"/static.tsv "$artifacts"/summary.tsv "$artifacts"/summary.json "$artifacts"/comparison.md \
+    "$artifacts"/static.tsv "$artifacts"/summary.tsv "$artifacts"/summary.json "$artifacts"/gate.json \
+    "$artifacts"/comparison.md "$artifacts"/schedule.json "$artifacts"/correctness.json \
     "$artifacts"/shard.json "$wave/"
 cp "$candidate_provenance" "$wave/candidate-provenance.json"
 cp "$baseline_dist/.arc-benchmark-provenance.json" "$wave/baseline-provenance.json"

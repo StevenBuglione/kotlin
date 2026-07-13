@@ -133,8 +133,26 @@ def report(raw_path: Path, compile_path: Path, static_path: Path, output: Path) 
             model: [row for row in raw if row["scenario"] == scenario and row["model"] == model]
             for model in (BASELINE, CANDIDATE)
         }
-        if not by_model[BASELINE] or len(by_model[BASELINE]) != len(by_model[CANDIDATE]):
-            failures.append(f"{scenario}: missing or unbalanced repetitions")
+        by_repetition: dict[str, dict[int, dict[str, object]]] = {}
+        invalid_grid = False
+        for model in (BASELINE, CANDIDATE):
+            model_rows: dict[int, dict[str, object]] = {}
+            for row in by_model[model]:
+                repetition = int(row["repetition"])
+                if repetition in model_rows:
+                    failures.append(f"{scenario}: duplicate {model} repetition {repetition}")
+                    invalid_grid = True
+                model_rows[repetition] = row
+            by_repetition[model] = model_rows
+        maximum = max(
+            (repetition for values in by_repetition.values() for repetition in values),
+            default=0,
+        )
+        expected_repetitions = set(range(1, maximum + 1))
+        if maximum == 0 or any(set(values) != expected_repetitions for values in by_repetition.values()):
+            failures.append(f"{scenario}: missing, unbalanced, or non-contiguous repetitions")
+            invalid_grid = True
+        if invalid_grid:
             continue
         baseline_elapsed = statistics.median(float(row["elapsedSeconds"]) for row in by_model[BASELINE])
         candidate_elapsed = statistics.median(float(row["elapsedSeconds"]) for row in by_model[CANDIDATE])
@@ -144,8 +162,26 @@ def report(raw_path: Path, compile_path: Path, static_path: Path, output: Path) 
         candidate_rss = max(int(row["maxRssKiB"]) for row in by_model[CANDIDATE])
         baseline_allocations = {int(row["logicalAllocations"]) for row in by_model[BASELINE]}
         candidate_allocations = {int(row["logicalAllocations"]) for row in by_model[CANDIDATE]}
-        latency_delta = delta_percent(candidate_elapsed, baseline_elapsed)
-        throughput_ratio = ratio_percent(candidate_throughput, baseline_throughput)
+        paired_latency_ratios = [
+            float(by_repetition[CANDIDATE][repetition]["elapsedSeconds"])
+            / float(by_repetition[BASELINE][repetition]["elapsedSeconds"])
+            for repetition in sorted(expected_repetitions)
+        ]
+        paired_throughput_ratios = [
+            float(by_repetition[CANDIDATE][repetition]["throughputOpsPerSecond"])
+            / float(by_repetition[BASELINE][repetition]["throughputOpsPerSecond"])
+            for repetition in sorted(expected_repetitions)
+        ]
+        paired_rss_ratios = [
+            int(by_repetition[CANDIDATE][repetition]["maxRssKiB"])
+            / int(by_repetition[BASELINE][repetition]["maxRssKiB"])
+            for repetition in sorted(expected_repetitions)
+        ]
+        latency_delta = 100.0 * (statistics.median(paired_latency_ratios) - 1.0)
+        throughput_ratio = 100.0 * statistics.median(paired_throughput_ratios)
+        # The release gate is peak RSS of the candidate versus peak RSS of the baseline.
+        # Per-repetition ratios remain useful diagnostics, but their maximum compares
+        # potentially unrelated peaks and can falsely fail a candidate whose peak is lower.
         rss_delta = delta_percent(candidate_rss, baseline_rss)
         throughput_ratios.append(throughput_ratio / 100.0)
         passed = True
@@ -164,12 +200,15 @@ def report(raw_path: Path, compile_path: Path, static_path: Path, output: Path) 
                 "baselineMedianSeconds": baseline_elapsed,
                 "candidateMedianSeconds": candidate_elapsed,
                 "latencyDeltaPercent": latency_delta,
+                "pairedLatencyRatios": paired_latency_ratios,
                 "baselineMedianThroughput": baseline_throughput,
                 "candidateMedianThroughput": candidate_throughput,
                 "throughputRatioPercent": throughput_ratio,
+                "pairedThroughputRatios": paired_throughput_ratios,
                 "baselinePeakRssKiB": baseline_rss,
                 "candidatePeakRssKiB": candidate_rss,
                 "rssDeltaPercent": rss_delta,
+                "pairedRssRatios": paired_rss_ratios,
                 "logicalAllocations": next(iter(baseline_allocations)) if len(baseline_allocations) == 1 else None,
                 "passed": passed,
             }
@@ -214,6 +253,27 @@ def report(raw_path: Path, compile_path: Path, static_path: Path, output: Path) 
         encoding="utf-8",
     )
     (output / "summary.json").write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    gate = {
+        "schemaVersion": 1,
+        "passed": not failures,
+        "failures": failures,
+        "throughputGeomeanPercent": geomean_throughput,
+        "binaryBytesDeltaPercent": aggregate["binaryBytesDeltaPercent"],
+        "candidateCommit": static[CANDIDATE]["compilerCommit"],
+        "baselineCommit": static[BASELINE]["compilerCommit"],
+        "scenarios": {
+            str(row["scenario"]): {
+                "passed": row["passed"],
+                "throughputRatioPercent": row["throughputRatioPercent"],
+                "latencyDeltaPercent": row["latencyDeltaPercent"],
+                "rssDeltaPercent": row["rssDeltaPercent"],
+            }
+            for row in summaries
+        },
+    }
+    (output / "gate.json").write_text(
+        json.dumps(gate, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
 
     with (output / "summary.tsv").open("w", encoding="utf-8", newline="") as stream:
         writer = csv.writer(stream, delimiter="\t", lineterminator="\n")

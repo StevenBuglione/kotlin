@@ -7,25 +7,31 @@ import csv
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import sys
 
+import benchmark_plan
 import benchmark_report
 
 
 REQUIRED = {
     "inputs.json", "hardware.json", "candidate-provenance.json", "baseline-provenance.json",
-    "raw.tsv", "compile-raw.tsv", "static.tsv", "summary.tsv", "summary.json", "shard.json",
+    "raw.tsv", "compile-raw.tsv", "static.tsv", "summary.tsv", "summary.json", "gate.json",
+    "schedule.json", "correctness.json", "shard.json",
 }
 COMPATIBLE_INPUT_KEYS = (
     "candidateCommit", "candidateTree", "candidateRuntimeTree", "candidateRuntimePatchBase",
     "candidateRuntimePatchSha256", "baselineCommit", "baselineTag", "baselineMemoryModel", "candidateMemoryModel",
     "commonCompilerFlags", "fixture", "fixtureSha256", "interopDefinition",
     "interopDefinitionSha256", "interopHeader", "interopHeaderSha256", "repetitions",
-    "warmups", "compileRepetitions", "quickDiagnostic", "logicalAllocationDefinition",
+    "warmups", "correctnessRunsPerModel", "correctnessConsumesFirstWarmup",
+    "compileRepetitions", "quickDiagnostic", "logicalAllocationDefinition",
     "emittedCallsiteMethod", "optimizerEliminationGate", "thresholdEnvironment",
     "benchmarkJavaOpts", "benchmarkJvmTools", "benchmarkJvmEnvironment",
 )
+CORRECTNESS_POLICY = "exact-observable-output-before-warmup-or-timing"
+SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
 def read_json(path: Path) -> dict[str, object]:
@@ -51,6 +57,129 @@ def write_tsv(path: Path, fieldnames: list[str], rows: list[dict[str, str]]) -> 
         writer = csv.DictWriter(stream, fieldnames=fieldnames, delimiter="\t", lineterminator="\n")
         writer.writeheader()
         writer.writerows(rows)
+
+
+def require_int(payload: dict[str, object], key: str, source: Path, *, minimum: int) -> int:
+    value = payload.get(key)
+    if type(value) is not int or value < minimum:
+        raise SystemExit(f"invalid {key!r} in {source}: {value!r}")
+    return value
+
+
+def validate_correctness(
+    source: Path, scenarios: list[str]
+) -> dict[str, object]:
+    correctness = read_json(source / "correctness.json")
+    if correctness.get("schemaVersion") != 1 or correctness.get("policy") != CORRECTNESS_POLICY:
+        raise SystemExit(f"invalid correctness schema/policy in {source}")
+    results = correctness.get("results")
+    if correctness.get("passed") is not True or not isinstance(results, list):
+        raise SystemExit(f"correctness gate did not pass in {source}")
+    expected_keys = {
+        (scenario, model)
+        for scenario in scenarios
+        for model in (benchmark_report.BASELINE, benchmark_report.CANDIDATE)
+    }
+    observed: dict[tuple[str, str], str] = {}
+    for row in results:
+        if not isinstance(row, dict):
+            raise SystemExit(f"invalid correctness result in {source}")
+        scenario, model, digest = row.get("scenario"), row.get("model"), row.get("output_sha256")
+        key = (scenario, model)
+        if key not in expected_keys or key in observed or not isinstance(digest, str) or not SHA256.fullmatch(digest):
+            raise SystemExit(f"invalid or duplicate correctness result {key!r} in {source}")
+        observed[key] = digest
+    if set(observed) != expected_keys:
+        raise SystemExit(f"correctness coverage does not match scenarios in {source}")
+    for scenario in scenarios:
+        if observed[(scenario, benchmark_report.BASELINE)] != observed[(scenario, benchmark_report.CANDIDATE)]:
+            raise SystemExit(f"correctness output digest differs for {scenario!r} in {source}")
+    return correctness
+
+
+def validate_execution_evidence(
+    metadata: dict[str, object], source: Path
+) -> tuple[list[str], list[dict[str, str]], dict[str, object]]:
+    scenarios = metadata.get("scenarios")
+    if not isinstance(scenarios, list) or not scenarios or any(not isinstance(value, str) for value in scenarios):
+        raise SystemExit(f"invalid scenario metadata in {source}")
+    inputs = read_json(source / "inputs.json")
+    repetitions = require_int(inputs, "repetitions", source, minimum=1)
+    warmups = require_int(inputs, "warmups", source, minimum=0)
+    compile_repetitions = require_int(inputs, "compileRepetitions", source, minimum=1)
+    expected_schedule = benchmark_plan.execution_schedule(
+        scenarios, warmups, repetitions, compile_repetitions
+    )
+    schedule = read_json(source / "schedule.json")
+    if schedule != expected_schedule:
+        raise SystemExit(f"execution schedule does not match inputs/scenarios in {source}")
+
+    header, rows = read_tsv(source / "raw.tsv")
+    observed_sequence: list[tuple[str, int, str]] = []
+    observed_grid: set[tuple[str, str, int]] = set()
+    for row in rows:
+        try:
+            repetition = int(row["repetition"])
+            scenario = row["scenario"]
+            model = row["model"]
+        except (KeyError, ValueError) as error:
+            raise SystemExit(f"invalid raw benchmark row in {source}: {row}") from error
+        key = (scenario, model, repetition)
+        if key in observed_grid:
+            raise SystemExit(f"duplicate raw benchmark grid entry {key!r} in {source}")
+        observed_grid.add(key)
+        observed_sequence.append((scenario, repetition, model))
+    expected_grid = {
+        (scenario, model, repetition)
+        for scenario in scenarios
+        for model in (benchmark_report.BASELINE, benchmark_report.CANDIDATE)
+        for repetition in range(1, repetitions + 1)
+    }
+    if observed_grid != expected_grid:
+        missing = sorted(expected_grid - observed_grid)
+        unexpected = sorted(observed_grid - expected_grid)
+        raise SystemExit(f"raw benchmark grid mismatch in {source}: missing={missing} unexpected={unexpected}")
+    expected_sequence = [
+        (str(scenario["scenario"]), int(pair["repetition"]), str(model))
+        for scenario in expected_schedule["scenarios"]
+        for pair in scenario["measurements"]
+        for model in pair["order"]
+    ]
+    if observed_sequence != expected_sequence:
+        raise SystemExit(f"raw benchmark execution order differs from schedule in {source}")
+
+    compile_header, compile_rows = read_tsv(source / "compile-raw.tsv")
+    compile_sequence: list[tuple[int, str]] = []
+    compile_grid: set[tuple[str, int]] = set()
+    for row in compile_rows:
+        try:
+            repetition = int(row["repetition"])
+            model = row["model"]
+        except (KeyError, ValueError) as error:
+            raise SystemExit(f"invalid compile benchmark row in {source}: {row}") from error
+        key = (model, repetition)
+        if key in compile_grid:
+            raise SystemExit(f"duplicate compile benchmark grid entry {key!r} in {source}")
+        compile_grid.add(key)
+        compile_sequence.append((repetition, model))
+    expected_compile_grid = {
+        (model, repetition)
+        for model in (benchmark_report.BASELINE, benchmark_report.CANDIDATE)
+        for repetition in range(1, compile_repetitions + 1)
+    }
+    if compile_grid != expected_compile_grid:
+        raise SystemExit(f"compile benchmark grid mismatch in {source}")
+    expected_compile_sequence = [
+        (int(pair["repetition"]), str(model))
+        for pair in expected_schedule["compilePairs"]
+        for model in pair["order"]
+    ]
+    if compile_sequence != expected_compile_sequence:
+        raise SystemExit(f"compile benchmark execution order differs from schedule in {source}")
+    # The header is returned for deterministic merged output. compile_header is
+    # intentionally consumed above so a missing header fails through row access/grid.
+    _ = compile_header
+    return header, rows, schedule
 
 
 def validate_shard_identity(metadata: dict[str, object], source: Path) -> None:
@@ -138,6 +267,8 @@ def merge(destination: Path, sources: list[Path]) -> int:
                 raise SystemExit(f"incompatible shard input {key!r}: {source}")
 
     scenario_owner: dict[str, str] = {}
+    correctness_by_shard: dict[str, dict[str, object]] = {}
+    schedule_by_shard: dict[str, dict[str, object]] = {}
     raw_header: list[str] | None = None
     raw_rows: list[dict[str, str]] = []
     for metadata, source in shards:
@@ -149,14 +280,18 @@ def merge(destination: Path, sources: list[Path]) -> int:
             if scenario in scenario_owner:
                 raise SystemExit(f"scenario {scenario!r} overlaps shards {scenario_owner[scenario]!r} and {shard_id!r}")
             scenario_owner[scenario] = shard_id
-        header, rows = read_tsv(source / "raw.tsv")
+
+    for metadata, source in shards:
+        shard_id = str(metadata["shardId"])
+        scenarios = metadata["scenarios"]
+        assert isinstance(scenarios, list)
+        correctness_by_shard[shard_id] = validate_correctness(source, scenarios)
+        header, rows, schedule = validate_execution_evidence(metadata, source)
+        schedule_by_shard[shard_id] = schedule
         if raw_header is None:
             raw_header = header
         elif header != raw_header:
             raise SystemExit(f"raw.tsv schema differs in {source}")
-        observed = {row["scenario"] for row in rows}
-        if observed != set(scenarios):
-            raise SystemExit(f"raw scenarios {sorted(observed)} do not match metadata {sorted(scenarios)} in {source}")
         raw_rows.extend(rows)
 
     model_order = {benchmark_report.BASELINE: 0, benchmark_report.CANDIDATE: 1}
@@ -186,6 +321,23 @@ def merge(destination: Path, sources: list[Path]) -> int:
     (destination / "hardware.json").write_text(
         json.dumps(hardware, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
+    (destination / "correctness.json").write_text(
+        json.dumps({
+            "schemaVersion": 1,
+            "passed": True,
+            "policy": "all-shards-exact-output-before-warmup-or-timing",
+            "shards": correctness_by_shard,
+        }, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    (destination / "schedule.json").write_text(
+        json.dumps({
+            "schemaVersion": 1,
+            "policy": "scenario-balanced-deterministic-paired-ab-per-shard",
+            "shards": schedule_by_shard,
+        }, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     shard_payload = {
         "schemaVersion": 2,
         "shardId": "merged",
@@ -198,7 +350,7 @@ def merge(destination: Path, sources: list[Path]) -> int:
         "candidateRuntimePatchSha256": next(iter(runtime_patch_hashes)),
         "baselineCommit": next(iter(baseline_commits)),
         "baselineTree": next(iter(baseline_trees)),
-        "pairing": "same-host-interleaved-baseline-candidate-per-shard",
+        "pairing": "same-host-scenario-balanced-deterministic-paired-ab-per-shard",
         "shards": [metadata for metadata, _ in shards],
     }
     (destination / "shards.json").write_text(

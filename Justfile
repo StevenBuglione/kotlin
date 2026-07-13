@@ -153,25 +153,31 @@ ci2-log profile:
 # each bundle and merge them with tools/arc/benchmark_shards.py.
 primary-arc-bench-shard shard count scenarios:
     {{python}} tools/arc/arc.py --machine primary-bench remote-init
-    {{python}} tools/arc/arc.py --machine primary-bench remote-snapshot --paths Justfile tools/arc/arc.py tools/arc/benchmark_candidate.sh tools/arc/benchmark_cache.py tools/arc/benchmark_compare.sh tools/arc/benchmark_shards.py tools/arc/test_arc.py
+    {{python}} tools/arc/arc.py --machine primary-bench remote-snapshot --paths Justfile tools/arc/arc.py tools/arc/benchmark_baseline.sh tools/arc/benchmark_candidate.sh tools/arc/benchmark_cache.py tools/arc/benchmark_compare.sh tools/arc/benchmark_plan.py tools/arc/benchmark_report.py tools/arc/benchmark_shards.py tools/arc/fixtures/benchmark.kt tools/arc/fixtures/benchmark_cinterop.def tools/arc/fixtures/benchmark_cinterop.h tools/arc/test_arc.py
     {{python}} tools/arc/arc.py --machine primary-bench run arc-bench-candidate --shard-id "{{shard}}" --shard-count {{count}} --scenarios "{{scenarios}}"
     {{python}} tools/arc/arc.py --machine primary-bench run arc-bench-baseline --shard-id "{{shard}}" --shard-count {{count}} --scenarios "{{scenarios}}"
     status=0; {{python}} tools/arc/arc.py --machine primary-bench run arc-bench --shard-id "{{shard}}" --shard-count {{count}} --scenarios "{{scenarios}}" || status=$?; exit "$status"
 
 ci2-arc-bench-shard shard count scenarios:
     {{python}} tools/arc/arc.py --machine ci2-cstring remote-init
-    {{python}} tools/arc/arc.py --machine ci2-cstring remote-snapshot --paths Justfile tools/arc/arc.py tools/arc/benchmark_candidate.sh tools/arc/benchmark_cache.py tools/arc/benchmark_compare.sh tools/arc/benchmark_shards.py tools/arc/test_arc.py
+    {{python}} tools/arc/arc.py --machine ci2-cstring remote-snapshot --paths Justfile tools/arc/arc.py tools/arc/benchmark_baseline.sh tools/arc/benchmark_candidate.sh tools/arc/benchmark_cache.py tools/arc/benchmark_compare.sh tools/arc/benchmark_plan.py tools/arc/benchmark_report.py tools/arc/benchmark_shards.py tools/arc/fixtures/benchmark.kt tools/arc/fixtures/benchmark_cinterop.def tools/arc/fixtures/benchmark_cinterop.h tools/arc/test_arc.py
     {{python}} tools/arc/arc.py --machine ci2-cstring run arc-bench-candidate --shard-id "{{shard}}" --shard-count {{count}} --scenarios "{{scenarios}}"
     {{python}} tools/arc/arc.py --machine ci2-cstring run arc-bench-baseline --shard-id "{{shard}}" --shard-count {{count}} --scenarios "{{scenarios}}"
     status=0; {{python}} tools/arc/arc.py --machine ci2-cstring run arc-bench --shard-id "{{shard}}" --shard-count {{count}} --scenarios "{{scenarios}}" || status=$?; exit "$status"
 
-# Create one immutable snapshot, run disjoint same-host A/B shards concurrently on both
-# Linux benchmark hosts, verify exact runtime provenance, and merge compatible manifests.
+# Backward-compatible explicit assignment for hardware-specific investigations.
 parallel-arc-bench wave primary_scenarios secondary_scenarios:
     {{python}} tools/arc/benchmark_parallel.py {{wave}} --primary-scenarios "{{primary_scenarios}}" --secondary-scenarios "{{secondary_scenarios}}"
 
 parallel-arc-bench-dry-run wave primary_scenarios secondary_scenarios:
     {{python}} tools/arc/benchmark_parallel.py {{wave}} --primary-scenarios "{{primary_scenarios}}" --secondary-scenarios "{{secondary_scenarios}}" --dry-run
+
+# Automatic minimax assignment across both Linux benchmark hosts.
+parallel-arc-bench-auto wave scenarios:
+    {{python}} tools/arc/benchmark_parallel.py {{wave}} --scenarios "{{scenarios}}"
+
+parallel-arc-bench-auto-dry-run wave scenarios:
+    {{python}} tools/arc/benchmark_parallel.py {{wave}} --scenarios "{{scenarios}}" --dry-run
 
 # Dedicated parallel lanes. These never reset the compiler or benchmark worktrees.
 ci2-runtime-init:

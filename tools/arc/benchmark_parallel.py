@@ -20,6 +20,7 @@ import tempfile
 from typing import Sequence
 
 import arc
+import benchmark_plan
 import benchmark_shards
 
 
@@ -97,6 +98,13 @@ def build_host_shards(primary: str, secondary: str) -> tuple[HostShard, HostShar
         if not 1 <= shard.workers <= arc.MAX_WORKERS:
             raise SystemExit(f"invalid worker count for {shard.machine}: {shard.workers}")
     return shards[0], shards[1]
+
+
+def build_balanced_host_shards(scenarios: str) -> tuple[HostShard, HostShard]:
+    assignments = benchmark_plan.assign_scenarios(scenarios)
+    return build_host_shards(
+        ",".join(assignments[0].scenarios), ",".join(assignments[1].scenarios)
+    )
 
 
 def validate_remote_worktree(shard: HostShard) -> None:
@@ -283,7 +291,13 @@ def dry_run_payload(wave: str, shards: Sequence[HostShard], paths: Sequence[str]
         "snapshotPaths": list(paths) if paths else "complete worktree excluding ARC generated paths",
         "singleImmutableSnapshot": True,
         "parallelHosts": [asdict(shard) for shard in shards],
-        "measurement": "same-host interleaved baseline/candidate with existing CPU pinning and order rotation",
+        "estimatedScenarioWeights": {
+            shard.shard_id: sum(benchmark_plan.SCENARIO_WEIGHTS[scenario] for scenario in shard.scenarios)
+            for shard in shards
+        },
+        "measurement": "same-host scenario-balanced deterministic paired baseline/candidate schedule",
+        "correctnessGate": "both models must produce identical valid output before additional warmup or timing",
+        "cacheReuse": "immutable content-addressed candidate dist and persistent exact-v1.9.10 baseline dist",
         "mergePolicy": "exact commit/tree/runtime-tree/runtime-patch and compatible manifests only",
     }
 
@@ -327,14 +341,27 @@ def execute(wave: str, shards: Sequence[HostShard], paths: list[str] | None) -> 
 def main(arguments: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("wave")
-    parser.add_argument("--primary-scenarios", required=True)
-    parser.add_argument("--secondary-scenarios", required=True)
+    parser.add_argument("--scenarios", help="deterministically balance this complete set across both hosts")
+    parser.add_argument("--primary-scenarios")
+    parser.add_argument("--secondary-scenarios")
     parser.add_argument("--paths", nargs="+", help="snapshot only HEAD plus these lane-owned paths")
     parser.add_argument("--dry-run", action="store_true", help="validate and print the plan without local or remote mutation")
     options = parser.parse_args(arguments)
     if not SAFE_WAVE.fullmatch(options.wave):
         raise SystemExit("benchmark wave must contain only letters, digits, '-' and '_'")
-    shards = build_host_shards(options.primary_scenarios, options.secondary_scenarios)
+    if options.primary_scenarios or options.secondary_scenarios:
+        if options.scenarios:
+            parser.error("--scenarios cannot be combined with explicit host scenario sets")
+        if not options.primary_scenarios or not options.secondary_scenarios:
+            parser.error("both --primary-scenarios and --secondary-scenarios are required")
+        shards = build_host_shards(options.primary_scenarios, options.secondary_scenarios)
+    else:
+        if not options.scenarios:
+            parser.error("provide --scenarios or both explicit host scenario sets")
+        try:
+            shards = build_balanced_host_shards(options.scenarios)
+        except ValueError as error:
+            parser.error(str(error))
     paths = arc.snapshot_pathspecs(options.paths)
     if options.dry_run:
         print(json.dumps(dry_run_payload(options.wave, shards, paths), indent=2, sort_keys=True))

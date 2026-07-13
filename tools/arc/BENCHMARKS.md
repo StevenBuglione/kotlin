@@ -23,6 +23,23 @@ For parallel diagnostics, use the isolated `primary-bench` lane on `10.10.10.8` 
 and provenance are never mixed across hosts. Stable subsets are selected with
 `--benchmark-set strings|coroutines|hotspots|interop`; for example:
 
+The preferred entry point accepts one scenario set and assigns it with a stable weighted plan so
+both physical hosts stay busy:
+
+```text
+just parallel-arc-bench-auto-dry-run wave-33 "strings coroutines platform-c-interop platform-c-dynamic-cstring"
+just parallel-arc-bench-auto wave-33 "strings coroutines platform-c-interop platform-c-dynamic-cstring"
+```
+
+Each scenario runs once under both models and must produce identical valid output before timing
+begins. This pass consumes the first configured warmup, so evidence runs do not pay for a duplicate
+untimed pair. The deterministic pair schedule alternates which model receives the unavoidable
+extra lead in odd-sized sample sets between adjacent scenarios. `schedule.json` and
+`correctness.json` preserve that evidence, while the merged `gate.json` is the concise automation
+result and `summary.json` retains the complete measurements.
+
+Manual lane-specific selection remains available for hardware investigations:
+
 ```text
 python tools/arc/arc.py --machine primary-bench remote-snapshot
 python tools/arc/arc.py --machine primary-bench run arc-bench-candidate --benchmark-set strings
