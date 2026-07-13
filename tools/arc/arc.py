@@ -92,6 +92,7 @@ BENCHMARK_ENVIRONMENT = (
     "ARC_BENCH_RSS_LIMIT_PERCENT", "ARC_BENCH_SIZE_LIMIT_PERCENT", "ARC_BENCH_ENFORCE",
     "ARC_BENCH_OBJDUMP",
     "ARC_BENCH_BASELINE_SOURCE", "ARC_BENCH_BASELINE_DIST",
+    "ARC_BENCH_SHARD_ID", "ARC_BENCH_SHARD_COUNT",
 )
 BENCHMARK_PRESETS = {
     "coroutines": "coroutines",
@@ -378,6 +379,7 @@ def benchmark_bundle(wave: str) -> None:
     required = {
         "inputs.json", "hardware.json", "candidate-provenance.json", "baseline-provenance.json",
         "raw.tsv", "raw.json", "compile-raw.tsv", "static.tsv", "summary.tsv", "summary.json", "comparison.md",
+        "shard.json",
     }
     with tempfile.TemporaryDirectory(prefix="arc-benchmark-bundle-") as temporary:
         temporary_path = Path(temporary)
@@ -423,6 +425,8 @@ def main() -> None:
     run_parser.add_argument("profile", choices=PROFILES)
     run_parser.add_argument("--quick", action="store_true", help="use the non-enforcing development benchmark preset")
     run_parser.add_argument("--scenarios", help="comma- or space-separated benchmark scenarios")
+    run_parser.add_argument("--shard-id", help="stable identifier for this disjoint benchmark shard")
+    run_parser.add_argument("--shard-count", type=int, help="total number of shards required by the merge")
     run_parser.add_argument(
         "--benchmark-set",
         choices=BENCHMARK_PRESETS,
@@ -457,6 +461,15 @@ def main() -> None:
             if not arguments.profile.startswith("arc-bench"):
                 raise SystemExit("--scenarios is supported only for benchmark profiles")
             os.environ["ARC_BENCH_SCENARIOS"] = scenarios
+        if arguments.shard_id is not None or arguments.shard_count is not None:
+            if not arguments.profile.startswith("arc-bench"):
+                raise SystemExit("--shard-id/--shard-count are supported only for benchmark profiles")
+            if arguments.shard_id is None or arguments.shard_count is None:
+                raise SystemExit("--shard-id and --shard-count must be supplied together")
+            if arguments.shard_count < 1:
+                raise SystemExit("--shard-count must be positive")
+            os.environ["ARC_BENCH_SHARD_ID"] = arguments.shard_id
+            os.environ["ARC_BENCH_SHARD_COUNT"] = str(arguments.shard_count)
         remote_run(arguments.profile)
 
 

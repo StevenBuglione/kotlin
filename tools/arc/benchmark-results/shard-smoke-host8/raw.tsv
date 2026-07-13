@@ -1,0 +1,7 @@
+model	scenario	repetition	elapsed_seconds	throughput_ops_per_second	max_rss_kib	operations	logical_allocations
+baseline-strict	strings	1	0.113083948	5305792.825698	3440	600000	1800000
+candidate-arc	strings	1	0.132519162	4527647.103594	2672	600000	1800000
+candidate-arc	strings	2	0.133070522	4508887.400321	2644	600000	1800000
+baseline-strict	strings	2	0.113393976	5291286.373096	3440	600000	1800000
+baseline-strict	strings	3	0.112487690	5333916.982383	3464	600000	1800000
+candidate-arc	strings	3	0.135591267	4425063.746915	2636	600000	1800000

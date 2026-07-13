@@ -15,7 +15,17 @@ reporter="$root/tools/arc/benchmark_report.py"
 cache_tool="$root/tools/arc/benchmark_cache.py"
 artifacts="$state/artifacts"
 quick=${ARC_BENCH_QUICK:-0}
+shard_id=${ARC_BENCH_SHARD_ID:-full}
+shard_count=${ARC_BENCH_SHARD_COUNT:-1}
 [[ "$quick" == 0 || "$quick" == 1 ]] || { echo "ARC_BENCH_QUICK must be 0 or 1" >&2; exit 2; }
+[[ "$shard_id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || {
+    echo "ARC_BENCH_SHARD_ID must be a stable letters/digits/._- identifier" >&2
+    exit 2
+}
+[[ "$shard_count" =~ ^[0-9]+$ && $shard_count -ge 1 ]] || {
+    echo "ARC_BENCH_SHARD_COUNT must be a positive integer" >&2
+    exit 2
+}
 if [[ "$quick" == 1 ]]; then
     repetitions=${ARC_BENCH_REPETITIONS:-3}
     warmups=${ARC_BENCH_WARMUPS:-0}
@@ -203,8 +213,11 @@ default_scenarios='allocation destruction fields arrays strings virtual-dispatch
 scenario_selection=${ARC_BENCH_SCENARIOS:-$default_scenarios}
 read -r -a scenarios <<<"${scenario_selection//,/ }"
 [[ ${#scenarios[@]} -gt 0 ]] || { echo "ARC_BENCH_SCENARIOS selected no scenarios" >&2; exit 2; }
+declare -A selected_scenarios=()
 for scenario in "${scenarios[@]}"; do
     [[ " $default_scenarios " == *" $scenario "* ]] || { echo "unknown benchmark scenario: $scenario" >&2; exit 2; }
+    [[ -z "${selected_scenarios[$scenario]:-}" ]] || { echo "duplicate benchmark scenario: $scenario" >&2; exit 2; }
+    selected_scenarios[$scenario]=1
     scenario_prefix=("${run_prefix[@]}")
     # Pin single-threaded scenarios for lower scheduler noise. Worker throughput intentionally retains
     # the machine's inherited CPU set so the worker scenario continues to measure real parallelism.
@@ -340,6 +353,29 @@ Path(inputs_path).write_text(json.dumps(inputs, indent=2, sort_keys=True) + "\n"
 Path(hardware_path).write_text(json.dumps(hardware, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
 
+python3 - "$artifacts/shard.json" "$shard_id" "$shard_count" "$candidate_head" "$candidate_tree" \
+    "$baseline_head" "$baseline_tree" "${scenarios[*]}" <<'PY'
+import json
+from pathlib import Path
+import platform
+import sys
+
+path, shard_id, shard_count, candidate_commit, candidate_tree, baseline_commit, baseline_tree, scenarios = sys.argv[1:]
+payload = {
+    "schemaVersion": 1,
+    "shardId": shard_id,
+    "shardCount": int(shard_count),
+    "scenarios": scenarios.split(),
+    "candidateCommit": candidate_commit,
+    "candidateTree": candidate_tree,
+    "baselineCommit": baseline_commit,
+    "baselineTree": baseline_tree,
+    "hostname": platform.node(),
+    "pairing": "same-host-interleaved-baseline-candidate",
+}
+Path(path).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+
 set +e
 python3 "$reporter" report "$artifacts/raw.tsv" "$artifacts/compile-raw.tsv" "$artifacts/static.tsv" "$artifacts"
 report_status=$?
@@ -349,7 +385,8 @@ wave="$artifacts/wave"
 rm -rf "$wave"
 mkdir -p "$wave"
 cp "$artifacts"/inputs.json "$artifacts"/hardware.json "$artifacts"/raw.tsv "$artifacts"/raw.json "$artifacts"/compile-raw.tsv \
-    "$artifacts"/static.tsv "$artifacts"/summary.tsv "$artifacts"/summary.json "$artifacts"/comparison.md "$wave/"
+    "$artifacts"/static.tsv "$artifacts"/summary.tsv "$artifacts"/summary.json "$artifacts"/comparison.md \
+    "$artifacts"/shard.json "$wave/"
 cp "$candidate_dist/.arc-benchmark-provenance.json" "$wave/candidate-provenance.json"
 cp "$baseline_dist/.arc-benchmark-provenance.json" "$wave/baseline-provenance.json"
 echo "ARC_BENCH_WAVE_READY path=$wave status=$report_status"

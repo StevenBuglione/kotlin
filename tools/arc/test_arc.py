@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import arc
 import benchmark_cache
 import benchmark_report
+import benchmark_shards
 import no_collector_symbols
 
 
@@ -407,6 +408,40 @@ class ArcProfileTest(unittest.TestCase):
         self.assertIn("ARC_BENCH_SCENARIOS=call-arguments,fields", command)
         self.assertNotIn("UNRELATED=no", command)
         self.assertEqual(["bash", "tools/arc/benchmark_compare.sh"], command[-2:])
+
+    def test_benchmark_shards_are_explicit_and_merge_rejects_overlap(self):
+        self.assertIn("ARC_BENCH_SHARD_ID", arc.BENCHMARK_ENVIRONMENT)
+        self.assertIn("ARC_BENCH_SHARD_COUNT", arc.BENCHMARK_ENVIRONMENT)
+        script = (Path(__file__).parent / "benchmark_compare.sh").read_text()
+        self.assertIn('shard_id=${ARC_BENCH_SHARD_ID:-full}', script)
+        self.assertIn('shard_count=${ARC_BENCH_SHARD_COUNT:-1}', script)
+        self.assertIn('"$artifacts/shard.json"', script)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sources = []
+            for shard_id in ("left", "right"):
+                source = root / shard_id
+                source.mkdir()
+                sources.append(source)
+                metadata = {
+                    "schemaVersion": 1,
+                    "shardId": shard_id,
+                    "shardCount": 2,
+                    "scenarios": ["strings"],
+                    "candidateTree": "candidate-tree",
+                    "baselineTree": "baseline-tree",
+                    "baselineCommit": "baseline",
+                }
+                (source / "shard.json").write_text(__import__("json").dumps(metadata))
+                (source / "inputs.json").write_text("{}")
+                for name in benchmark_shards.REQUIRED - {"shard.json", "inputs.json"}:
+                    (source / name).write_text("{}")
+                (source / "raw.tsv").write_text(
+                    "model\tscenario\trepetition\telapsed_seconds\tthroughput_ops_per_second\tmax_rss_kib\toperations\tlogical_allocations\n"
+                    "baseline-strict\tstrings\t1\t1.0\t1.0\t1\t1\t1\n"
+                )
+            with self.assertRaisesRegex(SystemExit, "overlaps shards"):
+                benchmark_shards.merge(root / "merged", sources)
 
     def test_benchmark_build_profiles_ignore_measurement_selection(self):
         with patch.dict(

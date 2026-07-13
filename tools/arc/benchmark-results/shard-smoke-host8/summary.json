@@ -1,0 +1,140 @@
+{
+  "aggregate": {
+    "allocationCallsitesDeltaPercent": -27.881040892193308,
+    "binaryBytesDeltaPercent": -4.238170347003156,
+    "compileMaxRssKiBDeltaPercent": -3.9206441614667464,
+    "compileSecondsDeltaPercent": -4.370179948586117,
+    "releaseCallsitesDeltaPercent": 44200.0,
+    "retainCallsitesDeltaPercent": 3475.0,
+    "throughputGeomeanPercent": 84.98046471929172
+  },
+  "baseline": {
+    "allocationCallsites": 269,
+    "binaryBytes": 507200,
+    "compileMaxRssKiB": 975656,
+    "compileSeconds": 7.78,
+    "compiler": "/home/olfa/codex-kotlin-arc-primary-bench-baseline-v1.9.10/kotlin-native/dist/bin/konanc",
+    "compilerCommit": "3db61efe5e892bf27115f1ebcab957d903067ed4",
+    "memoryModel": "strict",
+    "model": "baseline-strict",
+    "releaseCallsites": 0,
+    "retainCallsites": 12
+  },
+  "candidate": {
+    "allocationCallsites": 194,
+    "binaryBytes": 485704,
+    "compileMaxRssKiB": 937404,
+    "compileSeconds": 7.44,
+    "compiler": "/home/olfa/codex-kotlin-arc-primary-bench/kotlin-native/dist/bin/konanc",
+    "compilerCommit": "4e19dc483b213abac694518bd48e9acfb4f457a1",
+    "memoryModel": "arc",
+    "model": "candidate-arc",
+    "releaseCallsites": 442,
+    "retainCallsites": 429
+  },
+  "failures": [
+    "strings: latency regression 17.674% > 5.000%",
+    "throughput geomean 84.980% < 100.000%"
+  ],
+  "passed": false,
+  "raw": {
+    "compilation": [
+      {
+        "compileMaxRssKiB": 975656,
+        "compileSeconds": 7.78,
+        "model": "baseline-strict",
+        "repetition": 1
+      },
+      {
+        "compileMaxRssKiB": 937404,
+        "compileSeconds": 7.44,
+        "model": "candidate-arc",
+        "repetition": 1
+      }
+    ],
+    "runtime": [
+      {
+        "elapsedSeconds": 0.113083948,
+        "logicalAllocations": 1800000,
+        "maxRssKiB": 3440,
+        "model": "baseline-strict",
+        "operations": 600000,
+        "repetition": 1,
+        "scenario": "strings",
+        "throughputOpsPerSecond": 5305792.825698
+      },
+      {
+        "elapsedSeconds": 0.132519162,
+        "logicalAllocations": 1800000,
+        "maxRssKiB": 2672,
+        "model": "candidate-arc",
+        "operations": 600000,
+        "repetition": 1,
+        "scenario": "strings",
+        "throughputOpsPerSecond": 4527647.103594
+      },
+      {
+        "elapsedSeconds": 0.133070522,
+        "logicalAllocations": 1800000,
+        "maxRssKiB": 2644,
+        "model": "candidate-arc",
+        "operations": 600000,
+        "repetition": 2,
+        "scenario": "strings",
+        "throughputOpsPerSecond": 4508887.400321
+      },
+      {
+        "elapsedSeconds": 0.113393976,
+        "logicalAllocations": 1800000,
+        "maxRssKiB": 3440,
+        "model": "baseline-strict",
+        "operations": 600000,
+        "repetition": 2,
+        "scenario": "strings",
+        "throughputOpsPerSecond": 5291286.373096
+      },
+      {
+        "elapsedSeconds": 0.11248769,
+        "logicalAllocations": 1800000,
+        "maxRssKiB": 3464,
+        "model": "baseline-strict",
+        "operations": 600000,
+        "repetition": 3,
+        "scenario": "strings",
+        "throughputOpsPerSecond": 5333916.982383
+      },
+      {
+        "elapsedSeconds": 0.135591267,
+        "logicalAllocations": 1800000,
+        "maxRssKiB": 2636,
+        "model": "candidate-arc",
+        "operations": 600000,
+        "repetition": 3,
+        "scenario": "strings",
+        "throughputOpsPerSecond": 4425063.746915
+      }
+    ]
+  },
+  "scenarios": [
+    {
+      "baselineMedianSeconds": 0.113083948,
+      "baselineMedianThroughput": 5305792.825698,
+      "baselinePeakRssKiB": 3464,
+      "candidateMedianSeconds": 0.133070522,
+      "candidateMedianThroughput": 4508887.400321,
+      "candidatePeakRssKiB": 2672,
+      "latencyDeltaPercent": 17.674103489913517,
+      "logicalAllocations": 1800000,
+      "passed": false,
+      "rssDeltaPercent": -22.863741339491916,
+      "scenario": "strings",
+      "throughputRatioPercent": 84.98046471929172
+    }
+  ],
+  "thresholds": {
+    "rssLimitPercent": 5.0,
+    "scenarioRegressionPercent": 5.0,
+    "sizeLimitPercent": 5.0,
+    "throughputFloorPercent": 100.0
+  }
+}
