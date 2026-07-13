@@ -1,0 +1,67 @@
+{
+  "measuredAtUtc": "2026-07-13",
+  "host": {
+    "ssh": "olfa@10.10.10.8",
+    "hostname": "venus",
+    "kernel": "Linux 6.18.6-061806-generic x86_64",
+    "cpu": "AMD RYZEN AI MAX+ 395 w/ Radeon 8060S",
+    "logicalCpus": 32,
+    "pinnedCpu": 16
+  },
+  "fixture": {
+    "path": "tools/arc/fixtures/benchmark.kt",
+    "sha256": "e69a89cda9684c695a7dedd90808ab20375fe32c1e589fbe1d2ebf028142e35b",
+    "scenarioArgument": "coroutines"
+  },
+  "runner": {
+    "remotePath": "/tmp/benchmark-coroutine-pairs.py",
+    "sha256": "4a70a4897de6712c7a95f86cfd1094eb0f84f01a3aa924a1b8a0b617c47d1f3c",
+    "warmupsPerBinary": 5,
+    "pairs": 9,
+    "alternatingOrder": true,
+    "clock": "time.perf_counter_ns"
+  },
+  "candidate": {
+    "authoritativeEmittedCommit": "9831d54f8b7f9d619868fbd2855d38094b874ced",
+    "authoritativeEmittedTree": "30a1a3dfe758aa50dfce34be03128e074695dbaa",
+    "subject": "[K/N] Consume owned coroutine result stores",
+    "remoteBuildWorktree": "/home/olfa/codex-kotlin-arc-owned-result",
+    "remoteBuildHead": "e1c95dda6321e9371435a8f692e86535ebb00a1a",
+    "remoteBuildHeadTree": "a443451f1e1a18549de3d6bb8be851c9df9dccb1",
+    "buildState": "The dist was built from the remote worktree's uncommitted emitted owned-result changes, subsequently committed without semantic modification as 9831d54f8b7f9d619868fbd2855d38094b874ced. The compiler-jar and executable hashes below pin the exact measured artifacts.",
+    "compilerJarSha256": "e0c9206e172bb771c2e0599fc08a974c3c6d1cb0cfa6762ae72523e30564a65e",
+    "cinteropKlib": "/tmp/coroutine-current-cinterop.klib",
+    "cinteropKlibSha256": "b23ae9f3c76342c1d5a08b80b1994493ad147bc064c710137c751a012acc5c00",
+    "binary": "/tmp/coroutine-owned-bench.kexe",
+    "binaryBuiltAtUtc": "2026-07-13T09:43:30Z",
+    "binaryBytes": 526656,
+    "binarySha256": "baa2113e9256940b226468a5a19d8e4f784a2e62681cc29ea75992286e01281c"
+  },
+  "baseline": {
+    "memoryModel": "strict",
+    "compilerSnapshotCommit": "03d564ebca8f19d7804e1aed2364baabe4f156ba",
+    "compilerSnapshotTree": "7e718de0786d4d471e4e7b1d5f881eee7a588c71",
+    "subject": "Codex ARC snapshot eb120420d97f4c45ab2ac95a6c458422",
+    "remoteBuildWorktree": "/home/olfa/codex-kotlin-arc-ssa",
+    "compilerJarSha256": "09c6621a6761fd10251420edeca08d271484032cf70bb38c777a1dd6df3ab85c",
+    "cinteropKlib": "/tmp/coroutine-strict-cinterop.klib",
+    "cinteropKlibSha256": "aa5ec7227a4994e0d844cc5cdb2b8ce0ffdca9b0975d62853903d2974befdad7",
+    "binary": "/tmp/coroutine-strict-bench.kexe",
+    "binaryBuiltAtUtc": "2026-07-13T07:21:01Z",
+    "binaryBytes": 507184,
+    "binarySha256": "6942193360cfd3b7c2fee37ea01e6979451e511d547dc2ab18ccf51333f59ca8"
+  },
+  "dynamicProfile": {
+    "source": "/tmp/coroutine-profile.kt",
+    "sourceSha256": "8ed04c22f7bca2a0965b1b6ee0b09fa6cc5a07f813886d9f96a0d9aed78b3fa2",
+    "binary": "/tmp/coroutine-owned-profile.kexe",
+    "binarySha256": "619e7cb50a9b58a135fe19ec9d47b52db83bb722f1c37141cbd5a5356de3fbe9",
+    "gdbScript": "/tmp/count-coroutine.gdb",
+    "gdbScriptSha256": "165387ecab90b2f16eb35e839b9f71858a0a0f4eecb69e20dec6b9b29c528288"
+  },
+  "notInMeasuredBinary": {
+    "semanticProofCommit": "6743ff4f1c7145c32817a93ea5e68d8f312097f8",
+    "realIrSelectorCommit": "ca0fdbfecb2833b0e004330c0a6247a095feddc6",
+    "reason": "These commits prove and select the immortal EmptyCoroutineContext return, but no planning or LLVM emission seam consumes the selection yet. They cannot affect this candidate binary."
+  }
+}

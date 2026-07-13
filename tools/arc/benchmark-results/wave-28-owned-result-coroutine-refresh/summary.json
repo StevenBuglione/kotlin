@@ -1,0 +1,35 @@
+{
+  "wave": "wave-28-owned-result-coroutine-refresh",
+  "scenario": "coroutines",
+  "host": "olfa@10.10.10.8",
+  "cpu": 16,
+  "pairs": 9,
+  "expectedOutput": "ARC_BENCH_OK scenario=coroutines checksum=45000150000 operations=300000 allocations=900000",
+  "baseline": {
+    "memoryModel": "strict",
+    "medianSeconds": 0.107672918,
+    "medianMaxRssKiB": 3696,
+    "binaryBytes": 507184,
+    "binarySha256": "6942193360cfd3b7c2fee37ea01e6979451e511d547dc2ab18ccf51333f59ca8"
+  },
+  "candidate": {
+    "memoryModel": "arc",
+    "medianSeconds": 0.115152887,
+    "medianMaxRssKiB": 2432,
+    "binaryBytes": 526656,
+    "binarySha256": "baa2113e9256940b226468a5a19d8e4f784a2e62681cc29ea75992286e01281c"
+  },
+  "medianPairedThroughputRatio": 0.9336201648585003,
+  "geomeanPairedThroughputRatio": 0.9332910868285101,
+  "candidateThroughputRegressionPercent": 6.67089131714899,
+  "candidateMedianRssChangePercent": -34.1991341991342,
+  "candidateBinarySizeChangeBytes": 19472,
+  "candidateBinarySizeChangePercent": 3.8392378308464,
+  "dynamicPerIntCoroutine": {
+    "updateStackRef": 1,
+    "updateHeapRef": 11,
+    "updateReturnRef": 12,
+    "addHeapRef": 26
+  },
+  "immortalEmptyContextSelectorEmitted": false
+}

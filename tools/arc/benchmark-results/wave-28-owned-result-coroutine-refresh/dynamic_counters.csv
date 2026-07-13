@@ -1,0 +1,5 @@
+count,update_stack_ref,update_heap_ref,update_return_ref,add_heap_ref
+0,0,3,6,9
+1,1,26,24,53
+2,2,37,36,79
+steady_state_per_int_coroutine,1,11,12,26
