@@ -149,11 +149,28 @@ internal data class ArcCodegenOwnershipPlan(
     val resultCompanionImmortalVariables: Set<IrVariable>,
     val selectiveInlineStringAppendCalls: Set<IrCall>,
     val coroutineGuaranteedPhiSelections: Map<IrSimpleFunction, ArcCoroutineGuaranteedPhiIRSelection>,
+    val matchingSetLocalAliases: Map<IrVariable, ArcMatchingSetLocalAliasIRSelection>,
 ) {
     val scopedArcReferenceLoadBoundaries: Set<IrExpression> =
         Collections.newSetFromMap(IdentityHashMap<IrExpression, Boolean>()).apply {
             addAll(scopedArcReferenceLoads.values)
         }
+
+    val matchingSetLocalAliasReads: Map<IrGetValue, ArcMatchingSetLocalAliasIRSelection> =
+        IdentityHashMap<IrGetValue, ArcMatchingSetLocalAliasIRSelection>().apply {
+            matchingSetLocalAliases.values.forEach { selection ->
+                selection.readEventIds.keys.forEach { read ->
+                    check(put(read, selection) == null) { "matching-set read belongs to two selections" }
+                }
+            }
+        }
+
+    val matchingSetLocalAliasesByFunction: Map<IrSimpleFunction, List<ArcMatchingSetLocalAliasIRSelection>> =
+        Collections.unmodifiableMap(IdentityHashMap<IrSimpleFunction, List<ArcMatchingSetLocalAliasIRSelection>>().apply {
+            matchingSetLocalAliases.values.forEach { selection ->
+                put(selection.function, (get(selection.function).orEmpty() + selection).toList())
+            }
+        })
 
     companion object {
         val Empty = ArcCodegenOwnershipPlan(
@@ -186,7 +203,43 @@ internal data class ArcCodegenOwnershipPlan(
             resultCompanionImmortalVariables = emptySet(),
             selectiveInlineStringAppendCalls = emptySet(),
             coroutineGuaranteedPhiSelections = emptyMap(),
+            matchingSetLocalAliases = emptyMap(),
         )
+    }
+}
+
+/** Exact IR-to-emission authorization produced only after [ArcMatchingSetClosure] succeeds. */
+internal data class ArcMatchingSetLocalAliasIRSelection(
+    val function: IrSimpleFunction,
+    val variable: IrVariable,
+    val initializer: IrGetValue,
+    val anchor: IrValueParameter,
+    val incrementEventId: ArcMatchingSetEventId,
+    val decrementEventId: ArcMatchingSetEventId,
+    val readEventIds: Map<IrGetValue, ArcMatchingSetEventId>,
+    val matchingSet: ArcMatchingSet,
+) {
+    val allEventIds: Set<ArcMatchingSetEventId> = linkedSetOf<ArcMatchingSetEventId>().apply {
+        add(incrementEventId)
+        add(decrementEventId)
+        addAll(readEventIds.values)
+    }
+}
+
+/** Mutable per-function codegen ledger; unknown, duplicate, or missing consumption is shape drift. */
+internal class ArcMatchingSetConsumptionLedger(expected: Set<ArcMatchingSetEventId>) {
+    private val expected = expected.toSet()
+    private val consumed = linkedSetOf<ArcMatchingSetEventId>()
+
+    fun consume(event: ArcMatchingSetEventId) {
+        check(event in expected) { "unknown matching-set emission event: $event" }
+        check(consumed.add(event)) { "duplicate matching-set emission event: $event" }
+    }
+
+    fun verifyComplete() {
+        check(consumed == expected) {
+            "matching-set emission shape drifted: missing=${expected - consumed}, unexpected=${consumed - expected}"
+        }
     }
 }
 
@@ -623,6 +676,7 @@ internal fun runArcOwnershipPlanning(
     val borrowedCharArrayConsumerSymbols = resolveBorrowedCharArrayConsumerSymbols(generationState)
     val selectiveInlineStringAppendCalls = linkedSetOf<IrCall>()
     val coroutineGuaranteedPhiSelections = IdentityHashMap<IrSimpleFunction, ArcCoroutineGuaranteedPhiIRSelection>()
+    val matchingSetLocalAliases = IdentityHashMap<IrVariable, ArcMatchingSetLocalAliasIRSelection>()
     val canonicalLockedReadPlans = resolveCanonicalLockedReadPlans(generationState, input.module)
     canonicalLockedReadPlans.forEach { plan ->
         lockedReadResultSlotForwardingCalls[plan.tailCall] = plan
@@ -644,6 +698,23 @@ internal fun runArcOwnershipPlanning(
             }
 
             override fun visitSimpleFunction(declaration: IrSimpleFunction) {
+                val matchingSelections = selectVerifiedMatchingSetLocalAliases(generationState, declaration)
+                if (generationState.context.config.arcDiagnosticsEnabled) {
+                    generationState.context.log {
+                        "ARC matching-set local-alias diagnostic " +
+                                "${declaration.fqNameForIrSerialization.asString()}: " +
+                                "sets=${matchingSelections.size}, " +
+                                "copiesRemoved=${matchingSelections.size}, " +
+                                "destroysRemoved=${matchingSelections.size}, " +
+                                "reads=${matchingSelections.sumOf { it.readEventIds.size }}"
+                    }
+                } else {
+                    matchingSelections.forEach { selection ->
+                        check(matchingSetLocalAliases.put(selection.variable, selection) == null) {
+                            "duplicate matching-set local alias: ${selection.variable.name}"
+                        }
+                    }
+                }
                 val coroutinePhiSelection = selectVerifiedCoroutineGuaranteedPhiWebs(generationState, declaration)
                 if (generationState.context.config.arcDiagnosticsEnabled) {
                     coroutinePhiSelection?.let { selection ->
@@ -718,7 +789,7 @@ internal fun runArcOwnershipPlanning(
                     input.lifetimes,
                 )
                 val guaranteedAliases = selectVerifiedBorrowedGuaranteedAliases(generationState, declaration)
-                borrowedGuaranteedAliases += guaranteedAliases
+                borrowedGuaranteedAliases += guaranteedAliases.filterNot { it in matchingSetLocalAliases }
                 borrowedMutableReads += selectVerifiedBorrowedMutableReads(
                     generationState,
                     declaration,
@@ -817,6 +888,7 @@ internal fun runArcOwnershipPlanning(
             resultCompanionImmortalVariables,
             selectiveInlineStringAppendCalls,
             coroutineGuaranteedPhiSelections,
+            matchingSetLocalAliases,
         ),
     )
 }
@@ -1066,6 +1138,222 @@ private data class ArcGuaranteedAliasUseAnalysis(
     val finalExplicitReferenceArgument: Boolean,
     val directKotlinCall: Boolean,
 )
+
+/**
+ * Authenticate the first emitted matching-set family against exact lowered IR identities.
+ *
+ * The selected mutable local would ordinarily create one owning frame slot: initialization emits
+ * the increment and LeaveFrame owns its normal/unwind decrement. All uses are +0 arguments while
+ * the ABI-guaranteed parameter remains live for the complete function invocation.
+ */
+private fun selectVerifiedMatchingSetLocalAliases(
+    generationState: NativeGenerationState,
+    function: IrSimpleFunction,
+): List<ArcMatchingSetLocalAliasIRSelection> {
+    if (generationState.context.memoryModel != MemoryModel.ARC ||
+        !generationState.context.config.optimizationsEnabled ||
+        generationState.context.shouldContainDebugInfo() || function.isArcSuspendLike() ||
+        function.isExternal || (function.isInline && function.typeParameters.any { it.isReified }) ||
+        function.hasAnnotation(KonanFqNames.arcDeinit)
+    ) return emptyList()
+    val body = function.body as? IrBlockBody ?: return emptyList()
+    val guaranteedParameters = function.allParameters
+        .filter { it.type.binaryTypeIsReference() }
+        .associateBy { it.symbol }
+    if (guaranteedParameters.isEmpty()) return emptyList()
+
+    return body.statements.mapIndexedNotNull { declarationIndex, statement ->
+        val variable = statement as? IrVariable ?: return@mapIndexedNotNull null
+        val initializer = variable.initializer as? IrGetValue ?: return@mapIndexedNotNull null
+        val anchor = guaranteedParameters[initializer.symbol] ?: return@mapIndexedNotNull null
+        if (!variable.isVar || variable.parent !== function || !variable.type.binaryTypeIsReference() ||
+            variable.hasAnnotation(KonanFqNames.arcWeak) || variable.hasAnnotation(KonanFqNames.arcUnowned) ||
+            variable.hasAnnotation(KonanFqNames.volatile)
+        ) return@mapIndexedNotNull null
+
+        val reads = mutableListOf<IrGetValue>()
+        val calls = mutableListOf<IrCall>()
+        val suffix = body.statements.drop(declarationIndex + 1)
+        var valid = true
+        suffix.forEachIndexed { suffixIndex, suffixStatement ->
+            if (!valid) return@forEachIndexed
+            if (suffixStatement is IrReturn) {
+                valid = suffixIndex == suffix.lastIndex && suffixStatement.returnTargetSymbol == function.symbol &&
+                        suffixStatement.value.type.isUnit()
+                return@forEachIndexed
+            }
+            val call = suffixStatement as? IrCall
+            if (call == null || !call.type.isUnit() || !call.isDirectKotlinCall(generationState)) {
+                valid = false
+                return@forEachIndexed
+            }
+            val (parameter, argument) = call.getArgumentsWithIr().lastOrNull() ?: run {
+                valid = false
+                return@forEachIndexed
+            }
+            val read = argument as? IrGetValue
+            if (read?.symbol != variable.symbol || !parameter.type.binaryTypeIsReference()) {
+                valid = false
+                return@forEachIndexed
+            }
+            val readsInCall = mutableListOf<IrGetValue>()
+            call.acceptVoid(object : IrElementVisitorVoid {
+                override fun visitElement(element: IrElement) {
+                    element.acceptChildrenVoid(this)
+                }
+
+                override fun visitFunction(declaration: IrFunction) {
+                    valid = false
+                }
+
+                override fun visitGetValue(expression: IrGetValue) {
+                    if (expression.symbol == variable.symbol) readsInCall += expression
+                    expression.acceptChildrenVoid(this)
+                }
+            })
+            if (readsInCall.singleOrNull() !== read) {
+                valid = false
+                return@forEachIndexed
+            }
+            reads += read
+            calls += call
+        }
+        if (!valid || reads.size < 2) return@mapIndexedNotNull null
+
+        val allReads = mutableListOf<IrGetValue>()
+        var assigned = false
+        var nestedCapture = false
+        var nestedDepth = 0
+        body.acceptVoid(object : IrElementVisitorVoid {
+            override fun visitElement(element: IrElement) {
+                element.acceptChildrenVoid(this)
+            }
+
+            override fun visitFunction(declaration: IrFunction) {
+                nestedDepth++
+                declaration.acceptChildrenVoid(this)
+                nestedDepth--
+            }
+
+            override fun visitGetValue(expression: IrGetValue) {
+                if (expression.symbol == variable.symbol) {
+                    allReads += expression
+                    if (nestedDepth != 0) nestedCapture = true
+                }
+                expression.acceptChildrenVoid(this)
+            }
+
+            override fun visitSetValue(expression: IrSetValue) {
+                if (expression.symbol == variable.symbol) assigned = true
+                expression.acceptChildrenVoid(this)
+            }
+        })
+        if (assigned || nestedCapture || allReads.size != reads.size ||
+            allReads.indices.any { allReads[it] !== reads[it] }
+        ) return@mapIndexedNotNull null
+
+        buildMatchingSetLocalAliasSelection(function, declarationIndex, variable, initializer, anchor, reads, calls)
+    }
+}
+
+private fun buildMatchingSetLocalAliasSelection(
+    function: IrSimpleFunction,
+    declarationIndex: Int,
+    variable: IrVariable,
+    initializer: IrGetValue,
+    anchorParameter: IrValueParameter,
+    reads: List<IrGetValue>,
+    calls: List<IrCall>,
+): ArcMatchingSetLocalAliasIRSelection? {
+    if (reads.size != calls.size || reads.isEmpty()) return null
+    val functionId = (function.symbol.signature ?: function.symbol.privateSignature)?.toString()
+        ?: function.fqNameForIrSerialization.asString()
+    val prefix = arcMatchingSetEventPrefix(functionId, declarationIndex, variable.startOffset, variable.name.asString())
+    val incrementId = ArcMatchingSetEventId("$prefix#copy:0")
+    val decrementId = ArcMatchingSetEventId("$prefix#destroy:0")
+    val readEventIds = IdentityHashMap<IrGetValue, ArcMatchingSetEventId>()
+    reads.forEachIndexed { index, read -> readEventIds[read] = ArcMatchingSetEventId("$prefix#use:$index") }
+
+    val entry = ArcBlockId("matching_entry")
+    val cleanup = ArcBlockId("matching_cleanup")
+    val anchor = ArcSSAValue("$prefix#anchor")
+    val alias = ArcSSAValue("$prefix#alias")
+    val blocks = linkedMapOf<ArcBlockId, ArcSSABlock>()
+    val edges = linkedSetOf<ArcSSAEdge>()
+    blocks[entry] = ArcSSABlock(entry, listOf(
+        ArcSSAOperation.Introduce(anchor, ArcOwnership.Guaranteed),
+        ArcSSAOperation.Forward(anchor, alias),
+    ))
+    var previous = entry
+    calls.indices.forEach { index ->
+        val callBlock = ArcBlockId("matching_call_$index")
+        val unwindEdge = ArcBlockId("matching_unwind_edge_$index")
+        blocks[callBlock] = ArcSSABlock(callBlock, listOf(
+            ArcSSAOperation.Use(alias, ArcSSAUseKind.Borrow, mayThrow = true),
+        ))
+        blocks[unwindEdge] = ArcSSABlock(unwindEdge, emptyList())
+        edges += ArcSSAEdge(previous, callBlock)
+        edges += ArcSSAEdge(callBlock, unwindEdge, ArcSSAEdgeKind.Exceptional)
+        edges += ArcSSAEdge(unwindEdge, cleanup)
+        previous = callBlock
+    }
+    val normalCleanupEdge = ArcBlockId("matching_normal_cleanup_edge")
+    blocks[normalCleanupEdge] = ArcSSABlock(normalCleanupEdge, emptyList())
+    blocks[cleanup] = ArcSSABlock(cleanup, listOf(ArcSSAOperation.Use(alias, ArcSSAUseKind.Borrow)))
+    edges += ArcSSAEdge(previous, normalCleanupEdge)
+    edges += ArcSSAEdge(normalCleanupEdge, cleanup)
+
+    val cfg = ArcOwnershipSSAInput(entry, blocks, edges)
+    val identities = ArcRCIdentityAnalysis.analyze(ArcRCIdentityInput(cfg, emptyList()))
+    val slotFlow = ArcSSASlotFlowAnalysis.analyze(cfg, emptyList())
+    val result = ArcMatchingSetClosure.analyze(ArcMatchingSetInput(
+        cfg,
+        identities,
+        slotFlow,
+        listOf(
+            ArcMatchingSetEvent(
+                incrementId,
+                ArcRCPosition(entry, 1),
+                ArcMatchingSetEventKind.Increment,
+                alias,
+                ArcMatchingSetLifetimeWitness.Guaranteed(
+                    anchor,
+                    ArcMatchingSetGuaranteedToken.AbiScope(
+                        ArcMatchingSetGuaranteedScopeId("$functionId#abi:${anchorParameter.index}")
+                    ),
+                    setOf(decrementId),
+                ),
+            ),
+            ArcMatchingSetEvent(
+                decrementId,
+                ArcRCPosition(cleanup, 0),
+                ArcMatchingSetEventKind.Decrement,
+                alias,
+            ),
+        ),
+    ))
+    val matchingSet = result.accepted.singleOrNull() ?: return null
+    if (result.rejected.isNotEmpty() || matchingSet.increments != setOf(incrementId) ||
+        matchingSet.decrements != setOf(decrementId)
+    ) return null
+    return ArcMatchingSetLocalAliasIRSelection(
+        function,
+        variable,
+        initializer,
+        anchorParameter,
+        incrementId,
+        decrementId,
+        readEventIds,
+        matchingSet,
+    )
+}
+
+internal fun arcMatchingSetEventPrefix(
+    functionId: String,
+    declarationIndex: Int,
+    startOffset: Int,
+    variableName: String,
+): String = "$functionId#decl:$declarationIndex@$startOffset:$variableName"
 
 /**
  * Select an unmodified local `var` whose sole value is a guaranteed parameter and whose only read

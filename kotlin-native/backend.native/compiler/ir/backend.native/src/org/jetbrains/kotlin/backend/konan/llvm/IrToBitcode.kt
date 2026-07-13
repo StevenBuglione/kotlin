@@ -20,6 +20,8 @@ import org.jetbrains.kotlin.backend.konan.arc.ArcDiscardedReturnedReceiverGroup
 import org.jetbrains.kotlin.backend.konan.arc.ArcRootedGlobalProjectionPlan
 import org.jetbrains.kotlin.backend.konan.arc.ArcResultCompanionImmortalLoadPlan
 import org.jetbrains.kotlin.backend.konan.arc.ArcCoroutineGuaranteedPhiIRSelection
+import org.jetbrains.kotlin.backend.konan.arc.ArcMatchingSetConsumptionLedger
+import org.jetbrains.kotlin.backend.konan.arc.ArcMatchingSetLocalAliasIRSelection
 import org.jetbrains.kotlin.backend.konan.arc.hasExactCoroutinePhysicalBackedge
 import org.jetbrains.kotlin.backend.konan.arc.unwrapExactArcCoroutineSpillRead
 import org.jetbrains.kotlin.backend.konan.optimizations.ARC_SELECTIVE_INLINE_METADATA
@@ -245,6 +247,41 @@ internal class CodeGeneratorVisitor(
     private var currentDiscardedReturnedReceiverSeedSlots:
             MutableMap<ArcDiscardedReturnedReceiverGroup, LLVMValueRef>? = null
     private var currentCoroutineGuaranteedPhiEmission: CoroutineGuaranteedPhiEmission? = null
+    private var currentMatchingSetLocalAliasEmission: MatchingSetLocalAliasEmission? = null
+
+    /** Consumes every identity-authenticated copy/destroy/use authorization exactly once. */
+    private inner class MatchingSetLocalAliasEmission(
+        selections: List<ArcMatchingSetLocalAliasIRSelection>,
+    ) {
+        private val selections = selections.toList()
+        private val ledger = ArcMatchingSetConsumptionLedger(
+            selections.flatMapTo(linkedSetOf()) { it.allEventIds }
+        )
+        private val declarations = Collections.newSetFromMap(IdentityHashMap<IrVariable, Boolean>())
+
+        fun markDeclaration(selection: ArcMatchingSetLocalAliasIRSelection, variable: IrVariable) {
+            check(variable === selection.variable && declarations.add(variable)) {
+                "duplicate or drifted matching-set local declaration: ${ir2string(variable)}"
+            }
+            ledger.consume(selection.incrementEventId)
+            // createImmutable allocates no owning frame slot, so the exact LeaveFrame-owned
+            // destroy paired with this variable is suppressed together with initialization.
+            ledger.consume(selection.decrementEventId)
+        }
+
+        fun markRead(selection: ArcMatchingSetLocalAliasIRSelection, read: IrGetValue) {
+            ledger.consume(requireNotNull(selection.readEventIds[read]) {
+                "matching-set local read changed identity: ${ir2string(read)}"
+            })
+        }
+
+        fun verifyConsumed() {
+            check(declarations.size == selections.size && selections.all { it.variable in declarations }) {
+                "matching-set local declarations drifted: expected=${selections.size}, actual=${declarations.size}"
+            }
+            ledger.verifyComplete()
+        }
+    }
 
     /** One exact, verifier-selected `BaseContinuationImpl.resumeWith` emission. */
     private inner class CoroutineGuaranteedPhiEmission(
@@ -742,6 +779,20 @@ internal class CodeGeneratorVisitor(
     private inner class VariableScope : InnerScopeImpl() {
 
         override fun genDeclareVariable(variable: IrVariable, value: LLVMValueRef?, variableLocation: VariableDebugLocation?): Int {
+            arcOwnership.matchingSetLocalAliases[variable]?.let { selection ->
+                val initializer = variable.initializer as? IrGetValue
+                require(context.memoryModel == MemoryModel.ARC && context.config.optimizationsEnabled &&
+                        !context.shouldContainDebugInfo() && !context.config.arcDiagnosticsEnabled &&
+                        value != null && variable.isVar && variable.type.binaryTypeIsReference() &&
+                        initializer === selection.initializer && initializer.symbol.owner === selection.anchor &&
+                        selection.function === functionGenerationContext.irFunction) {
+                    "matching-set local alias escaped its exact declaration shape: ${ir2string(variable)}"
+                }
+                requireNotNull(currentMatchingSetLocalAliasEmission) {
+                    "matching-set local alias was emitted outside its selected function"
+                }.markDeclaration(selection, variable)
+                return functionGenerationContext.vars.createImmutable(variable, value)
+            }
             if (variable in arcOwnership.rootedProjectionVariables) {
                 require(context.memoryModel == MemoryModel.ARC && context.config.optimizationsEnabled &&
                         !context.shouldContainDebugInfo() && value != null && variable.isVar &&
@@ -943,10 +994,14 @@ internal class CodeGeneratorVisitor(
         val previousArcOwnedResultForwarding = currentArcOwnedResultForwarding
         val previousDiscardedReturnedReceiverSeedSlots = currentDiscardedReturnedReceiverSeedSlots
         val previousCoroutineGuaranteedPhiEmission = currentCoroutineGuaranteedPhiEmission
+        val previousMatchingSetLocalAliasEmission = currentMatchingSetLocalAliasEmission
         currentDiscardedReturnedReceiverSeedSlots = IdentityHashMap()
         currentCoroutineGuaranteedPhiEmission = (declaration as? IrSimpleFunction)?.let {
             arcOwnership.coroutineGuaranteedPhiSelections[it]
         }?.let(::CoroutineGuaranteedPhiEmission)
+        currentMatchingSetLocalAliasEmission = (declaration as? IrSimpleFunction)?.let {
+            arcOwnership.matchingSetLocalAliasesByFunction[it]
+        }?.takeIf { it.isNotEmpty() }?.let(::MatchingSetLocalAliasEmission)
         currentArcOwnedResultForwarding = if (!context.shouldContainDebugInfo()) {
             (declaration as? IrSimpleFunction)?.let { arcOwnership.ownedResultForwarding[it] }
         } else {
@@ -986,6 +1041,7 @@ internal class CodeGeneratorVisitor(
                                     else -> TODO(ir2string(body))
                                 }
                                 currentCoroutineGuaranteedPhiEmission?.verifyConsumed()
+                                currentMatchingSetLocalAliasEmission?.verifyConsumed()
                             }
                         }
                     }
@@ -995,6 +1051,7 @@ internal class CodeGeneratorVisitor(
             currentArcOwnedResultForwarding = previousArcOwnedResultForwarding
             currentDiscardedReturnedReceiverSeedSlots = previousDiscardedReturnedReceiverSeedSlots
             currentCoroutineGuaranteedPhiEmission = previousCoroutineGuaranteedPhiEmission
+            currentMatchingSetLocalAliasEmission = previousMatchingSetLocalAliasEmission
         }
 
 
@@ -1590,6 +1647,20 @@ internal class CodeGeneratorVisitor(
 
     private fun evaluateGetValue(value: IrGetValue, resultSlot: LLVMValueRef?): LLVMValueRef {
         context.log{"evaluateGetValue               : ${ir2string(value)}"}
+        arcOwnership.matchingSetLocalAliasReads[value]?.let { selection ->
+            require(resultSlot == null && value.symbol.owner === selection.variable &&
+                    context.memoryModel == MemoryModel.ARC && context.config.optimizationsEnabled &&
+                    !context.shouldContainDebugInfo() && !context.config.arcDiagnosticsEnabled) {
+                "matching-set local read escaped its exact +0 call-argument shape: ${ir2string(value)}"
+            }
+            requireNotNull(currentMatchingSetLocalAliasEmission) {
+                "matching-set local read was emitted outside its selected function"
+            }.markRead(selection, value)
+            // This authorization fixes the variable representation to a non-owning ValueRecord.
+            // Do not let an older read optimization rediscover the same mutable source variable
+            // as a frame slot after declaration emission has removed that slot.
+            return currentCodeContext.genGetValue(value.symbol.owner, resultSlot)
+        }
         currentCoroutineGuaranteedPhiEmission?.let { emission ->
             if (value === emission.selection.currentJoinedRead || value === emission.selection.parameterJoinedRead) {
                 require(resultSlot == null && context.memoryModel == MemoryModel.ARC &&

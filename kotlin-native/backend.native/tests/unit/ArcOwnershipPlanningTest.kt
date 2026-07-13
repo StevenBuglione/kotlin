@@ -16,6 +16,40 @@ import org.junit.Test
 
 class ArcOwnershipPlanningTest {
     @Test
+    fun matchingSetEventIdsDistinguishSyntheticAliasesAtTheSameSourcePosition() {
+        val first = arcMatchingSetEventPrefix("sample.foo", 0, -1, "alias")
+        val second = arcMatchingSetEventPrefix("sample.foo", 1, -1, "alias")
+
+        assertTrue(first != second)
+    }
+
+    @Test
+    fun matchingSetConsumptionLedgerRequiresEveryStableEventExactlyOnce() {
+        val copy = ArcMatchingSetEventId("function@1#copy:0")
+        val destroy = ArcMatchingSetEventId("function@1#destroy:0")
+        val read = ArcMatchingSetEventId("function@1#use:0")
+        val ledger = ArcMatchingSetConsumptionLedger(setOf(copy, destroy, read))
+
+        ledger.consume(copy)
+        ledger.consume(destroy)
+        assertFailsShapeDrift { ledger.verifyComplete() }
+        ledger.consume(read)
+        ledger.verifyComplete()
+    }
+
+    @Test
+    fun matchingSetConsumptionLedgerRejectsDuplicateAndUnknownEvents() {
+        val copy = ArcMatchingSetEventId("function@1#copy:0")
+        val unknown = ArcMatchingSetEventId("function@1#copy:1")
+        val ledger = ArcMatchingSetConsumptionLedger(setOf(copy))
+
+        assertFailsShapeDrift { ledger.consume(unknown) }
+        ledger.consume(copy)
+        assertFailsShapeDrift { ledger.consume(copy) }
+        ledger.verifyComplete()
+    }
+
+    @Test
     fun resultSlotForwardingAuthorizationRequiresEverySafetyGate() {
         val eligible = ArcResultSlotForwardingEligibility(
             arcEnabled = true,
@@ -39,6 +73,16 @@ class ArcOwnershipPlanningTest {
         assertFalse(eligible.copy(referenceResult = false).isAuthorized())
         assertFalse(eligible.copy(nonUnitResult = false).isAuthorized())
         assertFalse(eligible.copy(nonNothingResult = false).isAuthorized())
+    }
+
+    private fun assertFailsShapeDrift(block: () -> Unit) {
+        var failed = false
+        try {
+            block()
+        } catch (_: IllegalStateException) {
+            failed = true
+        }
+        assertTrue("expected fail-closed matching-set shape drift", failed)
     }
 
     @Test

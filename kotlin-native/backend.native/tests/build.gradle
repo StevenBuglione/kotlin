@@ -7144,6 +7144,37 @@ fileCheckTest("filecheck_arc_borrowed_mutable_call_argument") {
     phaseToCheck = "Codegen"
 }
 
+fileCheckTest("filecheck_arc_matching_set_local_alias") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('filecheck/arc_matching_set_local_alias.kt')
+    extraOpts = ["-opt"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_matching_set_local_alias_debug") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('filecheck/arc_matching_set_local_alias.kt')
+    checkPrefix = "CONSERVATIVE"
+    extraOpts = ["-opt", "-g"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_matching_set_local_alias_diagnostics") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('filecheck/arc_matching_set_local_alias.kt')
+    checkPrefix = "CONSERVATIVE"
+    extraOpts = ["-opt", "-Xbinary=arcLeakCheck=report"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_matching_set_local_alias_strict") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('filecheck/arc_matching_set_local_alias.kt')
+    checkPrefix = "STRICT"
+    extraOpts = ["-opt", "-memory-model", "strict"]
+    phaseToCheck = "Codegen"
+}
+
 fileCheckTest("filecheck_arc_borrowed_array_element") {
     enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
     annotatedSource = project.file('filecheck/arc_borrowed_array_element.kt')

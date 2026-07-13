@@ -1,0 +1,51 @@
+{
+  "wave": 24,
+  "family": "matching-set guaranteed-parameter local alias",
+  "machine": "olfa@10.10.10.8",
+  "cpu": 4,
+  "iterationsPerSample": 10000000,
+  "samplesPerModel": 25,
+  "sampleOrder": "parent,candidate on odd repetitions; candidate,parent on even repetitions",
+  "clock": "CLOCK_MONOTONIC_RAW",
+  "clockScope": "Only the C-driver hot loop that invokes the generated Kotlin dynamic-library API once per borrow",
+  "baselineCommit": "bbad572048d7",
+  "candidateCompilerSnapshot": "12686313ba496f243befc30bbfb3711faa19c18b",
+  "hashes": {
+    "benchmarkSourceSha256": "d89c3ea97f154f7f4dcb5815927d52bbba8bdd8159c7ea0c3560e73aff64d421",
+    "driverSourceSha256": "61d7f0b44c327587e333203790cf4615bcb846835a10011aabf37fc4b4494f0a",
+    "runnerSourceSha256": "d436de4d34595380796e66586b53eb0ff98e879c1ba2031d63ee8082df10ef19",
+    "driverBinarySha256": "f5f2519b7cf911bbc73d3dacfd6fe1a530f94f2df815f2b1e99cbc70e945e4e0",
+    "parentLibrarySha256": "2d6956d5f140e4dea2f84b4f850699cb494d1cc5d41ad88166b5b1ff67b8f595",
+    "candidateLibrarySha256": "d962a42d6b7dcf66b63dea89d94b37bdb5e1a2c348cb733aa4274eef8a01708b",
+    "rawTsvSha256": "2b38151024732e0c6c09add4fc89ff83a600837ebc2859cfd213b2122aa7c2c5"
+  },
+  "emission": {
+    "retainedCallsIntoBorrowPerLibrary": 1,
+    "retainedSinkCallsPerBorrow": 48,
+    "hotSinkCallsPerBorrow": 16,
+    "parentUpdateStackRefRelaxedCallsPerBorrow": 1,
+    "candidateUpdateStackRefRelaxedCallsPerBorrow": 0,
+    "parentBorrowSymbolBytes": 902,
+    "candidateBorrowSymbolBytes": 854
+  },
+  "observable": {
+    "parentChecksum": 560000000,
+    "candidateChecksum": 560000000
+  },
+  "timing": {
+    "parentMedianNs": 667147836,
+    "candidateMedianNs": 645888251,
+    "pairedThroughputRatioGeomean": 1.0315432620208842,
+    "pairedThroughputRatioMedian": 1.0324672670805146,
+    "pairedThroughputRatioMin": 0.9400885937107847,
+    "pairedThroughputRatioP10": 0.9729857944873379,
+    "pairedThroughputRatioP90": 1.076083314233594,
+    "pairedThroughputRatioMax": 1.1318345715431908,
+    "pairedThroughputRatioStdDev": 0.0398734236923716,
+    "parentP10Ns": 664912036,
+    "parentP90Ns": 847750877,
+    "candidateP10Ns": 644200726,
+    "candidateP90Ns": 896933755
+  },
+  "interpretation": "The generated C API bridge and sixteen hot sink calls are present in both models and dilute the isolated one-update delta. Only removal of one UpdateStackRefRelaxed call per borrow is attributed to this optimization. The earlier in-process 9.14x observation was rejected because final LTO had erased the benchmark boundary."
+}
