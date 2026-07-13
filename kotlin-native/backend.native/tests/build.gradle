@@ -6946,6 +6946,54 @@ fileCheckTest("filecheck_arc_return_update_coalescing") {
     phaseToCheck = "CoalesceAdjacentArcReturnUpdates"
 }
 
+fileCheckTest("filecheck_arc_selective_string_append_inlining_tagged") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('filecheck/arc_selective_string_append_inlining.kt')
+    checkPrefix = "TAGGED"
+    extraOpts = ["-opt"]
+    phaseToCheck = "LinkBitcodeDependencies"
+}
+
+fileCheckTest("filecheck_arc_selective_string_append_inlining_inline") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('filecheck/arc_selective_string_append_inlining.kt')
+    checkPrefix = "INLINE"
+    extraOpts = ["-opt"]
+    phaseToCheck = "SelectiveArcGeneratedInlining"
+}
+
+fileCheckTest("filecheck_arc_selective_string_append_inlining_dce") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('filecheck/arc_selective_string_append_inlining.kt')
+    checkPrefix = "DCE"
+    extraOpts = ["-opt"]
+    phaseToCheck = "LTOBitcodeOptimization"
+}
+
+fileCheckTest("filecheck_arc_selective_string_append_inlining_debug") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('filecheck/arc_selective_string_append_inlining.kt')
+    checkPrefix = "NEG"
+    extraOpts = ["-opt", "-g"]
+    phaseToCheck = "LinkBitcodeDependencies"
+}
+
+fileCheckTest("filecheck_arc_selective_string_append_inlining_diagnostics") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('filecheck/arc_selective_string_append_inlining.kt')
+    checkPrefix = "NEG"
+    extraOpts = ["-opt", "-Xbinary=arcLeakCheck=report"]
+    phaseToCheck = "LinkBitcodeDependencies"
+}
+
+fileCheckTest("filecheck_arc_selective_string_append_inlining_strict") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('filecheck/arc_selective_string_append_inlining.kt')
+    checkPrefix = "NEG"
+    extraOpts = ["-opt", "-memory-model", "strict"]
+    phaseToCheck = "LinkBitcodeDependencies"
+}
+
 fileCheckTest("filecheck_arc_return_update_coalescing_before") {
     enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
     annotatedSource = project.file('filecheck/arc_return_update_coalescing.kt')

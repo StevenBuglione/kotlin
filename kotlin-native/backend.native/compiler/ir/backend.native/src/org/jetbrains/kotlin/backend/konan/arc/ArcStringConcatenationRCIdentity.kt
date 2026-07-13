@@ -7,7 +7,10 @@ package org.jetbrains.kotlin.backend.konan.arc
 
 import org.jetbrains.kotlin.backend.konan.MemoryModel
 import org.jetbrains.kotlin.backend.konan.NativeGenerationState
+import org.jetbrains.kotlin.backend.konan.isFinalBinary
+import org.jetbrains.kotlin.backend.konan.ir.konanLibrary
 import org.jetbrains.kotlin.descriptors.Modality
+import org.jetbrains.kotlin.konan.target.KonanTarget
 import org.jetbrains.kotlin.ir.IrElement
 import org.jetbrains.kotlin.ir.IrStatement
 import org.jetbrains.kotlin.ir.declarations.IrClass
@@ -27,6 +30,7 @@ import org.jetbrains.kotlin.ir.expressions.IrTypeOperatorCall
 import org.jetbrains.kotlin.ir.symbols.IrConstructorSymbol
 import org.jetbrains.kotlin.ir.symbols.IrSimpleFunctionSymbol
 import org.jetbrains.kotlin.ir.types.classifierOrNull
+import org.jetbrains.kotlin.ir.types.isNullable
 import org.jetbrains.kotlin.ir.util.constructors
 import org.jetbrains.kotlin.ir.util.functions
 import org.jetbrains.kotlin.ir.util.isOverridable
@@ -44,6 +48,35 @@ internal data class ArcStringConcatenationRCIdentityEligibility(
 
 internal fun ArcStringConcatenationRCIdentityEligibility.isAuthorized(): Boolean =
     arcEnabled && optimizationsEnabled && debugInfoDisabled && diagnosticsDisabled && nonSuspendFunction
+
+internal data class ArcStringSelectiveInliningEligibility(
+    val arcEnabled: Boolean,
+    val linuxX64: Boolean,
+    val finalBinary: Boolean,
+    val optimizationsEnabled: Boolean,
+    val debugInfoDisabled: Boolean,
+    val diagnosticsDisabled: Boolean,
+    val sanitizerDisabled: Boolean,
+    val coverageDisabled: Boolean,
+)
+
+internal fun ArcStringSelectiveInliningEligibility.isAuthorized(): Boolean =
+    arcEnabled && linuxX64 && finalBinary && optimizationsEnabled && debugInfoDisabled &&
+            diagnosticsDisabled && sanitizerDisabled && coverageDisabled
+
+internal data class ArcStringAppendInlineDeclarationEligibility(
+    val loweringOwnedGroup: Boolean,
+    val finalStdlibStringBuilder: Boolean,
+    val exactAppendName: Boolean,
+    val directMember: Boolean,
+    val nonExternalNonSuspendFinal: Boolean,
+    val returnsStringBuilder: Boolean,
+    val singleNullableStringParameter: Boolean,
+)
+
+internal fun ArcStringAppendInlineDeclarationEligibility.isAuthorized(): Boolean =
+    loweringOwnedGroup && finalStdlibStringBuilder && exactAppendName && directMember &&
+            nonExternalNonSuspendFinal && returnsStringBuilder && singleNullableStringParameter
 
 /**
  * Recovers the RC identity which is intentionally implicit in StringConcatenationLowering.
@@ -110,6 +143,62 @@ internal fun selectVerifiedStringConcatenationRCIdentityGroups(
         }
     })
     return result
+}
+
+/**
+ * Selects the only calls whose bodies the private stdlib companion is allowed to provide.
+ *
+ * The enclosing group is already a compiler-lowering-owned linear StringBuilder web. This
+ * second, deliberately exact filter admits only the final stdlib `append(String?)` declaration;
+ * it is not a general symbol-name or fluent-call matcher.
+ */
+internal fun selectVerifiedStringConcatenationArcInlineCalls(
+    generationState: NativeGenerationState,
+    group: ArcDiscardedReturnedReceiverGroup,
+): Set<IrCall> {
+    // Dependency KLIB bodies can be materialized when caches are unavailable,
+    // but they are not part of this final source compilation's authorization.
+    val sourceFunction = group.receiver.parent as? IrSimpleFunction ?: return emptySet()
+    if (sourceFunction.konanLibrary != null) return emptySet()
+    val context = generationState.context
+    val config = context.config
+    val eligibility = ArcStringSelectiveInliningEligibility(
+        arcEnabled = context.memoryModel == MemoryModel.ARC,
+        linuxX64 = config.target == KonanTarget.LINUX_X64,
+        finalBinary = config.isFinalBinary,
+        optimizationsEnabled = config.optimizationsEnabled,
+        debugInfoDisabled = !context.shouldContainAnyDebugInfo(),
+        diagnosticsDisabled = !config.arcDiagnosticsEnabled,
+        sanitizerDisabled = config.sanitizer == null && !config.undefinedBehaviorSanitizer,
+        coverageDisabled = !generationState.coverage.enabled,
+    )
+    if (!eligibility.isAuthorized()) return emptySet()
+
+    val stdlib = context.stdlibModule.konanLibrary ?: return emptySet()
+    val stringBuilder = context.ir.symbols.stringBuilder.owner
+    if (stringBuilder.modality != Modality.FINAL || stringBuilder.konanLibrary !== stdlib) return emptySet()
+    val string = context.ir.symbols.string
+    val exactAppend = stringBuilder.functions.singleOrNull { callee ->
+        ArcStringAppendInlineDeclarationEligibility(
+            loweringOwnedGroup = group.calls.isNotEmpty(),
+            finalStdlibStringBuilder = stringBuilder.modality == Modality.FINAL &&
+                    stringBuilder.konanLibrary === stdlib && callee.konanLibrary === stdlib,
+            exactAppendName = callee.name.asString() == "append",
+            directMember = callee.extensionReceiverParameter == null &&
+                    callee.dispatchReceiverParameter != null && callee.parent === stringBuilder,
+            nonExternalNonSuspendFinal = !callee.isExternal && !callee.isSuspend && !callee.isOverridable,
+            returnsStringBuilder = callee.returnType.classifierOrNull == stringBuilder.symbol,
+            singleNullableStringParameter = callee.valueParameters.size == 1 &&
+                    callee.valueParameters.single().type.classifierOrNull == string &&
+                    callee.valueParameters.single().type.isNullable(),
+        ).isAuthorized()
+    } ?: return emptySet()
+
+    return group.calls.filterTo(linkedSetOf()) { call ->
+        call.symbol === exactAppend.symbol && call.symbol.owner === exactAppend &&
+                call.dispatchReceiver != null && call.extensionReceiver == null &&
+                call.valueArgumentsCount == 1 && call.typeArgumentsCount == 0
+    }
 }
 
 private fun selectExactLoweredBlock(

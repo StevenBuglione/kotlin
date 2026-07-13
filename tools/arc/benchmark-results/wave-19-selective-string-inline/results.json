@@ -1,0 +1,98 @@
+{
+  "wave": 19,
+  "scenario": "strings",
+  "host": {
+    "hostname": "venus",
+    "cpu": "AMD RYZEN AI MAX+ 395 w/ Radeon 8060S",
+    "logicalCpus": 32,
+    "pinnedCpu": 0,
+    "kernel": "Linux 6.18.6-061806-generic x86_64"
+  },
+  "candidate": {
+    "baseCommit": "1b27a5c8b4ef99d19aee8db84b37092303139f12",
+    "baseTree": "5c51c34d1d61ba597a1a36149fcd658ca4ee383f",
+    "workingDiffSha256": "43a6238f35934995262f04cb4c2aedb26a08a4d7ebb9fec30326aafe5be4c7d7",
+    "compilerJarSha256": "2ec0b8b6efa7af44278783ffc0266cd2ca78d3db845d902bbe1ae0c342d7e53f",
+    "binaryBytes": 489648,
+    "compileSeconds": 7.53,
+    "compileMaxRssKiB": 638056,
+    "phase": { "tagged": 12, "inlined": 12, "rejected": 0, "missingBody": 0, "budgetSkipped": 0, "failures": 0 }
+  },
+  "sameArcOracle": {
+    "compilerJarSha256": "2ec0b8b6efa7af44278783ffc0266cd2ca78d3db845d902bbe1ae0c342d7e53f",
+    "extraCompilerFlag": "-Xdisable-phases=SelectiveArcGeneratedInlining",
+    "binaryBytes": 485624,
+    "compileSeconds": 7.41,
+    "compileMaxRssKiB": 641580
+  },
+  "strictBaseline": {
+    "commit": "3db61efe5e892bf27115f1ebcab957d903067ed4",
+    "tree": "c1771ad840cc5e08506c522bf7ff8160d3537f39",
+    "compilerJarSha256": "dad6fdbbe38bd7ade35b10e205cc7f5ceb292887ee18d372031bb3e48350f138",
+    "binaryBytes": 507160,
+    "compileSeconds": 7.82,
+    "compileMaxRssKiB": 550272
+  },
+  "output": "ARC_BENCH_OK scenario=strings checksum=-14061657653598 operations=600000 allocations=1800000",
+  "summaries": {
+    "sameArcCandidateMedianNs": 131519731,
+    "sameArcOracleMedianNs": 133277175,
+    "sameArcPairedThroughputGeomean": 1.018951,
+    "sameArcPairedThroughputMedian": 1.013136,
+    "strictComparisonCandidateMedianNs": 131148114,
+    "strictMedianNs": 113309809,
+    "candidateVsStrictPairedThroughputGeomean": 0.864250,
+    "candidateVsStrictPairedThroughputMedian": 0.863066,
+    "candidateBinaryDeltaVsOraclePercent": 0.82862,
+    "candidateBinaryDeltaVsStrictPercent": -3.45327,
+    "outputsEqual": true
+  },
+  "rawArtifactSha256": {
+    "sameArc": "6ff6f8d93671fcf2ba2f791554807a855b6ceb75df014f1ca9d10fc44a3917bb",
+    "strict": "e142c641f26a0eb4fe3745d5e3bdc2e34902a6fdf14484a62561dcd49afb5549"
+  },
+  "pairs": [
+    {"pair":1,"candidateNs":131819450,"oracleNs":132783064,"strictCandidateNs":131139085,"strictNs":112629665},
+    {"pair":2,"candidateNs":130614964,"oracleNs":132431587,"strictCandidateNs":130864475,"strictNs":112897984},
+    {"pair":3,"candidateNs":130371433,"oracleNs":131801391,"strictCandidateNs":131728203,"strictNs":112559317},
+    {"pair":4,"candidateNs":131519731,"oracleNs":133247397,"strictCandidateNs":131003849,"strictNs":113460914},
+    {"pair":5,"candidateNs":131512860,"oracleNs":133612354,"strictCandidateNs":131453123,"strictNs":112474100},
+    {"pair":6,"candidateNs":130665021,"oracleNs":133277175,"strictCandidateNs":131641456,"strictNs":114184557},
+    {"pair":7,"candidateNs":133253106,"oracleNs":132424937,"strictCandidateNs":130874754,"strictNs":112715391},
+    {"pair":8,"candidateNs":132198805,"oracleNs":132743335,"strictCandidateNs":131293949,"strictNs":114366121},
+    {"pair":9,"candidateNs":134371346,"oracleNs":134452763,"strictCandidateNs":131422994,"strictNs":115977561},
+    {"pair":10,"candidateNs":134783430,"oracleNs":137227291,"strictCandidateNs":130707830,"strictNs":113917317},
+    {"pair":11,"candidateNs":132043401,"oracleNs":134784690,"strictCandidateNs":131403475,"strictNs":113355287},
+    {"pair":12,"candidateNs":130572705,"oracleNs":171974859,"strictCandidateNs":131268659,"strictNs":112723310},
+    {"pair":13,"candidateNs":132193905,"oracleNs":133189818,"strictCandidateNs":130438069,"strictNs":113309809},
+    {"pair":14,"candidateNs":185115908,"oracleNs":201734781,"strictCandidateNs":131007139,"strictNs":112410032},
+    {"pair":15,"candidateNs":169606606,"oracleNs":146229531,"strictCandidateNs":130213588,"strictNs":112792218},
+    {"pair":16,"candidateNs":135836401,"oracleNs":134243559,"strictCandidateNs":131144773,"strictNs":112603955},
+    {"pair":17,"candidateNs":130644300,"oracleNs":133981609,"strictCandidateNs":131567798,"strictNs":113645927},
+    {"pair":18,"candidateNs":130565644,"oracleNs":133718798,"strictCandidateNs":131891316,"strictNs":113479992},
+    {"pair":19,"candidateNs":132860890,"oracleNs":135926158,"strictCandidateNs":131148114,"strictNs":113116616},
+    {"pair":20,"candidateNs":131149812,"oracleNs":132412575,"strictCandidateNs":131841497,"strictNs":115209798},
+    {"pair":21,"candidateNs":131604285,"oracleNs":134444781,"strictCandidateNs":130544595,"strictNs":112403092},
+    {"pair":22,"candidateNs":131027877,"oracleNs":131685123,"strictCandidateNs":131136153,"strictNs":113179213},
+    {"pair":23,"candidateNs":131020446,"oracleNs":132713714,"strictCandidateNs":130948470,"strictNs":113451563},
+    {"pair":24,"candidateNs":130178407,"oracleNs":132154935,"strictCandidateNs":131627575,"strictNs":113874257},
+    {"pair":25,"candidateNs":131164621,"oracleNs":132102357,"strictCandidateNs":131781319,"strictNs":114149877}
+  ],
+  "verification": {
+    "fixtureReleaseTags": 3,
+    "fixtureReleaseInlined": 3,
+    "fixtureAppendIntRemainsOutOfLine": true,
+    "fixtureUserAuthoredAppendStringRemainsOutOfLine": true,
+    "companionCloneAbsentAfterLto": true,
+    "negativeTagCounts": { "debug": 0, "diagnostics": 0, "asan": 0, "strict": 0 },
+    "modeRuntimeOutputSha256": {
+      "release": "ac064c5070c63d5f35ee1af632f2eda47c61e6ee973b786f45feafc43adb1e7f",
+      "debug": "ac064c5070c63d5f35ee1af632f2eda47c61e6ee973b786f45feafc43adb1e7f",
+      "diagnostics": "ac064c5070c63d5f35ee1af632f2eda47c61e6ee973b786f45feafc43adb1e7f",
+      "asan": "ac064c5070c63d5f35ee1af632f2eda47c61e6ee973b786f45feafc43adb1e7f",
+      "strict": "ac064c5070c63d5f35ee1af632f2eda47c61e6ee973b786f45feafc43adb1e7f"
+    },
+    "coverage": "unsupported by Kotlin/Native 1.9.10 linux_x64; compiler rejects before codegen",
+    "focusedTests": "ArcOwnershipIRAdapterTest plus tagged/inline/DCE/debug/diagnostics/strict FileChecks: BUILD SUCCESSFUL"
+  }
+}

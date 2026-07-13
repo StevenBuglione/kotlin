@@ -468,6 +468,7 @@ internal abstract class FunctionGenerationContext(
             val llvmFunction: LlvmCallable,
             val args: List<LLVMValueRef>,
             val success: LLVMBasicBlockRef,
+            val instructionMetadata: String?,
     )
 
     private val invokeInstructions = mutableListOf<FunctionInvokeInformation>()
@@ -738,6 +739,7 @@ internal abstract class FunctionGenerationContext(
              exceptionHandler: ExceptionHandler = ExceptionHandler.None,
              verbatim: Boolean = false,
              resultSlot: LLVMValueRef? = null,
+             instructionMetadata: String? = null,
     ): LLVMValueRef {
         val callArgs = if (verbatim || !isObjectType(llvmCallable.returnType)) {
             args
@@ -774,13 +776,16 @@ internal abstract class FunctionGenerationContext(
         // argument. Exact pointer identity keeps this conservative invalidation local to slots whose
         // storage the call can actually observe.
         callArgs.forEach { invalidateArcOwnedResultSlot(it) }
-        return callRaw(llvmCallable, callArgs, exceptionHandler)
+        return callRaw(llvmCallable, callArgs, exceptionHandler, instructionMetadata)
     }
 
     private fun callRaw(llvmCallable: LlvmCallable, args: List<LLVMValueRef>,
-                        exceptionHandler: ExceptionHandler): LLVMValueRef {
+                        exceptionHandler: ExceptionHandler,
+                        instructionMetadata: String?): LLVMValueRef {
         if (llvmCallable.isNoUnwind) {
-            return llvmCallable.buildCall(builder, args)
+            return llvmCallable.buildCall(builder, args).also {
+                instructionMetadata?.let { name -> attachEmptyMetadata(it, name) }
+            }
         } else {
             // The proof is valid on the normal edge of a call that cannot observe the slot. It must
             // not leak to the unwind edge: ARC frame cleanup owns that path independently.
@@ -804,11 +809,14 @@ internal abstract class FunctionGenerationContext(
             val endLocation = position?.end
             val success = basicBlock("call_success", endLocation)
             val result = llvmCallable.buildInvoke(builder, args, success, unwind)
+            instructionMetadata?.let { name -> attachEmptyMetadata(result, name) }
             // Store invoke instruction and its success block in reverse order.
             // Reverse order allows save arguments valid during all work with invokes
             // because other invokes processed before can be inside arguments list.
             if (exceptionHandler == ExceptionHandler.Caller)
-                invokeInstructions.add(0, FunctionInvokeInformation(result, llvmCallable, args, success))
+                invokeInstructions.add(0, FunctionInvokeInformation(
+                    result, llvmCallable, args, success, instructionMetadata
+                ))
             positionAtEnd(success)
             if (!arcResultsOnNormalSuccess.isNullOrEmpty()) {
                 arcOwnedResultsByBlock[success] = arcResultsOnNormalSuccess.toMutableMap()
@@ -816,6 +824,11 @@ internal abstract class FunctionGenerationContext(
 
             return result
         }
+    }
+
+    private fun attachEmptyMetadata(instruction: LLVMValueRef, name: String) {
+        val kind = LLVMGetMDKindIDInContext(generationState.llvmContext, name, name.length)
+        LLVMSetMetadata(instruction, kind, node(generationState.llvmContext))
     }
 
     //-------------------------------------------------------------------------//
@@ -1492,6 +1505,7 @@ internal abstract class FunctionGenerationContext(
             invokeInstructions.forEach { functionInvokeInfo ->
                 positionBefore(functionInvokeInfo.invokeInstruction)
                 val newResult = functionInvokeInfo.llvmFunction.buildCall(builder, functionInvokeInfo.args)
+                functionInvokeInfo.instructionMetadata?.let { name -> attachEmptyMetadata(newResult, name) }
                 // Have to generate `br` instruction because of current scheme of debug info.
                 br(functionInvokeInfo.success)
                 LLVMReplaceAllUsesWith(functionInvokeInfo.invokeInstruction, newResult)

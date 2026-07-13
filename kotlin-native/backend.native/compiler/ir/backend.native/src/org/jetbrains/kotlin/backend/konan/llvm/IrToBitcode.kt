@@ -20,6 +20,7 @@ import org.jetbrains.kotlin.backend.konan.arc.ArcDiscardedReturnedReceiverGroup
 import org.jetbrains.kotlin.backend.konan.arc.ArcRootedGlobalProjectionPlan
 import org.jetbrains.kotlin.backend.konan.arc.ArcResultCompanionImmortalLoadPlan
 import org.jetbrains.kotlin.backend.konan.arc.unwrapExactArcCoroutineSpillRead
+import org.jetbrains.kotlin.backend.konan.optimizations.ARC_SELECTIVE_INLINE_METADATA
 import org.jetbrains.kotlin.backend.konan.cexport.CAdapterCodegen
 import org.jetbrains.kotlin.backend.konan.cexport.CAdapterExportedElements
 import org.jetbrains.kotlin.backend.konan.cgen.CBridgeOrigin
@@ -2954,6 +2955,7 @@ internal class CodeGeneratorVisitor(
                     callee in arcOwnership.coroutineResultSlotForwardingCalls,
                     verifiedReturnedReceiverBorrow,
                     arcOwnership.lockedReadResultSlotForwardingCalls[callee],
+                    callee in arcOwnership.selectiveInlineStringAppendCalls,
             )
         }
     }
@@ -3028,7 +3030,8 @@ internal class CodeGeneratorVisitor(
             resultLifetime: Lifetime, superClass: IrClass? = null, resultSlot: LLVMValueRef? = null,
             verifiedCoroutineResultSlotForwarding: Boolean = false,
             verifiedReturnedReceiverBorrow: Boolean = false,
-            verifiedLockedReadResultSlotForwarding: ArcLockedReadCanonicalPlan? = null): LLVMValueRef {
+            verifiedLockedReadResultSlotForwarding: ArcLockedReadCanonicalPlan? = null,
+            verifiedSelectiveStringAppendInline: Boolean = false): LLVMValueRef {
         //context.log{"evaluateSimpleFunctionCall : $tmpVariableName = ${ir2string(value)}"}
         if (superClass == null && function is IrSimpleFunction && function.isOverridable) {
             require(!verifiedCoroutineResultSlotForwarding) {
@@ -3037,12 +3040,16 @@ internal class CodeGeneratorVisitor(
             require(verifiedLockedReadResultSlotForwarding == null) {
                 "ARC locked-read result-slot forwarding escaped into a virtual call: ${function.fqNameForIrSerialization}"
             }
+            require(!verifiedSelectiveStringAppendInline) {
+                "ARC selective StringBuilder.append inline escaped into a virtual call"
+            }
             return callVirtual(function, args, resultLifetime, resultSlot)
         } else {
             return callDirect(
                     function, args, resultLifetime, resultSlot,
                     verifiedCoroutineResultSlotForwarding, verifiedReturnedReceiverBorrow,
                     verifiedLockedReadResultSlotForwarding,
+                    verifiedSelectiveStringAppendInline,
             )
         }
     }
@@ -3207,6 +3214,7 @@ internal class CodeGeneratorVisitor(
             verifiedCoroutineResultSlotForwarding: Boolean = false,
             verifiedReturnedReceiverBorrow: Boolean = false,
             verifiedLockedReadResultSlotForwarding: ArcLockedReadCanonicalPlan? = null,
+            verifiedSelectiveStringAppendInline: Boolean = false,
     ): LLVMValueRef {
         if (verifiedReturnedReceiverBorrow) {
             require(context.memoryModel == MemoryModel.ARC && context.config.optimizationsEnabled &&
@@ -3215,7 +3223,10 @@ internal class CodeGeneratorVisitor(
             }
         }
         val functionDeclarations = codegen.llvmFunction(function.target)
-        return call(function, functionDeclarations, args, resultLifetime, resultSlot).also { result ->
+        return call(
+            function, functionDeclarations, args, resultLifetime, resultSlot,
+            verifiedSelectiveStringAppendInline,
+        ).also { result ->
             if (verifiedLockedReadResultSlotForwarding != null) {
                 val canonical = verifiedLockedReadResultSlotForwarding
                 require(context.memoryModel == MemoryModel.ARC && context.config.optimizationsEnabled &&
@@ -3309,7 +3320,8 @@ internal class CodeGeneratorVisitor(
         }
 
     private fun call(function: IrFunction, llvmCallable: LlvmCallable, args: List<LLVMValueRef>,
-                     resultLifetime: Lifetime, resultSlot: LLVMValueRef?): LLVMValueRef {
+                     resultLifetime: Lifetime, resultSlot: LLVMValueRef?,
+                     verifiedSelectiveStringAppendInline: Boolean = false): LLVMValueRef {
         check(!function.isTypedIntrinsic)
 
         val needsNativeThreadState = function.needsNativeThreadState
@@ -3326,7 +3338,10 @@ internal class CodeGeneratorVisitor(
             functionGenerationContext.switchThreadState(ThreadState.Native)
         }
 
-        val result = call(llvmCallable, args, resultLifetime, exceptionHandler, resultSlot)
+        val result = call(
+            llvmCallable, args, resultLifetime, exceptionHandler, resultSlot,
+            if (verifiedSelectiveStringAppendInline) ARC_SELECTIVE_INLINE_METADATA else null,
+        )
 
         when  {
             function.returnType.isNothing() -> functionGenerationContext.unreachable()
@@ -3344,9 +3359,14 @@ internal class CodeGeneratorVisitor(
             function: LlvmCallable, args: List<LLVMValueRef>,
             resultLifetime: Lifetime = Lifetime.IRRELEVANT,
             exceptionHandler: ExceptionHandler = currentCodeContext.exceptionHandler,
-            resultSlot: LLVMValueRef? = null
+            resultSlot: LLVMValueRef? = null,
+            instructionMetadata: String? = null,
     ): LLVMValueRef {
-        return functionGenerationContext.call(function, args, resultLifetime, exceptionHandler, resultSlot = resultSlot)
+        return functionGenerationContext.call(
+            function, args, resultLifetime, exceptionHandler,
+            resultSlot = resultSlot,
+            instructionMetadata = instructionMetadata,
+        )
     }
 
     //-------------------------------------------------------------------------//

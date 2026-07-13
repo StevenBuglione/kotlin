@@ -65,6 +65,50 @@ class ArcOwnershipIRAdapterTest {
         assertFalse(accepted.copy(nonSuspendFunction = false).isAuthorized())
     }
 
+    @Test
+    fun stringSelectiveInliningFailsClosedForEveryCompilerModeGate() {
+        val accepted = ArcStringSelectiveInliningEligibility(
+            arcEnabled = true,
+            linuxX64 = true,
+            finalBinary = true,
+            optimizationsEnabled = true,
+            debugInfoDisabled = true,
+            diagnosticsDisabled = true,
+            sanitizerDisabled = true,
+            coverageDisabled = true,
+        )
+        assertTrue(accepted.isAuthorized())
+        assertFalse(accepted.copy(arcEnabled = false).isAuthorized())
+        assertFalse(accepted.copy(linuxX64 = false).isAuthorized())
+        assertFalse(accepted.copy(finalBinary = false).isAuthorized())
+        assertFalse(accepted.copy(optimizationsEnabled = false).isAuthorized())
+        assertFalse(accepted.copy(debugInfoDisabled = false).isAuthorized())
+        assertFalse(accepted.copy(diagnosticsDisabled = false).isAuthorized())
+        assertFalse(accepted.copy(sanitizerDisabled = false).isAuthorized())
+        assertFalse(accepted.copy(coverageDisabled = false).isAuthorized())
+    }
+
+    @Test
+    fun stringSelectiveInliningRequiresExactLoweredStdlibAppendStringDeclaration() {
+        val accepted = ArcStringAppendInlineDeclarationEligibility(
+            loweringOwnedGroup = true,
+            finalStdlibStringBuilder = true,
+            exactAppendName = true,
+            directMember = true,
+            nonExternalNonSuspendFinal = true,
+            returnsStringBuilder = true,
+            singleNullableStringParameter = true,
+        )
+        assertTrue(accepted.isAuthorized())
+        assertFalse(accepted.copy(loweringOwnedGroup = false).isAuthorized()) // User-written fluent call.
+        assertFalse(accepted.copy(finalStdlibStringBuilder = false).isAuthorized()) // Lookalike class/library.
+        assertFalse(accepted.copy(exactAppendName = false).isAuthorized())
+        assertFalse(accepted.copy(directMember = false).isAuthorized())
+        assertFalse(accepted.copy(nonExternalNonSuspendFinal = false).isAuthorized())
+        assertFalse(accepted.copy(returnsStringBuilder = false).isAuthorized())
+        assertFalse(accepted.copy(singleNullableStringParameter = false).isAuthorized()) // append(Int).
+    }
+
     private val accepted = ArcCanonicalReferenceJoinEligibility(
         arcEnabled = true,
         optimizationsEnabled = true,

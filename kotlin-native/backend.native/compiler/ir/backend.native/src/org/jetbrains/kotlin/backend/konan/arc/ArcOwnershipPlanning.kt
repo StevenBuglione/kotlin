@@ -147,6 +147,7 @@ internal data class ArcCodegenOwnershipPlan(
     val rootedGlobalProjections: Map<IrCall, ArcRootedGlobalProjectionPlan>,
     val resultCompanionImmortalLoadsByCall: Map<IrCall, ArcResultCompanionImmortalLoadPlan>,
     val resultCompanionImmortalVariables: Set<IrVariable>,
+    val selectiveInlineStringAppendCalls: Set<IrCall>,
 ) {
     val scopedArcReferenceLoadBoundaries: Set<IrExpression> =
         Collections.newSetFromMap(IdentityHashMap<IrExpression, Boolean>()).apply {
@@ -182,6 +183,7 @@ internal data class ArcCodegenOwnershipPlan(
             rootedGlobalProjections = emptyMap(),
             resultCompanionImmortalLoadsByCall = emptyMap(),
             resultCompanionImmortalVariables = emptySet(),
+            selectiveInlineStringAppendCalls = emptySet(),
         )
     }
 }
@@ -617,6 +619,7 @@ internal fun runArcOwnershipPlanning(
                             it.owner.attributeOwnerId as? IrSimpleFunction ?: it.owner
                         }
     val borrowedCharArrayConsumerSymbols = resolveBorrowedCharArrayConsumerSymbols(generationState)
+    val selectiveInlineStringAppendCalls = linkedSetOf<IrCall>()
     val canonicalLockedReadPlans = resolveCanonicalLockedReadPlans(generationState, input.module)
     canonicalLockedReadPlans.forEach { plan ->
         lockedReadResultSlotForwardingCalls[plan.tailCall] = plan
@@ -654,6 +657,8 @@ internal fun runArcOwnershipPlanning(
                         // deserialized-stdlib-body fact.
                         returnedReceiverBorrowCalls += group.calls
                         group.calls.forEach { call -> discardedReturnedReceiverGroupsByCall[call] = group }
+                        selectiveInlineStringAppendCalls +=
+                            selectVerifiedStringConcatenationArcInlineCalls(generationState, group)
                     }
                 }
                 coroutineResultSlotForwardingCalls +=
@@ -778,6 +783,7 @@ internal fun runArcOwnershipPlanning(
             rootedGlobalProjections,
             resultCompanionImmortalLoadsByCall,
             resultCompanionImmortalVariables,
+            selectiveInlineStringAppendCalls,
         ),
     )
 }
