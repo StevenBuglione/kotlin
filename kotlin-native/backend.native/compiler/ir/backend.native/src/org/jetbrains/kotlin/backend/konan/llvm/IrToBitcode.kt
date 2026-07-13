@@ -19,6 +19,8 @@ import org.jetbrains.kotlin.backend.konan.arc.ArcLockedReadCanonicalPlan
 import org.jetbrains.kotlin.backend.konan.arc.ArcDiscardedReturnedReceiverGroup
 import org.jetbrains.kotlin.backend.konan.arc.ArcRootedGlobalProjectionPlan
 import org.jetbrains.kotlin.backend.konan.arc.ArcResultCompanionImmortalLoadPlan
+import org.jetbrains.kotlin.backend.konan.arc.ArcCoroutineGuaranteedPhiIRSelection
+import org.jetbrains.kotlin.backend.konan.arc.hasExactCoroutinePhysicalBackedge
 import org.jetbrains.kotlin.backend.konan.arc.unwrapExactArcCoroutineSpillRead
 import org.jetbrains.kotlin.backend.konan.optimizations.ARC_SELECTIVE_INLINE_METADATA
 import org.jetbrains.kotlin.backend.konan.cexport.CAdapterCodegen
@@ -53,6 +55,7 @@ import org.jetbrains.kotlin.name.Name
 import org.jetbrains.kotlin.resolve.descriptorUtil.classId
 import org.jetbrains.kotlin.resolve.descriptorUtil.fqNameUnsafe
 import java.util.IdentityHashMap
+import java.util.Collections
 
 internal enum class FieldStorageKind {
     GLOBAL, // In the old memory model these are only accessible from the "main" thread.
@@ -241,6 +244,87 @@ internal class CodeGeneratorVisitor(
     private var currentArcPromotionBoundary: IrExpression? = null
     private var currentDiscardedReturnedReceiverSeedSlots:
             MutableMap<ArcDiscardedReturnedReceiverGroup, LLVMValueRef>? = null
+    private var currentCoroutineGuaranteedPhiEmission: CoroutineGuaranteedPhiEmission? = null
+
+    /** One exact, verifier-selected `BaseContinuationImpl.resumeWith` emission. */
+    private inner class CoroutineGuaranteedPhiEmission(
+        val selection: ArcCoroutineGuaranteedPhiIRSelection,
+    ) {
+        lateinit var currentPhi: LLVMValueRef
+        lateinit var parameterPhi: LLVMValueRef
+        private val declarations = Collections.newSetFromMap(IdentityHashMap<IrVariable, Boolean>())
+        private val reads = Collections.newSetFromMap(IdentityHashMap<IrGetValue, Boolean>())
+        private val stores = Collections.newSetFromMap(IdentityHashMap<IrSetValue, Boolean>())
+        private val calls = Collections.newSetFromMap(IdentityHashMap<IrCall, Boolean>())
+        private var loopEmissions = 0
+        private var entryIncoming = 0
+        private var backedgeIncoming = 0
+        private var currentStoreBlock: LLVMBasicBlockRef? = null
+        private var parameterStoreBlock: LLVMBasicBlockRef? = null
+
+        fun markDeclaration(variable: IrVariable) {
+            check(declarations.add(variable)) { "duplicate selected coroutine declaration emission: ${ir2string(variable)}" }
+        }
+
+        fun markRead(read: IrGetValue) {
+            check(reads.add(read)) { "duplicate selected coroutine read emission: ${ir2string(read)}" }
+        }
+
+        fun markStore(store: IrSetValue) {
+            check(stores.add(store)) { "duplicate selected coroutine store emission: ${ir2string(store)}" }
+            if (store === selection.currentBackedgeStore) currentStoreBlock = functionGenerationContext.currentBlock
+            if (store === selection.parameterBackedgeStore) parameterStoreBlock = functionGenerationContext.currentBlock
+        }
+
+        fun markCall(call: IrCall) {
+            if (call === selection.invokeSuspend || call === selection.releaseIntercepted) {
+                check(calls.add(call)) { "duplicate selected coroutine call emission: ${ir2string(call)}" }
+            }
+        }
+
+        fun markLoop() { check(loopEmissions++ == 0) { "duplicate selected coroutine loop emission" } }
+        fun markEntryIncoming() { entryIncoming++ }
+        fun markBackedgeIncoming(
+            backedge: LLVMBasicBlockRef,
+            loopHeader: LLVMBasicBlockRef,
+            entryPredecessor: LLVMBasicBlockRef,
+        ) {
+            val storeBlock = currentStoreBlock
+            check(storeBlock != null && parameterStoreBlock == storeBlock) {
+                "selected coroutine owning stores were not emitted together"
+            }
+            val blocks = functionGenerationContext.function.basicBlocks().toList()
+            val blockValues = blocks.associateBy { LLVMBasicBlockAsValue(it) }
+            val successors = blocks.associateWith { block ->
+                val terminator = LLVMGetBasicBlockTerminator(block)
+                if (terminator == null) emptyList() else getOperands(terminator).mapNotNull(blockValues::get)
+            }
+            check(hasExactCoroutinePhysicalBackedge(
+                successors, storeBlock, backedge, loopHeader, entryPredecessor,
+            )) {
+                "selected coroutine owning stores do not dominate an exact single physical backedge"
+            }
+            check(LLVMCountIncoming(currentPhi) == 2 && LLVMCountIncoming(parameterPhi) == 2) {
+                "selected coroutine phis do not cover exactly entry plus one physical backedge"
+            }
+            backedgeIncoming++
+        }
+
+        fun verifyConsumed() {
+            check(declarations.size == 3 &&
+                    selection.current in declarations && selection.parameterState in declarations &&
+                    selection.currentIterationBorrow in declarations &&
+                    reads.size == 2 && selection.currentJoinedRead in reads && selection.parameterJoinedRead in reads &&
+                    stores.size == 2 && selection.currentBackedgeStore in stores &&
+                    selection.parameterBackedgeStore in stores &&
+                    calls.size == 2 && selection.invokeSuspend in calls && selection.releaseIntercepted in calls &&
+                    loopEmissions == 1 && entryIncoming == 1 && backedgeIncoming == 1) {
+                "selected coroutine guaranteed-phi shape drifted after planning: " +
+                        "decls=${declarations.size} reads=${reads.size} stores=${stores.size} calls=${calls.size} " +
+                        "loops=$loopEmissions entry=$entryIncoming backedge=$backedgeIncoming"
+            }
+        }
+    }
 
     private val intrinsicGeneratorEnvironment = object : IntrinsicGeneratorEnvironment {
         override val codegen: CodeGenerator
@@ -858,7 +942,11 @@ internal class CodeGeneratorVisitor(
         }
         val previousArcOwnedResultForwarding = currentArcOwnedResultForwarding
         val previousDiscardedReturnedReceiverSeedSlots = currentDiscardedReturnedReceiverSeedSlots
+        val previousCoroutineGuaranteedPhiEmission = currentCoroutineGuaranteedPhiEmission
         currentDiscardedReturnedReceiverSeedSlots = IdentityHashMap()
+        currentCoroutineGuaranteedPhiEmission = (declaration as? IrSimpleFunction)?.let {
+            arcOwnership.coroutineGuaranteedPhiSelections[it]
+        }?.let(::CoroutineGuaranteedPhiEmission)
         currentArcOwnedResultForwarding = if (!context.shouldContainDebugInfo()) {
             (declaration as? IrSimpleFunction)?.let { arcOwnership.ownedResultForwarding[it] }
         } else {
@@ -897,6 +985,7 @@ internal class CodeGeneratorVisitor(
                                     is IrSyntheticBody -> throw AssertionError("Synthetic body ${body.kind} has not been lowered")
                                     else -> TODO(ir2string(body))
                                 }
+                                currentCoroutineGuaranteedPhiEmission?.verifyConsumed()
                             }
                         }
                     }
@@ -905,6 +994,7 @@ internal class CodeGeneratorVisitor(
         } finally {
             currentArcOwnedResultForwarding = previousArcOwnedResultForwarding
             currentDiscardedReturnedReceiverSeedSlots = previousDiscardedReturnedReceiverSeedSlots
+            currentCoroutineGuaranteedPhiEmission = previousCoroutineGuaranteedPhiEmission
         }
 
 
@@ -1410,11 +1500,33 @@ internal class CodeGeneratorVisitor(
 
     private fun evaluateWhileLoop(loop: IrWhileLoop): LLVMValueRef {
         val loopScope = LoopScope(loop)
+        val phiEmission = currentCoroutineGuaranteedPhiEmission?.takeIf { it.selection.loop === loop }
         using(loopScope) {
             val loopBody = functionGenerationContext.basicBlock("while_loop", loop.startLocation)
+            val entryPredecessor = functionGenerationContext.currentBlock
+            val entryCurrent = phiEmission?.let {
+                currentCodeContext.genGetValue(it.selection.receiverParameter, null)
+            }
+            val entryParameter = phiEmission?.let {
+                currentCodeContext.genGetValue(it.selection.resultParameter, null)
+            }
             functionGenerationContext.br(loopScope.loopCheck)
 
             functionGenerationContext.positionAtEnd(loopScope.loopCheck)
+            phiEmission?.let {
+                it.markLoop()
+                it.currentPhi = functionGenerationContext.phi(llvm.kObjHeaderPtr, "arc.coroutine.current")
+                it.parameterPhi = functionGenerationContext.phi(llvm.kObjHeaderPtr, "arc.coroutine.param")
+                functionGenerationContext.addPhiIncoming(
+                    it.currentPhi,
+                    entryPredecessor to requireNotNull(entryCurrent),
+                )
+                functionGenerationContext.addPhiIncoming(
+                    it.parameterPhi,
+                    entryPredecessor to requireNotNull(entryParameter),
+                )
+                it.markEntryIncoming()
+            }
             val condition = evaluateExpression(loop.condition)
             functionGenerationContext.condBr(condition, loopBody, loopScope.loopExit)
 
@@ -1423,7 +1535,25 @@ internal class CodeGeneratorVisitor(
                 call(llvm.Kotlin_mm_safePointWhileLoopBody, emptyList())
             loop.body?.generate()
 
-            functionGenerationContext.br(loopScope.loopCheck)
+            phiEmission?.let {
+                check(!functionGenerationContext.isAfterTerminator()) {
+                    "selected coroutine loop lost its sole natural backedge"
+                }
+                val backedge = functionGenerationContext.currentBlock
+                val currentIndex = currentCodeContext.getDeclaredValue(it.selection.current)
+                val parameterIndex = currentCodeContext.getDeclaredValue(it.selection.parameterState)
+                check(currentIndex >= 0 && parameterIndex >= 0) {
+                    "selected coroutine backedge owning slots are missing"
+                }
+                val currentBackedge = functionGenerationContext.vars.loadBorrowedMutableReference(currentIndex)
+                val parameterBackedge = functionGenerationContext.vars.loadBorrowedMutableReference(parameterIndex)
+                functionGenerationContext.addPhiIncoming(it.currentPhi, backedge to currentBackedge)
+                functionGenerationContext.addPhiIncoming(it.parameterPhi, backedge to parameterBackedge)
+                // Materialize the physical branch before proving predecessor and phi coverage.
+                functionGenerationContext.br(loopScope.loopCheck)
+                it.markBackedgeIncoming(backedge, loopScope.loopCheck, entryPredecessor)
+            }
+            if (phiEmission == null) functionGenerationContext.br(loopScope.loopCheck)
             functionGenerationContext.positionAtEnd(loopScope.loopExit)
         }
 
@@ -1460,6 +1590,17 @@ internal class CodeGeneratorVisitor(
 
     private fun evaluateGetValue(value: IrGetValue, resultSlot: LLVMValueRef?): LLVMValueRef {
         context.log{"evaluateGetValue               : ${ir2string(value)}"}
+        currentCoroutineGuaranteedPhiEmission?.let { emission ->
+            if (value === emission.selection.currentJoinedRead || value === emission.selection.parameterJoinedRead) {
+                require(resultSlot == null && context.memoryModel == MemoryModel.ARC &&
+                        context.config.optimizationsEnabled && !context.shouldContainDebugInfo() &&
+                        !context.config.arcDiagnosticsEnabled) {
+                    "selected coroutine guaranteed read escaped its exact +0 boundary: ${ir2string(value)}"
+                }
+                emission.markRead(value)
+                return if (value === emission.selection.currentJoinedRead) emission.currentPhi else emission.parameterPhi
+            }
+        }
         if (value in arcOwnership.safeContinuationMovedResultReads) {
             val variable = value.symbol.owner as? IrVariable
             require(context.memoryModel == MemoryModel.ARC && context.config.optimizationsEnabled &&
@@ -1547,6 +1688,11 @@ internal class CodeGeneratorVisitor(
         } else {
             functionGenerationContext.vars.store(result, variable)
         }
+        currentCoroutineGuaranteedPhiEmission?.let { emission ->
+            if (value === emission.selection.currentBackedgeStore ||
+                value === emission.selection.parameterBackedgeStore
+            ) emission.markStore(value)
+        }
         assert(value.type.isUnit())
         return codegen.theUnitInstanceRef.llvm
     }
@@ -1623,6 +1769,35 @@ internal class CodeGeneratorVisitor(
 
     private fun generateVariable(variable: IrVariable) {
         context.log{"generateVariable               : ${ir2string(variable)}"}
+        currentCoroutineGuaranteedPhiEmission?.let { emission ->
+            val selection = emission.selection
+            if (variable === selection.current || variable === selection.parameterState) {
+                require(variable.isVar && variable.type.binaryTypeIsReference() &&
+                        context.memoryModel == MemoryModel.ARC && context.config.optimizationsEnabled &&
+                        !context.shouldContainDebugInfo() && !context.config.arcDiagnosticsEnabled) {
+                    "selected coroutine owning slot escaped its verified declaration boundary: ${ir2string(variable)}"
+                }
+                // The ARC frame is zero initialized. Keep this nullable owning slot empty until the
+                // first proven backedge handoff; the +0 ABI entry value is carried by the phi.
+                currentCodeContext.genDeclareVariable(variable, null)
+                emission.markDeclaration(variable)
+                return
+            }
+            if (variable === selection.currentIterationBorrow) {
+                require(!variable.isVar && variable.initializer != null &&
+                        context.memoryModel == MemoryModel.ARC && context.config.optimizationsEnabled &&
+                        !context.shouldContainDebugInfo() && !context.config.arcDiagnosticsEnabled) {
+                    "selected coroutine iteration borrow escaped its verified declaration boundary: ${ir2string(variable)}"
+                }
+                val value = evaluateExpression(variable.initializer!!, null)
+                require(value == emission.currentPhi) {
+                    "selected coroutine iteration borrow did not forward the exact current phi"
+                }
+                functionGenerationContext.vars.createImmutable(variable, value)
+                emission.markDeclaration(variable)
+                return
+            }
+        }
         val joinedReferencePlan = arcOwnership.joinedReferenceSlots[variable]
         val coroutineSpillMove = arcOwnership.coroutineSpillMovesByVariable[variable]
         val safeContinuationOwnedResult = variable in arcOwnership.safeContinuationOwnedResultVariables
@@ -2463,6 +2638,7 @@ internal class CodeGeneratorVisitor(
     //-------------------------------------------------------------------------//
     private fun evaluateCall(value: IrFunctionAccessExpression, resultSlot: LLVMValueRef?): LLVMValueRef {
         context.log{"evaluateCall                   : ${ir2string(value)}"}
+        if (value is IrCall) currentCoroutineGuaranteedPhiEmission?.markCall(value)
 
         if (value is IrCall) {
             arcOwnership.resultCompanionImmortalLoadsByCall[value]?.let { plan ->

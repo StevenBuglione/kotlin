@@ -148,6 +148,7 @@ internal data class ArcCodegenOwnershipPlan(
     val resultCompanionImmortalLoadsByCall: Map<IrCall, ArcResultCompanionImmortalLoadPlan>,
     val resultCompanionImmortalVariables: Set<IrVariable>,
     val selectiveInlineStringAppendCalls: Set<IrCall>,
+    val coroutineGuaranteedPhiSelections: Map<IrSimpleFunction, ArcCoroutineGuaranteedPhiIRSelection>,
 ) {
     val scopedArcReferenceLoadBoundaries: Set<IrExpression> =
         Collections.newSetFromMap(IdentityHashMap<IrExpression, Boolean>()).apply {
@@ -184,6 +185,7 @@ internal data class ArcCodegenOwnershipPlan(
             resultCompanionImmortalLoadsByCall = emptyMap(),
             resultCompanionImmortalVariables = emptySet(),
             selectiveInlineStringAppendCalls = emptySet(),
+            coroutineGuaranteedPhiSelections = emptyMap(),
         )
     }
 }
@@ -620,6 +622,7 @@ internal fun runArcOwnershipPlanning(
                         }
     val borrowedCharArrayConsumerSymbols = resolveBorrowedCharArrayConsumerSymbols(generationState)
     val selectiveInlineStringAppendCalls = linkedSetOf<IrCall>()
+    val coroutineGuaranteedPhiSelections = IdentityHashMap<IrSimpleFunction, ArcCoroutineGuaranteedPhiIRSelection>()
     val canonicalLockedReadPlans = resolveCanonicalLockedReadPlans(generationState, input.module)
     canonicalLockedReadPlans.forEach { plan ->
         lockedReadResultSlotForwardingCalls[plan.tailCall] = plan
@@ -641,6 +644,35 @@ internal fun runArcOwnershipPlanning(
             }
 
             override fun visitSimpleFunction(declaration: IrSimpleFunction) {
+                val coroutinePhiSelection = selectVerifiedCoroutineGuaranteedPhiWebs(generationState, declaration)
+                if (generationState.context.config.arcDiagnosticsEnabled) {
+                    coroutinePhiSelection?.let { selection ->
+                        val diagnostics = selection.diagnostics
+                        generationState.context.log {
+                            "ARC coroutine guaranteed-phi diagnostic " +
+                                    "${declaration.fqNameForIrSerialization.asString()}: " +
+                                    "webs=${diagnostics.selectedWebs}, seeds=${diagnostics.seeds}, " +
+                                    "joins=${diagnostics.joins}, forwards=${diagnostics.forwards}, " +
+                                    "borrows=${diagnostics.borrows}, consumes=${diagnostics.consumes}, " +
+                                    "updateStackRefsRemoved=${diagnostics.projectedUpdateStackRefsRemoved}, " +
+                                    "retainsRemoved=${diagnostics.projectedRetainsRemoved}, " +
+                                    "releasesRemoved=${diagnostics.projectedReleasesRemoved}"
+                        }
+                    }
+                    if (coroutinePhiSelection == null && declaration.name.asString() == "resumeWith" &&
+                        (declaration.parent as? IrClass)?.fqNameForIrSerialization?.asString() ==
+                                "kotlin.coroutines.native.internal.BaseContinuationImpl"
+                    ) {
+                        generationState.context.log {
+                            "ARC coroutine guaranteed-phi diagnostic " +
+                                    "${declaration.fqNameForIrSerialization.asString()}: rejected"
+                        }
+                    }
+                } else if (coroutinePhiSelection != null) {
+                    check(coroutineGuaranteedPhiSelections.put(declaration, coroutinePhiSelection) == null) {
+                        "duplicate coroutine guaranteed-phi selection: ${declaration.fqNameForIrSerialization}"
+                    }
+                }
                 returnedReceiverBorrowCalls += selectVerifiedReturnedReceiverBorrowCalls(generationState, declaration)
                 selectVerifiedDiscardedReturnedReceiverGroups(generationState, declaration).forEach { group ->
                     group.calls.forEach { call ->
@@ -784,6 +816,7 @@ internal fun runArcOwnershipPlanning(
             resultCompanionImmortalLoadsByCall,
             resultCompanionImmortalVariables,
             selectiveInlineStringAppendCalls,
+            coroutineGuaranteedPhiSelections,
         ),
     )
 }

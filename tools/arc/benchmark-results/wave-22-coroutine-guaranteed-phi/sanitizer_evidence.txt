@@ -1,0 +1,7 @@
+candidate normal: ARC_COROUTINE_STRESS_OK iterations=100000 checksum=12142792860 finally=100000
+candidate UBSAN: ARC_COROUTINE_STRESS_OK iterations=25000 checksum=758883932 finally=25000
+candidate ASAN without LSan: ARC_COROUTINE_STRESS_OK iterations=25000 checksum=758883932 finally=25000
+candidate instrumentation: ASAN symbols present; UBSAN symbols and call sites present
+candidate LSan: Direct leak 1600000 bytes in 25000 objects; indirect leak 192 bytes in 4 objects; total 1600192 bytes in 25004 allocations; exit 134
+Wave21 LSan: Direct leak 1600000 bytes in 25000 objects; indirect leak 192 bytes in 4 objects; total 1600192 bytes in 25004 allocations; exit 134
+classification: exact baseline-identical pre-existing full-heap ARC suspendCoroutine leak; not introduced or worsened by Wave22

@@ -55,6 +55,8 @@ class LlvmCallable(private val llvmValue: LLVMValueRef, private val attributePro
     fun addBasicBlock(context: LLVMContextRef, name: String = "") =
             LLVMAppendBasicBlockInContext(context, llvmValue, name)!!
 
+    internal fun basicBlocks(): Sequence<LLVMBasicBlockRef> = getBasicBlocks(llvmValue)
+
     fun blockAddress(label: LLVMBasicBlockRef) = LLVMBlockAddress(llvmValue, label)!!
 
     fun addDebugInfoSubprogram(subprogram: DISubprogramRef) {

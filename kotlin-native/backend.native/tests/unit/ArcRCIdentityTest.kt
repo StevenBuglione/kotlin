@@ -157,6 +157,34 @@ class ArcRCIdentityTest {
     }
 
     @Test
+    fun prunedLivenessInitializesSparseUnrelatedBlocksBeforeBuildingFrontier() {
+        val root = ArcSSAValue("root")
+        val entry = ArcBlockId("entry")
+        val sparse = ArcBlockId("sparse")
+        val cfg = ArcOwnershipSSAInput(
+            entry,
+            linkedMapOf(
+                entry to ArcSSABlock(entry, listOf(
+                    ArcSSAOperation.Introduce(root, ArcOwnership.Owned),
+                    ArcSSAOperation.Use(root, ArcSSAUseKind.Borrow),
+                )),
+                // This operation never becomes live for root, so the fixed point leaves its
+                // before/after arrays entirely false.
+                sparse to ArcSSABlock(sparse, listOf(ArcSSAOperation.DeinitBarrier())),
+            ),
+            setOf(ArcSSAEdge(entry, sparse)),
+        )
+        val result = ArcRCIdentityAnalysis.analyze(ArcRCIdentityInput(cfg, emptyList()))
+
+        assertFalse(result.liveness.isLiveBefore(root, sparse, 0))
+        assertFalse(result.liveness.isLiveAfter(root, sparse, 0))
+        assertTrue(
+            ArcRCLifetimeFrontier.AfterOperation(ArcRCPosition(entry, 1)) in
+                    result.liveness.lifetimeFrontier(root)
+        )
+    }
+
+    @Test
     fun throwingConsumeProducesConsumeAndExceptionalFrontiers() {
         val value = ArcSSAValue("value")
         val handler = ArcBlockId("handler")

@@ -1,0 +1,66 @@
+{
+  "wave": 22,
+  "name": "coroutine-guaranteed-phi",
+  "target": "linux_x64",
+  "host": "olfa@10.10.10.12",
+  "provenance": {
+    "wave21Commit": "f8b1f00f3e41609fb51be6380ac2e49ec5d80b5f",
+    "candidateCompilerSnapshot": "c898ea3043b3a9266d227c14fcfdec6e802ff95a",
+    "candidateCompilerTree": "22af946ee89169ab3d183db9b1be0e1ffb049ed8",
+    "finalSourceSnapshot": "6b6d83b6e9084a45fad80c154cfa32eb6da5676c",
+    "finalSourceTree": "564c7402bfafa9f20eb473b326d58b65ea8a5c98"
+  },
+  "emission": {
+    "wave21UpdateStackRefSites": 7,
+    "candidateUpdateStackRefSites": 2,
+    "candidateCoroutinePointerPhis": 2,
+    "remainingSites": "two genuine +1 backedge handoffs"
+  },
+  "runtime": {
+    "wave21Comparison": {
+      "pairs": 25,
+      "wave21MedianNs": 180158775,
+      "candidateMedianNs": 169665619,
+      "candidateLatencyRatio": 0.9417560649,
+      "candidateThroughputRatio": 1.0618460951,
+      "wave21MedianRssKiB": 2688,
+      "candidateMedianRssKiB": 2688
+    },
+    "strictComparison": {
+      "pairs": 50,
+      "strictMedianNs": 145613735,
+      "candidateMedianNs": 169813664,
+      "candidateLatencyRatio": 1.1661926254,
+      "candidateThroughputRatio": 0.8574912739
+    }
+  },
+  "coldCompile": {
+    "pairs": 7,
+    "wave21MedianSeconds": 10.03,
+    "candidateMedianSeconds": 10.08,
+    "candidateTimeRatio": 1.0049850449,
+    "wave21MedianMaxRssKiB": 624168,
+    "candidateMedianMaxRssKiB": 595884,
+    "candidateMedianRssRatio": 0.9546846323,
+    "wave21MaxRssKiB": 648872,
+    "candidateMaxRssKiB": 650744,
+    "candidateMaxRssRatio": 1.0028850066
+  },
+  "binary": {
+    "pairedCompileBytesWave21": 485624,
+    "pairedCompileBytesCandidate": 485624,
+    "strictByteIdentitySha256": "22d5aebe7409d2d303cf05efecfb2325c55340a70b05caa9e1c49f83c26090e5"
+  },
+  "verification": {
+    "ownershipUnitSuite": "PASS",
+    "focusedPhysicalCfgTests": "PASS",
+    "distCompiler": "PASS",
+    "observableOutput": "ARC_BENCH_OK scenario=coroutines checksum=45000150000 operations=300000 allocations=900000",
+    "normalStress": "PASS",
+    "ubsanStress": "PASS",
+    "asanStressWithoutLeakDetection": "PASS",
+    "asanInstrumentation": "PASS",
+    "lsanDifferential": "BASELINE_IDENTICAL_PREEXISTING_LEAK",
+    "strictExecutableByteIdentity": "PASS"
+  }
+}

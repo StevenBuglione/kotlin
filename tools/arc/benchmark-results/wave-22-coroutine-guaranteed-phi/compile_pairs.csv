@@ -1,0 +1,15 @@
+pair,order,model,seconds,max_rss_kib,binary_bytes
+1,candidate-wave21,candidate,10.15,650744,485624
+1,candidate-wave21,wave21,10.14,642576,485624
+2,wave21-candidate,wave21,10.03,642524,485624
+2,wave21-candidate,candidate,9.97,596488,485624
+3,candidate-wave21,candidate,9.91,561684,485624
+3,candidate-wave21,wave21,9.97,624168,485624
+4,wave21-candidate,wave21,9.90,584860,485624
+4,wave21-candidate,candidate,10.08,595884,485624
+5,candidate-wave21,candidate,10.12,643340,485624
+5,candidate-wave21,wave21,10.11,566772,485624
+6,wave21-candidate,wave21,10.17,563252,485624
+6,wave21-candidate,candidate,10.08,579352,485624
+7,candidate-wave21,candidate,10.09,572676,485624
+7,candidate-wave21,wave21,9.89,648872,485624

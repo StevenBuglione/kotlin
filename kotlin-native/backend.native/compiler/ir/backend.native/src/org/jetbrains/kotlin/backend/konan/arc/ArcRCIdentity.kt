@@ -173,8 +173,11 @@ internal class ArcRCPrunedLiveness internal constructor(
         }
         val liveIn = cfg.blocks.keys.associateWithTo(linkedMapOf()) { false }
         val liveOut = cfg.blocks.keys.associateWithTo(linkedMapOf()) { false }
-        val before = linkedMapOf<ArcBlockId, BooleanArray>()
-        val after = linkedMapOf<ArcBlockId, BooleanArray>()
+        // Keep a deterministic zero state even for blocks the queried RC family never reaches.
+        // The fixed point may legitimately leave every bit false, but frontier construction still
+        // enumerates every operation in the frozen CFG.
+        val before = cfg.blocks.mapValuesTo(linkedMapOf()) { (_, block) -> BooleanArray(block.operations.size) }
+        val after = cfg.blocks.mapValuesTo(linkedMapOf()) { (_, block) -> BooleanArray(block.operations.size) }
 
         var changed = true
         while (changed) {
