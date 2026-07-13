@@ -1,0 +1,12 @@
+{
+  "cpu": 16,
+  "pairs": 9,
+  "baseline": "/tmp/coroutine-strict-bench.kexe",
+  "candidate": "/tmp/coroutine-empty-context-bench.kexe",
+  "baselineMedianSeconds": 0.107732459,
+  "candidateMedianSeconds": 0.115088096,
+  "medianPairedThroughputRatio": 0.935010855581908,
+  "geomeanPairedThroughputRatio": 0.9376811432041209,
+  "baselineBinaryBytes": 507184,
+  "candidateBinaryBytes": 526680
+}

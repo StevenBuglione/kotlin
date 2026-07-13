@@ -1,0 +1,115 @@
+{
+  "schemaVersion": 1,
+  "wave": "wave-29-empty-context-immortal-return",
+  "recordedAt": "2026-07-13T06:41:25.5826157-04:00",
+  "source": {
+    "branch": "codex/kotlin-native-arc-1.9.10",
+    "candidateCommit": "549bf6efe1fce63db8eee0d1364ada8ed3169ccd",
+    "candidateTree": "188fe117d6d0eeda63bf88e9a1f17bd097009f1d",
+    "candidateParent": "35c38259c0a1c6f12a08a507ef8e17ec1ec14273",
+    "candidateSubject": "[K/N] Return permanent coroutine contexts without retains",
+    "commitPatchIdStable": "fb80a8df062b1da6a43e9c2e29bb2c2526019399",
+    "remoteExecutionBaseHead": "e1c95dda6321e9371435a8f692e86535ebb00a1a",
+    "remoteScopedOverlaySha256": "ac441d9a4fb01b0aacd9a3b35bfc3c4710da493c95a8a7e929a73306dedc3972",
+    "codegenRelevantSourceManifestSha256": "5c67db3e43be7450d3e9747b5916867f3bc4434d8b582330fe9305f9edf3c2d4",
+    "codegenRelevantFilesSha256": {
+      "kotlin-native/backend.native/compiler/ir/backend.native/src/org/jetbrains/kotlin/backend/konan/arc/ArcCoroutineEmptyContextImmortalReturn.kt": "97aff5eb7b1230f9995cda9ccbb119ff451c696be1d60ed58594518931679107",
+      "kotlin-native/backend.native/compiler/ir/backend.native/src/org/jetbrains/kotlin/backend/konan/arc/ArcCoroutineEmptyContextImmortalReturnIRSelector.kt": "6fb84a66e3ad810e27baaf2bcac7033475056f076a1f42896510299331f98a57",
+      "kotlin-native/backend.native/compiler/ir/backend.native/src/org/jetbrains/kotlin/backend/konan/arc/ArcOwnershipPlanning.kt": "854e626df4e8b235fe3fcfb5cb7f4eb9ef54d6cf334c53b7b81adba520015241",
+      "kotlin-native/backend.native/compiler/ir/backend.native/src/org/jetbrains/kotlin/backend/konan/llvm/IrToBitcode.kt": "8d6b3e53c95477fa244b0eef1bc108ead9d04644b91ec4cccbcfbfeb92b7d465",
+      "kotlin-native/backend.native/tests/codegen/arc/coroutineEmptyContextImmortalReturn.kt": "54c62afe25a8c93284522d89b859b0070ba7b2f974982648e13d764314155413",
+      "kotlin-native/backend.native/tests/unit/ArcCoroutineEmptyContextImmortalReturnIRSelectorTest.kt": "173b07b2a5b68ceb1abb3e987786fae5ed46c093310f5537d44de275592f1bf6"
+    },
+    "remoteBuildGradleSha256": "7e5242c2b4b3fd88abcd852b75873fccc75653d813b3a18121d39a84ce7a49db",
+    "committedBuildGradleSha256": "c8b4e3b667057fbec1cdb03204f1367732e923e2272fa53c920606232d93bc65",
+    "buildGradleDifference": "Concurrent C-lane orchestration only; benchmark used direct konanc invocation."
+  },
+  "host": {
+    "ssh": "olfa@10.10.10.8",
+    "hostname": "venus",
+    "cpu": "AMD RYZEN AI MAX+ 395 w/ Radeon 8060S",
+    "logicalCpus": 32,
+    "benchmarkPinnedCpu": 16
+  },
+  "compiler": {
+    "version": "kotlinc-native 1.9.255-SNAPSHOT",
+    "jre": "21.0.11+10-1-24.04.2-Ubuntu",
+    "konancSha256": "5baa2f832ede18edd5933d8fe1f5327049e9a1b1ddb4a7d81998808b9cb460d8",
+    "compilerEmbeddableJarSha256": "3a64ba824c3ca9211b752b15dde187447f0f48328adfd5612b7ed110c3fe5653"
+  },
+  "inputs": {
+    "benchmarkFixtureSha256": "e69a89cda9684c695a7dedd90808ab20375fe32c1e589fbe1d2ebf028142e35b",
+    "cinteropKlibSha256": "b23ae9f3c76342c1d5a08b80b1994493ad147bc064c710137c751a012acc5c00",
+    "pairedRunnerSha256": "4a70a4897de6712c7a95f86cfd1094eb0f84f01a3aa924a1b8a0b617c47d1f3c",
+    "compileCommand": "kotlin-native/dist/bin/konanc tools/arc/fixtures/benchmark.kt -library /tmp/coroutine-current-cinterop.klib -o /tmp/coroutine-empty-context-bench -opt",
+    "benchmarkCommand": "python3 /tmp/benchmark-coroutine-pairs.py /tmp/coroutine-empty-context-bench.kexe /tmp/coroutine-strict-bench.kexe /tmp/coroutine-empty-context-9pair 9"
+  },
+  "binaries": {
+    "candidate": {
+      "path": "/tmp/coroutine-empty-context-bench.kexe",
+      "sha256": "e939626539a7a13e3936bfeee3b3aaa2d172966faa941e6aeba814a8a5eb5320",
+      "bytes": 526680
+    },
+    "strict": {
+      "path": "/tmp/coroutine-strict-bench.kexe",
+      "sha256": "6942193360cfd3b7c2fee37ea01e6979451e511d547dc2ab18ccf51333f59ca8",
+      "bytes": 507184
+    },
+    "previousCandidateBytes": 526656
+  },
+  "rawEvidence": {
+    "summaryJsonRemoteSha256": "29bac9e1c6852922168fd09f87dec26a8c429b38b79ecfbd620b1eb4ba4ea6ba",
+    "runtimePairsCsvRemoteSha256": "153430990604c223d77fc06aa0904064cee52cd885aca12512fbada1693c3854"
+  },
+  "benchmark": {
+    "pairs": 9,
+    "strictMedianSeconds": 0.107732459,
+    "candidateMedianSeconds": 0.115088096,
+    "medianPairedThroughputRatio": 0.935010855581908,
+    "geomeanPairedThroughputRatio": 0.9376811432041209,
+    "previousGeomeanPairedThroughputRatio": 0.9332910868285101,
+    "relativeImprovementPercent": 0.4703844746368313,
+    "percentagePointImprovement": 0.439005637561074,
+    "remainingStrictGapPercent": 6.231885679587911,
+    "candidateSizeAboveStrictPercent": 3.8439698413199164,
+    "candidateSizeDeltaFromPreviousBytes": 24
+  },
+  "dynamicCounters": {
+    "command": "gdb -q -batch -x /tmp/count-coroutine.gdb --args <binary> 1 int",
+    "previous": {
+      "stack": 1,
+      "heap": 26,
+      "return": 24,
+      "addHeapRef": 53
+    },
+    "candidate": {
+      "stack": 1,
+      "heap": 26,
+      "return": 22,
+      "addHeapRef": 51
+    },
+    "delta": {
+      "stack": 0,
+      "heap": 0,
+      "return": -2,
+      "addHeapRef": -2
+    }
+  },
+  "semanticGates": {
+    "focusedSelectorUnit": "PASS",
+    "optimizedSelectorCount": 1,
+    "optimizedFileCheck": "PASS: MoveReferenceIntoReturnSlotArc present; UpdateReturnRef absent",
+    "debugFallbackFileCheck": "PASS: UpdateReturnRef present; move helper absent",
+    "diagnosticsFallbackFileCheck": "PASS: UpdateReturnRef present; move helper absent",
+    "strictFallbackFileCheck": "PASS: raw result-slot store and return; both helpers absent",
+    "standaloneRuntime": "PASS: ARC_EMPTY_CONTEXT_IMMORTAL_RETURN_OK checksum=42",
+    "asan": "PASS: UnsupportedCompilationMode fallback, UpdateReturnRef, no move helper, checksum=42",
+    "ubsan": "PASS: UnsupportedCompilationMode fallback, UpdateReturnRef, no move helper, checksum=42"
+  },
+  "verdict": {
+    "semanticSlice": "PASS",
+    "performanceDirection": "IMPROVED",
+    "strictParityGate": "FAIL",
+    "reason": "The candidate remains 6.2319% below strict on the paired coroutine benchmark."
+  }
+}
