@@ -30,6 +30,7 @@ import org.jetbrains.kotlin.ir.expressions.IrTypeOperatorCall
 import org.jetbrains.kotlin.ir.symbols.IrConstructorSymbol
 import org.jetbrains.kotlin.ir.symbols.IrSimpleFunctionSymbol
 import org.jetbrains.kotlin.ir.types.classifierOrNull
+import org.jetbrains.kotlin.ir.types.isInt
 import org.jetbrains.kotlin.ir.types.isNullable
 import org.jetbrains.kotlin.ir.util.constructors
 import org.jetbrains.kotlin.ir.util.functions
@@ -101,8 +102,17 @@ internal fun selectVerifiedStringConcatenationRCIdentityGroups(
 
     val stringBuilder = generationState.context.ir.symbols.stringBuilder.owner
     if (stringBuilder.modality != Modality.FINAL) return emptyList()
-    val constructor = stringBuilder.constructors.singleOrNull { it.valueParameters.isEmpty() }?.symbol
-        ?: return emptyList()
+    // ARC capacity planning may replace the lowering's no-arg construction with the exact
+    // StringBuilder(Int) overload. Both still create the same private compiler-owned temporary.
+    val defaultConstructor = stringBuilder.constructors.singleOrNull {
+        it.valueParameters.isEmpty()
+    }?.symbol ?: return emptyList()
+    val capacityConstructor = stringBuilder.constructors.singleOrNull {
+        it.valueParameters.singleOrNull()?.type?.isInt() == true
+    }?.symbol
+    val constructors = linkedSetOf(defaultConstructor).apply {
+        capacityConstructor?.let(::add)
+    }
     val appendSymbols = stringBuilder.functions.filterTo(linkedSetOf()) { callee ->
         callee.name.asString() == "append" && callee.valueParameters.size == 1 &&
                 callee.extensionReceiverParameter == null && callee.dispatchReceiverParameter != null &&
@@ -130,14 +140,14 @@ internal fun selectVerifiedStringConcatenationRCIdentityGroups(
 
         override fun visitBlockBody(body: IrBlockBody) {
             result += selectExactLoweredBlock(
-                body, body.statements, stringBuilder, constructor, appendSymbols, terminalSymbols
+                body, body.statements, stringBuilder, constructors, appendSymbols, terminalSymbols
             )
             body.acceptChildrenVoid(this)
         }
 
         override fun visitContainerExpression(expression: IrContainerExpression) {
             result += selectExactLoweredBlock(
-                expression, expression.statements, stringBuilder, constructor, appendSymbols, terminalSymbols
+                expression, expression.statements, stringBuilder, constructors, appendSymbols, terminalSymbols
             )
             expression.acceptChildrenVoid(this)
         }
@@ -205,13 +215,13 @@ private fun selectExactLoweredBlock(
     block: IrElement,
     statements: List<IrStatement>,
     stringBuilder: IrClass,
-    constructor: IrConstructorSymbol,
+    constructors: Set<IrConstructorSymbol>,
     appendSymbols: Set<IrSimpleFunctionSymbol>,
     terminalSymbols: Set<IrSimpleFunctionSymbol>,
 ): List<ArcDiscardedReturnedReceiverGroup> = statements.indices.flatMap { temporaryIndex ->
     val temporary = statements[temporaryIndex] as? IrVariable ?: return@flatMap emptyList()
     if (temporary.origin != IrDeclarationOrigin.IR_TEMPORARY_VARIABLE || temporary.isVar ||
-        !temporary.initializer.isExactStringBuilderConstruction(constructor)
+        !temporary.initializer.isExactStringBuilderConstruction(constructors)
     ) {
         return@flatMap emptyList()
     }
@@ -251,9 +261,9 @@ private fun selectExactLoweredBlock(
     groups
 }
 
-private fun IrExpression?.isExactStringBuilderConstruction(constructor: IrConstructorSymbol): Boolean {
+private fun IrExpression?.isExactStringBuilderConstruction(constructors: Set<IrConstructorSymbol>): Boolean {
     val call = this as? IrConstructorCall ?: return false
-    return call.symbol == constructor
+    return call.symbol in constructors
 }
 
 private fun IrExpression.unwrapDiscardedCall(): IrCall? = when (this) {
