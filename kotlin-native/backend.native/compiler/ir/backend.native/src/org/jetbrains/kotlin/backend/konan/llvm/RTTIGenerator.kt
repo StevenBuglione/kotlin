@@ -12,6 +12,8 @@ import org.jetbrains.kotlin.backend.konan.ir.getSuperClassNotAny
 import org.jetbrains.kotlin.backend.konan.ir.isAny
 import org.jetbrains.kotlin.backend.konan.lower.FunctionReferenceLowering.Companion.isLoweredFunctionReference
 import org.jetbrains.kotlin.backend.konan.lower.getObjectClassInstanceFunction
+import org.jetbrains.kotlin.backend.konan.arc.ArcImmortalCompletionContextCodegenPlan
+import org.jetbrains.kotlin.backend.konan.arc.exactIdentityInventory
 import org.jetbrains.kotlin.builtins.PrimitiveType
 import org.jetbrains.kotlin.ir.declarations.*
 import org.jetbrains.kotlin.ir.types.*
@@ -20,7 +22,16 @@ import org.jetbrains.kotlin.ir.util.*
 internal class RTTIGenerator(
         override val generationState: NativeGenerationState,
         private val referencedFunctions: Set<IrFunction>?,
+        immortalCompletionContextPlans: List<ArcImmortalCompletionContextCodegenPlan> = emptyList(),
 ) : ContextUtils {
+
+    private val immortalCompletionContextsByClass = java.util.IdentityHashMap<IrClass, ArcImmortalCompletionContextCodegenPlan>().apply {
+        immortalCompletionContextPlans.forEach { plan ->
+            check(put(plan.selection.ownerClass, plan) == null) {
+                "duplicate RTTI immortal completion-context selection"
+            }
+        }
+    }
 
     private val codegen by lazy { CodeGenerator(generationState) }
 
@@ -259,7 +270,7 @@ internal class RTTIGenerator(
             null
         }
         val arcFieldDestroyThunk = if (context.config.memoryModel == MemoryModel.ARC) {
-            genArcFieldDestroyThunk(irClass, bodyType)
+            genArcFieldDestroyThunk(irClass, bodyType, immortalCompletionContextsByClass[irClass])
         } else {
             null
         }
@@ -522,11 +533,31 @@ internal class RTTIGenerator(
      * diagnostics, and the iterative zero-count worklist semantics. Array elements remain on the
      * runtime metadata path because their count is dynamic.
      */
-    private fun genArcFieldDestroyThunk(irClass: IrClass, bodyType: LLVMTypeRef): ConstPointer? {
+    private fun genArcFieldDestroyThunk(
+        irClass: IrClass,
+        bodyType: LLVMTypeRef,
+        immortalCompletionContext: ArcImmortalCompletionContextCodegenPlan?,
+    ): ConstPointer? {
         if (getElementType(irClass) != null) return null
 
         val indicesOfObjectFields = getIndicesOfObjectFields(bodyType)
         if (indicesOfObjectFields.isEmpty()) return null
+
+        val skippedPermanentFieldIndex = immortalCompletionContext?.let { plan ->
+            val selection = plan.selection
+            val field = selection.contextField
+            val fieldIndex = generationState.llvmDeclarations.forClass(irClass).fieldIndices[field.symbol]
+            check(selection.ownerClass === irClass && field.parent === irClass && fieldIndex != null &&
+                    fieldIndex in indicesOfObjectFields && field.type.binaryTypeIsReference()) {
+                "immortal completion-context destroy field/layout fingerprint drifted"
+            }
+            plan.ledger.consumeDestroy(
+                irClass,
+                field,
+                selection.selection.bindings.exactIdentityInventory(),
+            )
+            fieldIndex
+        }
 
         val className = irClass.fqNameForIrSerialization
         val functionProto = LlvmFunctionSignature(
@@ -548,6 +579,7 @@ internal class RTTIGenerator(
             // layout and the ARC worklist's LIFO drain provide deterministic derived-to-base child
             // destruction without recursive native calls.
             indicesOfObjectFields.forEach { fieldIndex ->
+                if (fieldIndex == skippedPermanentFieldIndex) return@forEach
                 val field = structGep(objectBody, fieldIndex, "arc.destroy.field")
                 llvm.zeroHeapRefFunction.buildCall(builder, listOf(field))
             }

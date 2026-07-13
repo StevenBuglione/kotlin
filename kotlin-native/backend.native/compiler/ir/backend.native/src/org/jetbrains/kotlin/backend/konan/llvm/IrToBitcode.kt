@@ -38,6 +38,7 @@ import org.jetbrains.kotlin.backend.konan.arc.ArcCoroutineEmptyContextReturnKotl
 import org.jetbrains.kotlin.backend.konan.arc.ArcCoroutineSuspendedBorrowConsumptionLedger
 import org.jetbrains.kotlin.backend.konan.arc.ArcCoroutineSuspendedBorrowIRSelection
 import org.jetbrains.kotlin.backend.konan.arc.ArcCoroutineSuspendedBorrowKotlinIRSelection
+import org.jetbrains.kotlin.backend.konan.arc.ArcImmortalCompletionContextCodegenPlan
 import org.jetbrains.kotlin.backend.konan.arc.exactIdentityInventory
 import org.jetbrains.kotlin.backend.konan.arc.hasExactCoroutineSingletonValuesInitializer
 import org.jetbrains.kotlin.backend.konan.arc.hasExactCoroutinePhysicalBackedge
@@ -126,8 +127,22 @@ internal fun IrFunction.shouldGenerateBody(): Boolean = when {
     else -> true
 }
 
-internal class RTTIGeneratorVisitor(generationState: NativeGenerationState, referencedFunctions: Set<IrFunction>?) : IrElementVisitorVoid {
-    val generator = RTTIGenerator(generationState, referencedFunctions)
+private fun IrExpression.unwrapSelectedCompletionFieldLoad(): IrGetField? = when (this) {
+    is IrGetField -> this
+    is IrTypeOperatorCall -> if (operator == IrTypeOperator.IMPLICIT_CAST) {
+        argument.unwrapSelectedCompletionFieldLoad()
+    } else {
+        null
+    }
+    else -> null
+}
+
+internal class RTTIGeneratorVisitor(
+    generationState: NativeGenerationState,
+    referencedFunctions: Set<IrFunction>?,
+    immortalCompletionContextPlans: List<ArcImmortalCompletionContextCodegenPlan> = emptyList(),
+) : IrElementVisitorVoid {
+    val generator = RTTIGenerator(generationState, referencedFunctions, immortalCompletionContextPlans)
 
     val kotlinObjCClassInfoGenerator = KotlinObjCClassInfoGenerator(generationState)
 
@@ -275,6 +290,81 @@ internal class CodeGeneratorVisitor(
             CoroutineEmptyContextImmortalReturnEmission? = null
     private var currentCoroutineSuspendedScopedBorrowEmission:
             CoroutineSuspendedScopedBorrowEmission? = null
+    private var currentImmortalCompletionContextEmission: ImmortalCompletionContextEmission? = null
+
+    /** Emits the constructor first-store and getter result halves of one RTTI-authenticated plan. */
+    private inner class ImmortalCompletionContextEmission(
+        val plan: ArcImmortalCompletionContextCodegenPlan,
+    ) {
+        val selection = plan.selection
+
+        fun emitInitializer(store: IrSetField, value: LLVMValueRef, address: LLVMValueRef) {
+            val bindings = selection.selection.bindings
+            val receiver = store.receiver as? IrGetValue
+                ?: error("immortal completion-context initializer lost fresh receiver")
+            val rootLoad = store.value.unwrapSelectedCompletionFieldLoad()
+                ?: error("immortal completion-context initializer lost permanent root load")
+            check(store === selection.initializerStore && store.symbol.owner === selection.contextField &&
+                    receiver === bindings.constructedReceiver && receiver.symbol.owner ===
+                    selection.constructor.constructedClass.thisReceiver?.symbol?.owner &&
+                    rootLoad === bindings.initializerRootLoad &&
+                    rootLoad.symbol.owner === bindings.permanentRootField && rootLoad.receiver == null &&
+                    selection.selection.ownership.emissionPolicy.rawInitializeOnlyFreshField &&
+                    selection.selection.ownership.emissionPolicy.initializeDoesNotReleaseOldValue &&
+                    selection.selection.ownership.emissionPolicy.neverRawReplaceInitializedStorage) {
+                "immortal completion-context raw initializer fingerprint drifted"
+            }
+            functionGenerationContext.store(
+                value,
+                address,
+                alignment = generationState.llvmDeclarations.forField(selection.contextField).alignment,
+            )
+            plan.ledger.consumeInitializer(
+                selection.constructor,
+                selection.initializerWrapper,
+                store,
+                bindings.exactIdentityInventory(),
+            )
+        }
+
+        fun emitGetter(returned: IrReturn, targetReturnSlot: LLVMValueRef): LLVMValueRef {
+            val bindings = selection.selection.bindings
+            val fieldLoad = selection.getterFieldLoad
+            check(returned === selection.getterReturn && returned.value.unwrapSelectedCompletionFieldLoad() === fieldLoad &&
+                    fieldLoad.symbol.owner === selection.contextField &&
+                    selection.selection.ownership.emissionPolicy.publishWithMoveThatReleasesPriorResultSlot) {
+                "immortal completion-context getter fingerprint drifted"
+            }
+            val root = bindings.permanentRootField as IrField
+            check(root.isStatic && root.isFinal && root.type.binaryTypeIsReference()) {
+                "immortal completion-context permanent root drifted"
+            }
+            if (context.config.threadsAreAllowed && root.isGlobalNonPrimitive(context)) {
+                functionGenerationContext.checkGlobalsAccessible(currentCodeContext.exceptionHandler)
+            }
+            val permanent = functionGenerationContext.loadSlot(
+                staticFieldPtr(root, functionGenerationContext),
+                false,
+                null,
+                alignment = generationState.llvmDeclarations.forStaticField(root).alignment,
+            )
+            val publish = llvm.externalNativeRuntimeFunction(
+                "MoveReferenceIntoReturnSlotArc",
+                LlvmRetType(llvm.voidType),
+                listOf(LlvmParamType(codegen.kObjHeaderPtrPtr), LlvmParamType(codegen.kObjHeaderPtr)),
+                functionAttributes = listOf(LlvmFunctionAttribute.NoUnwind),
+            )
+            functionGenerationContext.call(publish, listOf(targetReturnSlot, permanent))
+            functionGenerationContext.markReturnValueAlreadyInReturnSlot()
+            plan.ledger.consumeGetter(
+                selection.contextGetter,
+                returned,
+                fieldLoad,
+                bindings.exactIdentityInventory(),
+            )
+            return permanent
+        }
+    }
 
     /** Emits exact process-rooted enum projections only into bounded identity comparisons. */
     private inner class CoroutineSuspendedScopedBorrowEmission(
@@ -1110,6 +1200,10 @@ internal class CodeGeneratorVisitor(
         }
     }
 
+    fun dispose() {
+        arcOwnership.immortalCompletionContextsByClass.values.forEach { it.ledger.verifyComplete() }
+    }
+
     //-------------------------------------------------------------------------//
 
     private open inner class StackLocalsScope() : InnerScopeImpl() {
@@ -1412,6 +1506,7 @@ internal class CodeGeneratorVisitor(
             currentCoroutineEmptyContextImmortalReturnEmission
         val previousCoroutineSuspendedScopedBorrowEmission =
             currentCoroutineSuspendedScopedBorrowEmission
+        val previousImmortalCompletionContextEmission = currentImmortalCompletionContextEmission
         currentDiscardedReturnedReceiverSeedSlots = IdentityHashMap()
         currentCoroutineGuaranteedPhiEmission = (declaration as? IrSimpleFunction)?.let {
             arcOwnership.coroutineGuaranteedPhiSelections[it]
@@ -1437,6 +1532,11 @@ internal class CodeGeneratorVisitor(
         currentCoroutineSuspendedScopedBorrowEmission = arcOwnership
             .coroutineSuspendedScopedBorrowsByFunction[declaration]
             ?.let(::CoroutineSuspendedScopedBorrowEmission)
+        currentImmortalCompletionContextEmission = when (declaration) {
+            is IrConstructor -> arcOwnership.immortalCompletionContextsByConstructor[declaration]
+            is IrSimpleFunction -> arcOwnership.immortalCompletionContextsByGetter[declaration]
+            else -> null
+        }?.let(::ImmortalCompletionContextEmission)
         currentArcOwnedResultForwarding = if (!context.shouldContainDebugInfo()) {
             (declaration as? IrSimpleFunction)?.let { arcOwnership.ownedResultForwarding[it] }
         } else {
@@ -1502,6 +1602,7 @@ internal class CodeGeneratorVisitor(
                     previousCoroutineEmptyContextImmortalReturnEmission
             currentCoroutineSuspendedScopedBorrowEmission =
                     previousCoroutineSuspendedScopedBorrowEmission
+            currentImmortalCompletionContextEmission = previousImmortalCompletionContextEmission
         }
 
 
@@ -2745,6 +2846,9 @@ internal class CodeGeneratorVisitor(
             return codegen.theUnitInstanceRef.llvm
         }
 
+        val immortalCompletionInitializer = currentImmortalCompletionContextEmission?.takeIf {
+            value === it.selection.initializerStore
+        }
         val thisPtr = value.receiver?.let { evaluateExpression(it) }
         val valueToAssign = evaluateExpression(value.value)
         val address: LLVMValueRef
@@ -2755,12 +2859,12 @@ internal class CodeGeneratorVisitor(
                 LLVMPrintTypeToString(thisPtr.type)?.toKString().toString()
             }
             val parentAsClass = value.symbol.owner.parentAsClass
-            if (needMutationCheck(value.symbol.owner)) {
+            if (immortalCompletionInitializer == null && needMutationCheck(value.symbol.owner)) {
                 functionGenerationContext.call(llvm.mutationCheck,
                         listOf(functionGenerationContext.bitcast(codegen.kObjHeaderPtr, thisPtr)),
                         Lifetime.IRRELEVANT, currentCodeContext.exceptionHandler)
             }
-            if (needLifetimeConstraintsCheck(valueToAssign, parentAsClass)) {
+            if (immortalCompletionInitializer == null && needLifetimeConstraintsCheck(valueToAssign, parentAsClass)) {
                 functionGenerationContext.call(llvm.checkLifetimesConstraint, listOf(thisPtr, valueToAssign))
             }
             address = fieldPtrOfClass(thisPtr, value.symbol.owner)
@@ -2777,7 +2881,15 @@ internal class CodeGeneratorVisitor(
         val ownedResultHeapStore = currentOwnedResultHeapStoreEmission?.takeIf {
             value === it.selection.store
         }
-        if (ownedResultHeapStore != null) {
+        if (immortalCompletionInitializer != null) {
+            require(context.memoryModel == MemoryModel.ARC && context.config.optimizationsEnabled &&
+                    !context.shouldContainDebugInfo() && !context.config.arcDiagnosticsEnabled &&
+                    thisPtr != null && value.symbol.owner === immortalCompletionInitializer.selection.contextField &&
+                    !value.symbol.owner.hasAnnotation(KonanFqNames.volatile)) {
+                "immortal completion-context initializer escaped its production boundary"
+            }
+            immortalCompletionInitializer.emitInitializer(value, valueToAssign, address)
+        } else if (ownedResultHeapStore != null) {
             require(context.memoryModel == MemoryModel.ARC && context.config.optimizationsEnabled &&
                     !context.shouldContainDebugInfo() && !context.config.arcDiagnosticsEnabled &&
                     thisPtr != null && value.symbol.owner === ownedResultHeapStore.selection.refElementField &&
@@ -2961,6 +3073,16 @@ internal class CodeGeneratorVisitor(
         val containsSelectedCoroutineTailCall = value.containsSelectedCoroutineTailCall()
 
         val targetReturnSlot = currentCodeContext.getReturnSlot(target)
+        currentImmortalCompletionContextEmission?.takeIf {
+            expression === it.selection.getterReturn
+        }?.let { emission ->
+            require(target === emission.selection.contextGetter && targetReturnSlot != null) {
+                "immortal completion-context getter escaped its exact owned-result ABI"
+            }
+            val permanent = emission.emitGetter(expression, targetReturnSlot)
+            currentCodeContext.genReturn(target, permanent)
+            return codegen.kNothingFakeValue
+        }
         currentCoroutineEmptyContextImmortalReturnEmission?.takeIf {
             expression === it.selection.returned
         }?.let { emission ->

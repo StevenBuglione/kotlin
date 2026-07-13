@@ -3477,6 +3477,20 @@ standaloneTest("arc_coroutine_suspended_scoped_borrow") {
     source = "codegen/arc/coroutineSuspendedScopedBorrow.kt"
 }
 
+standaloneTest("arc_immortal_completion_context_propagation") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    flags = ["-opt", "-Xverbose-phases=ArcOwnershipAnalysis"]
+    outputChecker = { it.contains("ARC_IMMORTAL_COMPLETION_CONTEXT_PROPAGATION_OK checksum=42\n") }
+    source = "codegen/arc/immortalCompletionContextPropagation.kt"
+}
+
+standaloneTest("arc_immortal_completion_context_propagation_phase_disabled") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    flags = ["-opt", "-Xdisable-phases=ArcOwnershipAnalysis"]
+    outputChecker = { it.contains("ARC_IMMORTAL_COMPLETION_CONTEXT_PROPAGATION_OK checksum=42\n") }
+    source = "codegen/arc/immortalCompletionContextPropagation.kt"
+}
+
 standaloneTest("arc_rooted_loop_borrowing") {
     enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
     flags = ["-opt", "-Xverbose-phases=ArcOwnershipAnalysis"]
@@ -7022,6 +7036,69 @@ fileCheckTest("filecheck_arc_coroutine_suspended_scoped_borrow_strict") {
     enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
     annotatedSource = project.file('codegen/arc/coroutineSuspendedScopedBorrow.kt')
     checkPrefix = "FALLBACK"
+    extraOpts = ["-opt", "-memory-model", "strict"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_immortal_completion_context_propagation") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('codegen/arc/immortalCompletionContextPropagation.kt')
+    checkPrefix = "OPT"
+    extraOpts = ["-opt"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_immortal_completion_context_propagation_debug") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('codegen/arc/immortalCompletionContextPropagation.kt')
+    checkPrefix = "FALLBACK"
+    extraOpts = ["-opt", "-g"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_immortal_completion_context_propagation_noopt") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('codegen/arc/immortalCompletionContextPropagation.kt')
+    checkPrefix = "FALLBACK"
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_immortal_completion_context_propagation_phase_disabled") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('codegen/arc/immortalCompletionContextPropagation.kt')
+    checkPrefix = "FALLBACK"
+    extraOpts = ["-opt", "-Xdisable-phases=ArcOwnershipAnalysis"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_immortal_completion_context_propagation_diagnostics") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('codegen/arc/immortalCompletionContextPropagation.kt')
+    checkPrefix = "FALLBACK"
+    extraOpts = ["-opt", "-Xbinary=arcLeakCheck=report"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_immortal_completion_context_propagation_asan") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('codegen/arc/immortalCompletionContextPropagation.kt')
+    checkPrefix = "FALLBACK"
+    extraOpts = ["-opt", "-Xbinary=sanitizer=address"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_immortal_completion_context_propagation_ubsan") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('codegen/arc/immortalCompletionContextPropagation.kt')
+    checkPrefix = "FALLBACK"
+    extraOpts = ["-opt", "-Xbinary=undefinedBehaviorSanitizer=true"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_immortal_completion_context_propagation_strict") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('codegen/arc/immortalCompletionContextPropagationStrict.kt')
+    checkPrefix = "STRICT"
     extraOpts = ["-opt", "-memory-model", "strict"]
     phaseToCheck = "Codegen"
 }

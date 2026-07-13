@@ -8,6 +8,7 @@ package org.jetbrains.kotlin.backend.konan.driver.phases
 import llvm.DIFinalize
 import org.jetbrains.kotlin.backend.konan.NativeGenerationState
 import org.jetbrains.kotlin.backend.konan.arc.ArcCodegenOwnershipPlan
+import org.jetbrains.kotlin.backend.konan.arc.ArcImmortalCompletionContextCodegenPlan
 import org.jetbrains.kotlin.backend.konan.driver.utilities.KotlinBackendIrHolder
 import org.jetbrains.kotlin.backend.konan.driver.utilities.getDefaultIrActions
 import org.jetbrains.kotlin.backend.konan.driver.utilities.getDefaultLlvmModuleActions
@@ -33,7 +34,8 @@ internal val CreateLLVMDeclarationsPhase = createSimpleNamedCompilerPhase<Native
 
 internal data class RTTIInput(
         val irModule: IrModuleFragment,
-        val referencedFunctions: Set<IrFunction>?
+        val referencedFunctions: Set<IrFunction>?,
+        val immortalCompletionContextPlans: List<ArcImmortalCompletionContextCodegenPlan> = emptyList(),
 ) : KotlinBackendIrHolder {
     override val kotlinIr: IrElement
         get() = irModule
@@ -45,7 +47,11 @@ internal val RTTIPhase = createSimpleNamedCompilerPhase<NativeGenerationState, R
         preactions = getDefaultIrActions(),
         postactions = getDefaultIrActions(),
         op = { generationState, input ->
-            val visitor = RTTIGeneratorVisitor(generationState, input.referencedFunctions)
+            val visitor = RTTIGeneratorVisitor(
+                    generationState,
+                    input.referencedFunctions,
+                    input.immortalCompletionContextPlans,
+            )
             input.irModule.acceptVoid(visitor)
             visitor.dispose()
         }
@@ -74,12 +80,14 @@ internal val CodegenPhase = createSimpleNamedCompilerPhase<NativeGenerationState
                     context.objCExportCodeSpec
             )
 
-            input.irModule.acceptVoid(CodeGeneratorVisitor(
+            val visitor = CodeGeneratorVisitor(
                     generationState,
                     input.irModule.irBuiltins,
                     input.lifetimes,
                     input.arcOwnership,
-            ))
+            )
+            input.irModule.acceptVoid(visitor)
+            visitor.dispose()
 
             if (generationState.hasDebugInfo())
                 DIFinalize(generationState.debugInfo.builder)

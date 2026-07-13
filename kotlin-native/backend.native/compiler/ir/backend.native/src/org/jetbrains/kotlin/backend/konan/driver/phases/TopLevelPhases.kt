@@ -6,7 +6,9 @@
 package org.jetbrains.kotlin.backend.konan.driver.phases
 
 import org.jetbrains.kotlin.backend.konan.*
+import org.jetbrains.kotlin.backend.konan.arc.ArcImmortalCompletionContextCodegenPlan
 import org.jetbrains.kotlin.backend.konan.arc.ArcOwnershipPlanningInput
+import org.jetbrains.kotlin.backend.konan.arc.selectVerifiedImmortalCompletionContexts
 import org.jetbrains.kotlin.backend.konan.driver.PhaseContext
 import org.jetbrains.kotlin.backend.konan.driver.PhaseEngine
 import org.jetbrains.kotlin.backend.konan.driver.utilities.CExportFiles
@@ -376,9 +378,39 @@ private fun PhaseEngine<NativeGenerationState>.runCodegen(module: IrModuleFragme
     }
     runPhase(CreateLLVMDeclarationsPhase, module)
     runPhase(GHAPhase, module, disable = !optimize)
-    runPhase(RTTIPhase, RTTIInput(module, dceResult))
+    // RTTI owns the field-destroy thunk and therefore runs before escape/ownership analysis. Run
+    // the same exact read-only selector once here and share its identity plans through both RTTI
+    // and ArcOwnershipAnalysis; neither phase reconstructs a selection by name.
+    val immortalCompletionContextSelectorResult = if (
+        context.config.flexiblePhaseConfig.isEnabled(ArcOwnershipAnalysisPhase)
+    ) {
+        selectVerifiedImmortalCompletionContexts(context, module)
+    } else {
+        null
+    }
+    val immortalCompletionContextPlans = if (immortalCompletionContextSelectorResult != null) {
+        immortalCompletionContextSelectorResult.selections
+            .filter { selection ->
+                dceResult == null ||
+                        (selection.constructor in dceResult && selection.contextGetter in dceResult)
+            }
+            .map(::ArcImmortalCompletionContextCodegenPlan)
+    } else {
+        // RTTI must not partially consume a plan that the explicitly disabled ownership phase
+        // cannot hand to Codegen for its constructor/getter identities and final ledger check.
+        emptyList()
+    }
+    runPhase(RTTIPhase, RTTIInput(module, dceResult, immortalCompletionContextPlans))
     val lifetimes = runPhase(EscapeAnalysisPhase, EscapeAnalysisInput(module, moduleDFG, devirtualizationAnalysisResults), disable = !optimize)
-    val arcOwnership = runPhase(ArcOwnershipAnalysisPhase, ArcOwnershipPlanningInput(module, lifetimes))
+    val arcOwnership = runPhase(
+        ArcOwnershipAnalysisPhase,
+        ArcOwnershipPlanningInput(
+            module,
+            lifetimes,
+            immortalCompletionContextPlans,
+            immortalCompletionContextSelectorResult?.firstRejection,
+        ),
+    )
     runPhase(CodegenPhase, CodegenInput(module, lifetimes, arcOwnership.codegenPlan))
 }
 

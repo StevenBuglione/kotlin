@@ -42,6 +42,9 @@ class ArcImmortalCompletionContextPropagationIRSelectorTest {
             shape.copy(finalOwnerWithNoSubclasses = false),
             shape.copy(immutableFinalPropertyAndGetter = false),
             shape.copy(privateFinalStrongBackingField = false),
+            shape.copy(initializerWrapperIsTopLevel = false),
+            shape.copy(initializerWrapperHasInitializeFieldOrigin = false),
+            shape.copy(initializerWrapperContainsOnlySelectedStore = false),
             shape.copy(exactFreshReceiverFieldStore = false),
             shape.copy(fieldUninitializedAtStore = false),
             shape.copy(initializerStoreDominatesEscapesAndSuccess = false),
@@ -65,6 +68,18 @@ class ArcImmortalCompletionContextPropagationIRSelectorTest {
     }
 
     @Test
+    fun wrongGetterReceiverIdentityCannotAdapt() {
+        val result = adaptVerifiedImmortalCompletionContextIR(
+            validBindings(),
+            validMode(),
+            validShape().copy(exactSingleFieldGetterReturn = false),
+        )
+
+        assertNull(result.selection)
+        assertEquals(ArcImmortalCompletionContextIRRejectionReason.InvalidStructuralProof, result.rejection)
+    }
+
+    @Test
     fun everyLoweredIdentityMustBeDistinct() {
         val bindings = validBindings()
         val duplicates = listOf(
@@ -73,6 +88,7 @@ class ArcImmortalCompletionContextPropagationIRSelectorTest {
             bindings.copy(constructedReceiver = bindings.ownerClass),
             bindings.copy(contextProperty = bindings.ownerClass),
             bindings.copy(contextField = bindings.ownerClass),
+            bindings.copy(initializerWrapper = bindings.ownerClass),
             bindings.copy(initializerStore = bindings.ownerClass),
             bindings.copy(initializerRootLoad = bindings.ownerClass),
             bindings.copy(contextGetter = bindings.ownerClass),
@@ -153,6 +169,7 @@ class ArcImmortalCompletionContextPropagationIRSelectorTest {
         constructedReceiver = Any(),
         contextProperty = Any(),
         contextField = Any(),
+        initializerWrapper = Any(),
         initializerStore = Any(),
         initializerRootLoad = Any(),
         contextGetter = Any(),
@@ -180,6 +197,9 @@ class ArcImmortalCompletionContextPropagationIRSelectorTest {
         finalOwnerWithNoSubclasses = true,
         immutableFinalPropertyAndGetter = true,
         privateFinalStrongBackingField = true,
+        initializerWrapperIsTopLevel = true,
+        initializerWrapperHasInitializeFieldOrigin = true,
+        initializerWrapperContainsOnlySelectedStore = true,
         exactFreshReceiverFieldStore = true,
         fieldUninitializedAtStore = true,
         initializerStoreDominatesEscapesAndSuccess = true,

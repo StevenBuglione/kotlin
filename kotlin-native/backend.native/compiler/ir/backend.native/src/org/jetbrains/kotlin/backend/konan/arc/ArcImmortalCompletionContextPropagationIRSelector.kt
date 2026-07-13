@@ -21,19 +21,25 @@ import org.jetbrains.kotlin.ir.declarations.IrFunction
 import org.jetbrains.kotlin.ir.declarations.IrModuleFragment
 import org.jetbrains.kotlin.ir.declarations.IrProperty
 import org.jetbrains.kotlin.ir.declarations.IrSimpleFunction
+import org.jetbrains.kotlin.ir.expressions.IrBlock
 import org.jetbrains.kotlin.ir.expressions.IrBlockBody
+import org.jetbrains.kotlin.ir.expressions.IrBreak
 import org.jetbrains.kotlin.ir.expressions.IrCall
+import org.jetbrains.kotlin.ir.expressions.IrContinue
 import org.jetbrains.kotlin.ir.expressions.IrConstructorCall
 import org.jetbrains.kotlin.ir.expressions.IrDelegatingConstructorCall
 import org.jetbrains.kotlin.ir.expressions.IrExpression
 import org.jetbrains.kotlin.ir.expressions.IrGetField
 import org.jetbrains.kotlin.ir.expressions.IrGetValue
+import org.jetbrains.kotlin.ir.expressions.IrLoop
 import org.jetbrains.kotlin.ir.expressions.IrReturn
 import org.jetbrains.kotlin.ir.expressions.IrSetField
+import org.jetbrains.kotlin.ir.expressions.IrStatementOrigin
 import org.jetbrains.kotlin.ir.expressions.IrThrow
 import org.jetbrains.kotlin.ir.expressions.IrTry
 import org.jetbrains.kotlin.ir.expressions.IrTypeOperator
 import org.jetbrains.kotlin.ir.expressions.IrTypeOperatorCall
+import org.jetbrains.kotlin.ir.expressions.IrWhen
 import org.jetbrains.kotlin.ir.types.classifierOrNull
 import org.jetbrains.kotlin.ir.types.getClass
 import org.jetbrains.kotlin.ir.util.constructors
@@ -59,6 +65,7 @@ internal data class ArcImmortalCompletionContextIRBindings<T : Any>(
     val constructedReceiver: T,
     val contextProperty: T,
     val contextField: T,
+    val initializerWrapper: T,
     val initializerStore: T,
     val initializerRootLoad: T,
     val contextGetter: T,
@@ -84,6 +91,7 @@ internal fun <T : Any> ArcImmortalCompletionContextIRBindings<T>.exactIdentityIn
     constructedReceiver,
     contextProperty,
     contextField,
+    initializerWrapper,
     initializerStore,
     initializerRootLoad,
     contextGetter,
@@ -109,6 +117,9 @@ internal data class ArcImmortalCompletionContextIRShape(
     val finalOwnerWithNoSubclasses: Boolean,
     val immutableFinalPropertyAndGetter: Boolean,
     val privateFinalStrongBackingField: Boolean,
+    val initializerWrapperIsTopLevel: Boolean,
+    val initializerWrapperHasInitializeFieldOrigin: Boolean,
+    val initializerWrapperContainsOnlySelectedStore: Boolean,
     val exactFreshReceiverFieldStore: Boolean,
     val fieldUninitializedAtStore: Boolean,
     val initializerStoreDominatesEscapesAndSuccess: Boolean,
@@ -126,7 +137,9 @@ internal data class ArcImmortalCompletionContextIRShape(
 private fun ArcImmortalCompletionContextIRShape.isExact(): Boolean =
     exactUserCompletionAllocationAndConstructor && exactContinuationContextOverrideChain &&
             finalOwnerWithNoSubclasses && immutableFinalPropertyAndGetter &&
-            privateFinalStrongBackingField && exactFreshReceiverFieldStore &&
+            privateFinalStrongBackingField && initializerWrapperIsTopLevel &&
+            initializerWrapperHasInitializeFieldOrigin && initializerWrapperContainsOnlySelectedStore &&
+            exactFreshReceiverFieldStore &&
             fieldUninitializedAtStore && initializerStoreDominatesEscapesAndSuccess &&
             constructorHasNoPreStoreExceptionalEdge && exactSingleFieldGetterReturn &&
             exactEmptyCoroutineContextRoot && exactConstantObjectInitializer &&
@@ -249,11 +262,77 @@ internal data class ArcImmortalCompletionContextKotlinIRSelection(
     val constructor: IrConstructor,
     val contextProperty: IrProperty,
     val contextField: IrField,
+    val initializerWrapper: IrBlock,
     val initializerStore: IrSetField,
     val contextGetter: IrSimpleFunction,
     val getterReturn: IrReturn,
     val getterFieldLoad: IrGetField,
     val selection: ArcImmortalCompletionContextIRSelection<IrElement>,
+)
+
+/**
+ * One module-lifetime identity/once-consumption ledger shared by RTTI and function codegen. Each
+ * consumer supplies a fresh 23-identity list, but this guard does not substitute for the selector's
+ * structural walk. Final Codegen disposal certifies that all three physical rewrites were consumed.
+ */
+internal class ArcImmortalCompletionContextKotlinIREmissionLedger(
+    val selection: ArcImmortalCompletionContextKotlinIRSelection,
+) {
+    private val expected = selection.selection.bindings.exactIdentityInventory()
+    private var destroyConsumed = false
+    private var initializerConsumed = false
+    private var getterConsumed = false
+
+    private fun checkInventory(actual: List<IrElement>) {
+        check(actual.size == expected.size && actual.indices.all { actual[it] === expected[it] }) {
+            "immortal completion-context structural identity inventory drifted"
+        }
+    }
+
+    fun consumeDestroy(owner: IrClass, field: IrField, inventory: List<IrElement>) {
+        check(!destroyConsumed && owner === selection.ownerClass && field === selection.contextField) {
+            "immortal completion-context destroy identity drifted or was consumed twice"
+        }
+        checkInventory(inventory)
+        destroyConsumed = true
+    }
+
+    fun consumeInitializer(
+        constructor: IrConstructor,
+        wrapper: IrBlock,
+        store: IrSetField,
+        inventory: List<IrElement>,
+    ) {
+        check(!initializerConsumed && constructor === selection.constructor &&
+                wrapper === selection.initializerWrapper && wrapper.statements.singleOrNull() === store &&
+                store === selection.initializerStore && store.symbol.owner === selection.contextField) {
+            "immortal completion-context initializer identity drifted or was consumed twice"
+        }
+        checkInventory(inventory)
+        initializerConsumed = true
+    }
+
+    fun consumeGetter(getter: IrSimpleFunction, returned: IrReturn, load: IrGetField, inventory: List<IrElement>) {
+        check(!getterConsumed && getter === selection.contextGetter && returned === selection.getterReturn &&
+                load === selection.getterFieldLoad && load.symbol.owner === selection.contextField) {
+            "immortal completion-context getter identity drifted or was consumed twice"
+        }
+        checkInventory(inventory)
+        getterConsumed = true
+    }
+
+    fun verifyComplete() {
+        check(destroyConsumed && initializerConsumed && getterConsumed) {
+            "immortal completion-context emission incomplete: " +
+                    "destroy=$destroyConsumed initializer=$initializerConsumed getter=$getterConsumed"
+        }
+    }
+}
+
+internal data class ArcImmortalCompletionContextCodegenPlan(
+    val selection: ArcImmortalCompletionContextKotlinIRSelection,
+    val ledger: ArcImmortalCompletionContextKotlinIREmissionLedger =
+        ArcImmortalCompletionContextKotlinIREmissionLedger(selection),
 )
 
 internal enum class ArcImmortalCompletionContextKotlinIRRejectionStage {
@@ -285,8 +364,8 @@ internal data class ArcImmortalCompletionContextKotlinIRSelectorResult(
 /**
  * Real lowered-IR walker for final user `Continuation` implementations whose immutable `context`
  * field is initialized directly from the authenticated permanent `EmptyCoroutineContext` root.
- * It is deliberately not wired into code generation here: integration consumes the returned exact
- * identities only after this selector's focused tests and real-module probe are green.
+ * Integration consumes the returned exact identities once and shares them between RTTI, ownership
+ * planning and function codegen. No downstream phase reconstructs a selection by symbol name.
  */
 internal fun selectVerifiedImmortalCompletionContexts(
     generationState: NativeGenerationState,
@@ -386,6 +465,11 @@ internal fun selectVerifiedImmortalCompletionContexts(
             }
         })
     }
+    val allocationCounts = IdentityHashMap<IrConstructor, Int>()
+    allocations.forEach { allocation ->
+        val constructor = allocation.symbol.owner
+        allocationCounts[constructor] = (allocationCounts[constructor] ?: 0) + 1
+    }
     val fieldWrites = IdentityHashMap<IrField, MutableList<IrSetField>>()
     module.files.forEach { file ->
         file.acceptVoid(object : IrElementVisitorVoid {
@@ -426,12 +510,13 @@ internal fun selectVerifiedImmortalCompletionContexts(
         }
 
         if (owner.kind != ClassKind.CLASS || owner.modality != Modality.FINAL || owner.konanLibrary != null ||
-            owner.constructors.singleOrNull() !== constructor || (subclasses[owner] ?: 0) != 0
+            owner.constructors.singleOrNull() !== constructor || (subclasses[owner] ?: 0) != 0 ||
+            allocationCounts[constructor] != 1
         ) {
             reject(
                 ArcImmortalCompletionContextKotlinIRRejectionStage.OwnerClosure,
                 owner,
-                "owner is not an exact final current-module class with one constructor and no subclasses",
+                "owner is not an exact final current-module class with one constructor, one allocation and no subclasses",
             )
             return@candidateLoop
         }
@@ -460,12 +545,12 @@ internal fun selectVerifiedImmortalCompletionContexts(
         val ownerThis = owner.thisReceiver?.symbol
         if (getterReturn == null || getterReturn.returnTargetSymbol != getter.symbol || getterLoad == null ||
             getterLoad.symbol.owner !== field ||
-            (getterLoad.receiver as? IrGetValue)?.symbol != ownerThis
+            (getterLoad.receiver as? IrGetValue)?.symbol != getter.dispatchReceiverParameter?.symbol
         ) {
             reject(
                 ArcImmortalCompletionContextKotlinIRRejectionStage.PropertyAndGetter,
                 owner,
-                "getter is not one direct return of the selected field from the exact receiver",
+                "getter is not one direct return of the selected field from its exact dispatch receiver",
             )
             return@candidateLoop
         }
@@ -485,11 +570,17 @@ internal fun selectVerifiedImmortalCompletionContexts(
             return@candidateLoop
         }
         val constructorBody = constructor.body as? IrBlockBody
-        if (constructorBody == null || !constructorBody.provesSafeFirstInitialization(constructor, initializerStore)) {
+        val initializerWrapper = constructorBody?.statements?.singleOrNull { statement ->
+            statement is IrBlock && statement.origin == IrStatementOrigin.INITIALIZE_FIELD &&
+                    statement.statements.singleOrNull() === initializerStore
+        } as? IrBlock
+        if (constructorBody == null || initializerWrapper == null ||
+            !constructorBody.provesSafeFirstInitialization(constructor, initializerWrapper, initializerStore)
+        ) {
             reject(
                 ArcImmortalCompletionContextKotlinIRRejectionStage.ConstructorInitialization,
                 owner,
-                "constructor has delegation, control-flow, throwing-call, read-before-write or escape drift",
+                "constructor lacks the exact top-level singleton INITIALIZE_FIELD wrapper or its linear prefix drifts",
             )
             return@candidateLoop
         }
@@ -511,6 +602,7 @@ internal fun selectVerifiedImmortalCompletionContexts(
             constructedReceiver = initializerStore.receiver as IrGetValue,
             contextProperty = property,
             contextField = field,
+            initializerWrapper = initializerWrapper,
             initializerStore = initializerStore,
             initializerRootLoad = rootLoad,
             contextGetter = getter,
@@ -537,6 +629,9 @@ internal fun selectVerifiedImmortalCompletionContexts(
                 finalOwnerWithNoSubclasses = true,
                 immutableFinalPropertyAndGetter = true,
                 privateFinalStrongBackingField = true,
+                initializerWrapperIsTopLevel = true,
+                initializerWrapperHasInitializeFieldOrigin = true,
+                initializerWrapperContainsOnlySelectedStore = true,
                 exactFreshReceiverFieldStore = true,
                 fieldUninitializedAtStore = true,
                 initializerStoreDominatesEscapesAndSuccess = true,
@@ -566,6 +661,7 @@ internal fun selectVerifiedImmortalCompletionContexts(
             constructor,
             property,
             field,
+            initializerWrapper,
             initializerStore,
             getter,
             getterReturn,
@@ -575,7 +671,7 @@ internal fun selectVerifiedImmortalCompletionContexts(
     }
 
     context.log {
-        "ARC immortal completion-context propagation planned (not emitted): ${selections.size}; " +
+        "ARC immortal completion-context propagation selected for emission: ${selections.size}; " +
                 "firstRejection=${firstRejection?.stage}:${firstRejection?.detail}"
     }
     return ArcImmortalCompletionContextKotlinIRSelectorResult(selections, firstRejection)
@@ -599,9 +695,15 @@ private fun IrExpression?.unwrapSelectedFieldLoad(): IrGetField? = when (this) {
  */
 private fun IrBlockBody.provesSafeFirstInitialization(
     constructor: IrConstructor,
+    initializerWrapper: IrBlock,
     selectedStore: IrSetField,
 ): Boolean {
-    val storeIndex = statements.indexOfFirst { it === selectedStore || it.containsExactElement(selectedStore) }
+    // InitializersLowering puts the exact store in one transparent top-level INITIALIZE_FIELD
+    // block. Any nested, wrong-origin or multi-statement wrapper remains outside this proof.
+    if (initializerWrapper.origin != IrStatementOrigin.INITIALIZE_FIELD ||
+        initializerWrapper.statements.singleOrNull() !== selectedStore
+    ) return false
+    val storeIndex = statements.indexOfFirst { it === initializerWrapper }
     if (storeIndex < 0) return false
     val allowedReceiverUses = Collections.newSetFromMap(IdentityHashMap<IrGetValue, Boolean>())
     statements.subList(0, storeIndex + 1).forEach { statement ->
@@ -618,10 +720,27 @@ private fun IrBlockBody.provesSafeFirstInitialization(
         statement.acceptVoid(object : IrElementVisitorVoid {
             override fun visitElement(element: IrElement) = element.acceptChildrenVoid(this)
             override fun visitFunction(declaration: IrFunction) { safe = false }
+            override fun visitWhen(expression: IrWhen) { safe = false }
+            override fun visitLoop(loop: IrLoop) { safe = false }
+            override fun visitReturn(expression: IrReturn) { safe = false }
+            override fun visitBreak(jump: IrBreak) { safe = false }
+            override fun visitContinue(jump: IrContinue) { safe = false }
             override fun visitTry(aTry: IrTry) { safe = false }
             override fun visitThrow(expression: IrThrow) { safe = false }
             override fun visitCall(expression: IrCall) {
                 safe = false
+                expression.acceptChildrenVoid(this)
+            }
+            override fun visitConstructorCall(expression: IrConstructorCall) {
+                safe = false
+                expression.acceptChildrenVoid(this)
+            }
+            override fun visitTypeOperator(expression: IrTypeOperatorCall) {
+                val selectedRootCast = expression === selectedStore.value &&
+                        expression.operator == IrTypeOperator.IMPLICIT_CAST &&
+                        expression.argument.unwrapSelectedFieldLoad()?.symbol?.owner ===
+                        selectedStore.value.unwrapSelectedFieldLoad()?.symbol?.owner
+                if (!selectedRootCast) safe = false
                 expression.acceptChildrenVoid(this)
             }
             override fun visitDelegatingConstructorCall(expression: IrDelegatingConstructorCall) {
@@ -648,16 +767,6 @@ private fun IrBlockBody.provesSafeFirstInitialization(
         })
     }
     return safe
-}
-
-private fun IrElement.containsExactElement(target: IrElement): Boolean {
-    var found = false
-    acceptVoid(object : IrElementVisitorVoid {
-        override fun visitElement(element: IrElement) {
-            if (element === target) found = true else element.acceptChildrenVoid(this)
-        }
-    })
-    return found
 }
 
 private fun collectImmortalCompletionClasses(module: IrModuleFragment): List<IrClass> = buildList {

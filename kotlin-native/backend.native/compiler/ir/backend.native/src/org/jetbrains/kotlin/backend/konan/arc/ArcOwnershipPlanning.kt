@@ -91,6 +91,8 @@ import java.util.IdentityHashMap
 internal data class ArcOwnershipPlanningInput(
     val module: org.jetbrains.kotlin.ir.declarations.IrModuleFragment,
     val lifetimes: Map<IrElement, Lifetime>,
+    val immortalCompletionContextPlans: List<ArcImmortalCompletionContextCodegenPlan> = emptyList(),
+    val immortalCompletionContextRejection: ArcImmortalCompletionContextKotlinIRRejection? = null,
 )
 
 internal data class ArcOwnershipPlanningReport(
@@ -361,6 +363,9 @@ internal data class ArcCodegenOwnershipPlan(
             Map<IrCall, ArcCoroutineSuspendedBorrowIRSelection<IrElement>>,
     val coroutineSuspendedScopedBorrowsByFunction:
             Map<IrFunction, ArcCoroutineSuspendedBorrowKotlinIRSelection>,
+    val immortalCompletionContextsByClass: Map<IrClass, ArcImmortalCompletionContextCodegenPlan>,
+    val immortalCompletionContextsByConstructor: Map<IrConstructor, ArcImmortalCompletionContextCodegenPlan>,
+    val immortalCompletionContextsByGetter: Map<IrSimpleFunction, ArcImmortalCompletionContextCodegenPlan>,
 ) {
     val scopedArcReferenceLoadBoundaries: Set<IrExpression> =
         Collections.newSetFromMap(IdentityHashMap<IrExpression, Boolean>()).apply {
@@ -422,6 +427,9 @@ internal data class ArcCodegenOwnershipPlan(
             coroutineEmptyContextImmortalReturns = emptyMap(),
             coroutineSuspendedScopedBorrowsByCall = emptyMap(),
             coroutineSuspendedScopedBorrowsByFunction = emptyMap(),
+            immortalCompletionContextsByClass = emptyMap(),
+            immortalCompletionContextsByConstructor = emptyMap(),
+            immortalCompletionContextsByGetter = emptyMap(),
         )
     }
 }
@@ -979,6 +987,26 @@ internal fun runArcOwnershipPlanning(
             }
         }
     }
+    val immortalCompletionContextsByClass = IdentityHashMap<IrClass, ArcImmortalCompletionContextCodegenPlan>()
+    val immortalCompletionContextsByConstructor =
+        IdentityHashMap<IrConstructor, ArcImmortalCompletionContextCodegenPlan>()
+    val immortalCompletionContextsByGetter =
+        IdentityHashMap<IrSimpleFunction, ArcImmortalCompletionContextCodegenPlan>()
+    input.immortalCompletionContextPlans.forEach { plan ->
+        val selection = plan.selection
+        check(immortalCompletionContextsByClass.put(selection.ownerClass, plan) == null &&
+                immortalCompletionContextsByConstructor.put(selection.constructor, plan) == null &&
+                immortalCompletionContextsByGetter.put(selection.contextGetter, plan) == null) {
+            "duplicate immortal completion-context class/constructor/getter selection: " +
+                    selection.ownerClass.fqNameForIrSerialization.asString()
+        }
+    }
+    generationState.context.log {
+        "ARC immortal completion-context propagation selected for emission: " +
+                "${immortalCompletionContextsByClass.size}; firstRejection=" +
+                "${input.immortalCompletionContextRejection?.stage}:" +
+                input.immortalCompletionContextRejection?.detail
+    }
     val canonicalLockedReadPlans = resolveCanonicalLockedReadPlans(generationState, input.module)
     canonicalLockedReadPlans.forEach { plan ->
         lockedReadResultSlotForwardingCalls[plan.tailCall] = plan
@@ -1235,6 +1263,9 @@ internal fun runArcOwnershipPlanning(
             coroutineEmptyContextImmortalReturns,
             coroutineSuspendedScopedBorrowsByCall,
             coroutineSuspendedScopedBorrowsByFunction,
+            immortalCompletionContextsByClass,
+            immortalCompletionContextsByConstructor,
+            immortalCompletionContextsByGetter,
         ),
     )
 }
