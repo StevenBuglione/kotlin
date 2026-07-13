@@ -207,6 +207,14 @@ internal interface StackLocalsManager {
 
     fun allocArray(irClass: IrClass, count: LLVMValueRef): LLVMValueRef
 
+    /**
+     * Returns true only for the exact LLVM object-header value registered by [alloc].
+     *
+     * Deliberately do not look through loads, casts, phis, or other equivalent-looking values:
+     * callers use this to prove that an object physically resides in this function's stack frame.
+     */
+    fun isExactStackLocalObjectPointer(value: LLVMValueRef): Boolean
+
     fun clean(refsOnly: Boolean)
 
     fun enterScope()
@@ -236,6 +244,9 @@ internal class StackLocalsManagerImpl(
     private val stackLocals = mutableListOf<StackLocal>()
 
     fun isEmpty() = stackLocals.isEmpty()
+
+    override fun isExactStackLocalObjectPointer(value: LLVMValueRef): Boolean =
+            stackLocals.any { it.objHeaderPtr == value }
 
     private fun FunctionGenerationContext.createRootSetSlot() =
             if (context.memoryModel.usesTracingGC) alloca(kObjHeaderPtr) else null

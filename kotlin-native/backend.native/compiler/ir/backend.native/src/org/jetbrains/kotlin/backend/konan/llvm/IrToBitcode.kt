@@ -3013,6 +3013,13 @@ internal class CodeGeneratorVisitor(
         return functionGenerationContext.isObjectType(valueToAssign.type) && !irClass.isFrozen(context)
     }
 
+    private fun canElideLifetimeConstraintsCheckForExactStackLocal(receiver: LLVMValueRef): Boolean =
+            context.memoryModel == MemoryModel.ARC &&
+                    context.config.optimizationsEnabled &&
+                    !context.shouldContainDebugInfo() &&
+                    !context.config.arcDiagnosticsEnabled &&
+                    functionGenerationContext.stackLocalsManager.isExactStackLocalObjectPointer(receiver)
+
     private fun isZeroConstValue(value: IrExpression): Boolean {
         if (value !is IrConst<*>) return false
         return when (value.kind) {
@@ -3058,7 +3065,8 @@ internal class CodeGeneratorVisitor(
                         listOf(functionGenerationContext.bitcast(codegen.kObjHeaderPtr, thisPtr)),
                         Lifetime.IRRELEVANT, currentCodeContext.exceptionHandler)
             }
-            if (immortalCompletionInitializer == null && needLifetimeConstraintsCheck(valueToAssign, parentAsClass)) {
+            if (immortalCompletionInitializer == null && needLifetimeConstraintsCheck(valueToAssign, parentAsClass) &&
+                    !canElideLifetimeConstraintsCheckForExactStackLocal(thisPtr)) {
                 functionGenerationContext.call(llvm.checkLifetimesConstraint, listOf(thisPtr, valueToAssign))
             }
             address = fieldPtrOfClass(thisPtr, value.symbol.owner)

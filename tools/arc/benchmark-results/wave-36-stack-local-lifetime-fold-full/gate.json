@@ -1,0 +1,107 @@
+{
+  "baselineCommit": "3db61efe5e892bf27115f1ebcab957d903067ed4",
+  "binaryBytesDeltaPercent": 2.8564668769716084,
+  "candidateCommit": "2dcf6721f09fe876ba719b0ce48529bff9daa616",
+  "failures": [],
+  "passed": true,
+  "scenarios": {
+    "allocation": {
+      "latencyDeltaPercent": -40.218832569060424,
+      "passed": true,
+      "rssDeltaPercent": -23.33333333333333,
+      "throughputRatioPercent": 167.27676005243976
+    },
+    "arrays": {
+      "latencyDeltaPercent": -9.222999238853092,
+      "passed": true,
+      "rssDeltaPercent": -4.347826086956519,
+      "throughputRatioPercent": 110.16006164724554
+    },
+    "atomics": {
+      "latencyDeltaPercent": 0.012268693526151786,
+      "passed": true,
+      "rssDeltaPercent": -4.545454545454541,
+      "throughputRatioPercent": 99.98773281149772
+    },
+    "bounded-cycles": {
+      "latencyDeltaPercent": -66.70892920089464,
+      "passed": true,
+      "rssDeltaPercent": -4.545454545454541,
+      "throughputRatioPercent": 300.38084567315065
+    },
+    "call-arguments": {
+      "latencyDeltaPercent": -9.536109445115937,
+      "passed": true,
+      "rssDeltaPercent": -12.5,
+      "throughputRatioPercent": 110.54134349807829
+    },
+    "closures": {
+      "latencyDeltaPercent": -49.37541868367275,
+      "passed": true,
+      "rssDeltaPercent": -4.545454545454541,
+      "throughputRatioPercent": 197.53249784951475
+    },
+    "coroutines": {
+      "latencyDeltaPercent": -23.332916753320266,
+      "passed": true,
+      "rssDeltaPercent": -27.586206896551722,
+      "throughputRatioPercent": 130.4340738752891
+    },
+    "destruction": {
+      "latencyDeltaPercent": -41.40302192888783,
+      "passed": true,
+      "rssDeltaPercent": -5.7413053588961755,
+      "throughputRatioPercent": 170.6572647460451
+    },
+    "exceptions": {
+      "latencyDeltaPercent": -14.849407626729471,
+      "passed": true,
+      "rssDeltaPercent": -77.72856690920595,
+      "throughputRatioPercent": 117.43899509443965
+    },
+    "fields": {
+      "latencyDeltaPercent": 3.653666563645941,
+      "passed": true,
+      "rssDeltaPercent": -12.5,
+      "throughputRatioPercent": 96.47512077018278
+    },
+    "platform-c-dynamic-cstring": {
+      "latencyDeltaPercent": -97.75016001455681,
+      "passed": true,
+      "rssDeltaPercent": -16.000000000000004,
+      "throughputRatioPercent": 4444.760545061596
+    },
+    "platform-c-interop": {
+      "latencyDeltaPercent": -99.32081373328955,
+      "passed": true,
+      "rssDeltaPercent": -16.000000000000004,
+      "throughputRatioPercent": 14723.50147542482
+    },
+    "platform-c-leaf": {
+      "latencyDeltaPercent": 0.9655915645047752,
+      "passed": true,
+      "rssDeltaPercent": -8.695652173913048,
+      "throughputRatioPercent": 99.04364293860638
+    },
+    "strings": {
+      "latencyDeltaPercent": -28.12351835539998,
+      "passed": true,
+      "rssDeltaPercent": -27.586206896551722,
+      "throughputRatioPercent": 139.1275667811119
+    },
+    "virtual-dispatch": {
+      "latencyDeltaPercent": -2.5249061187966215,
+      "passed": true,
+      "rssDeltaPercent": -4.545454545454541,
+      "throughputRatioPercent": 102.59030898895452
+    },
+    "workers": {
+      "latencyDeltaPercent": -0.17975958459789387,
+      "passed": true,
+      "rssDeltaPercent": -14.814814814814813,
+      "throughputRatioPercent": 100.1800833015928
+    }
+  },
+  "schemaVersion": 1,
+  "throughputGeomeanPercent": 219.12189876424318
+}
