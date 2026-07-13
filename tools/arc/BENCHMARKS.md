@@ -42,8 +42,10 @@ source worktree, provenance, and complete distribution fingerprint validate. Set
 Candidate distributions are also published atomically into a shared, read-only cache below the
 remote repository's Git common directory. The cache key covers the exact commit and complete source
 tree (including compiler, runtime, and platform libraries), host architecture, JDK/CMake/Ninja
-identities, Gradle wrapper/properties, and the fixed distribution tasks. This lets isolated benchmark
-worktrees reuse the same compiler without copying it back into each checkout. Preparation performs a
+and native compiler/linker identities, Gradle wrapper/properties, local build properties, native
+build flags/tool overrides, Kotlin/Native data-directory settings, and the fixed distribution tasks.
+This lets isolated benchmark worktrees reuse the same compiler without copying it back into each
+checkout. Preparation performs a
 fast identity check; every evidence-producing comparison still validates current-run provenance and
 recomputes the complete distribution fingerprints before compiling or timing a fixture.
 

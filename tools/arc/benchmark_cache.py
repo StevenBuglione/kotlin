@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import platform
 import shutil
+import shlex
 import stat
 import subprocess
 import sys
@@ -47,6 +48,20 @@ def _tool_identity(command: list[str]) -> str:
     return hashlib.sha256(f"{result.returncode}\n{output}".encode("utf-8")).hexdigest()
 
 
+def _configured_tool(environment_name: str, default: str) -> dict[str, str]:
+    value = os.environ.get(environment_name, default)
+    try:
+        command = shlex.split(value)
+    except ValueError:
+        command = [value]
+    if not command:
+        command = [default]
+    return {
+        "command": value,
+        "identity": _tool_identity([*command, "--version"]),
+    }
+
+
 def compiler_build_inputs(source: Path) -> dict[str, object]:
     """Return artifact-affecting host inputs not already covered by the Git tree."""
     java_home_value = os.environ.get("JAVA_HOME")
@@ -60,10 +75,27 @@ def compiler_build_inputs(source: Path) -> dict[str, object]:
         "ninja": _tool_identity(["ninja", "--version"]),
         "gradleWrapperSha256": _sha256_file(source / "gradle" / "wrapper" / "gradle-wrapper.jar"),
         "gradlePropertiesSha256": _sha256_file(source / "gradle.properties"),
+        "localPropertiesSha256": _sha256_file(source / "local.properties"),
         "tasks": [":kotlin-native:dist", ":kotlin-native:distPlatformLibs"],
         "target": "linux_x64",
         "javaToolOptions": os.environ.get("JAVA_TOOL_OPTIONS", ""),
         "gradleOpts": os.environ.get("GRADLE_OPTS", ""),
+        "nativeEnvironment": {
+            name: os.environ.get(name, "")
+            for name in (
+                "CFLAGS", "CXXFLAGS", "LDFLAGS", "KONAN_DATA_DIR", "KONAN_HOME",
+                "KONAN_USE_INTERNAL_SERVER",
+            )
+        },
+        "nativeTools": {
+            "cc": _configured_tool("CC", "cc"),
+            "cxx": _configured_tool("CXX", "c++"),
+            "ld": _configured_tool("LD", "ld"),
+            "ar": _configured_tool("AR", "ar"),
+            "clang": _configured_tool("CLANG", "clang"),
+            "clangxx": _configured_tool("CLANGXX", "clang++"),
+            "lld": _configured_tool("LLD", "lld"),
+        },
     }
 
 
@@ -151,8 +183,8 @@ def _validate_manifest(path: Path, dist: Path, fields: dict[str, object], *, fas
     if not isinstance(fingerprint, str):
         return False
     if fast:
-        # Quick profiles are explicitly non-evidence-producing. The cache publisher seals
-        # entries read-only; checking the exact identity and launchers avoids repeatedly
+        # Preparation and quick profiles are non-evidence-producing. The cache publisher
+        # seals entries read-only; checking exact identity and launchers avoids repeatedly
         # reading every compiler/platform-library byte during optimization iteration.
         return (
             (dist / "bin" / "konanc").is_file()

@@ -579,6 +579,29 @@ class ArcProfileTest(unittest.TestCase):
                     first, benchmark_cache.candidate_content_key("commit", "tree", source)
                 )
 
+    def test_candidate_content_key_rejects_changed_local_properties_and_native_environment(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            with patch.object(benchmark_cache, "_tool_identity", return_value="pinned-tool"):
+                with patch.dict(os.environ, {}, clear=True):
+                    initial = benchmark_cache.candidate_content_key("commit", "tree", source)
+                    (source / "local.properties").write_text("konan.data.dir=/first\n", encoding="utf-8")
+                    local_changed = benchmark_cache.candidate_content_key("commit", "tree", source)
+                with patch.dict(
+                    os.environ,
+                    {"CC": "/opt/clang -fuse-ld=lld", "CFLAGS": "-O3", "KONAN_DATA_DIR": "/konan"},
+                    clear=True,
+                ):
+                    environment_changed = benchmark_cache.candidate_content_key(
+                        "commit", "tree", source
+                    )
+                    inputs = benchmark_cache.compiler_build_inputs(source)
+            self.assertNotEqual(initial, local_changed)
+            self.assertNotEqual(local_changed, environment_changed)
+            self.assertEqual("/opt/clang -fuse-ld=lld", inputs["nativeTools"]["cc"]["command"])
+            self.assertEqual("-O3", inputs["nativeEnvironment"]["CFLAGS"])
+            self.assertEqual("/konan", inputs["nativeEnvironment"]["KONAN_DATA_DIR"])
+
     def test_content_addressed_candidate_is_sealed_and_fully_fingerprinted(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -629,7 +652,17 @@ class ArcProfileTest(unittest.TestCase):
         self.assertIn("candidate distribution fingerprint is missing, stale, or corrupt", compare)
 
     def test_full_evidence_requires_current_provenance_and_full_content_validation(self):
+        candidate = (Path(__file__).parent / "benchmark_candidate.sh").read_text()
         compare = (Path(__file__).parent / "benchmark_compare.sh").read_text()
+        self.assertIn('>"$pointer_dir/candidate-provenance.json.tmp"', candidate)
+        self.assertIn(
+            'mv "$pointer_dir/candidate-provenance.json.tmp" "$pointer_dir/candidate-provenance.json"',
+            candidate,
+        )
+        self.assertIn(
+            'candidate_provenance="$root/.arc-runs/benchmark-cache/candidate-provenance.json"',
+            compare,
+        )
         self.assertIn('validate_provenance "$candidate_provenance"', compare)
         self.assertIn("candidate_cache_action=validate-content-candidate", compare)
         self.assertIn('[[ "$quick" == 1 ]] && candidate_cache_action=validate-content-candidate-fast', compare)

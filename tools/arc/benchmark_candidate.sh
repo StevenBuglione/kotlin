@@ -52,7 +52,9 @@ publish_run_identity() {
     local selected_dist=$1
     mkdir -p "$state/artifacts" "$pointer_dir"
     printf '{"role":"candidate","commit":"%s","tree":"%s","source":"%s"}\n' \
-        "$head" "$tree" "$root" >"$state/artifacts/candidate-provenance.json"
+        "$head" "$tree" "$root" >"$pointer_dir/candidate-provenance.json.tmp"
+    mv "$pointer_dir/candidate-provenance.json.tmp" "$pointer_dir/candidate-provenance.json"
+    cp "$pointer_dir/candidate-provenance.json" "$state/artifacts/candidate-provenance.json"
     printf '%s\n' "$selected_dist" >"$pointer_dir/candidate-dist.tmp"
     mv "$pointer_dir/candidate-dist.tmp" "$pointer_dir/candidate-dist"
 }
