@@ -3470,6 +3470,13 @@ standaloneTest("arc_coroutine_empty_context_immortal_return") {
     source = "codegen/arc/coroutineEmptyContextImmortalReturn.kt"
 }
 
+standaloneTest("arc_coroutine_suspended_scoped_borrow") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    flags = ["-opt", "-Xverbose-phases=ArcOwnershipAnalysis"]
+    outputChecker = { it.contains("ARC_COROUTINE_SUSPENDED_SCOPED_BORROW_OK checksum=42\n") }
+    source = "codegen/arc/coroutineSuspendedScopedBorrow.kt"
+}
+
 standaloneTest("arc_rooted_loop_borrowing") {
     enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
     flags = ["-opt", "-Xverbose-phases=ArcOwnershipAnalysis"]
@@ -6945,6 +6952,77 @@ fileCheckTest("filecheck_arc_coroutine_empty_context_immortal_return") {
     annotatedSource = project.file('codegen/arc/coroutineEmptyContextImmortalReturn.kt')
     checkPrefix = "OPT"
     extraOpts = ["-opt"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_coroutine_suspended_scoped_borrow") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('codegen/arc/coroutineSuspendedScopedBorrow.kt')
+    checkPrefix = "OPT"
+    extraOpts = ["-opt"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_coroutine_suspended_scoped_borrow_owned") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('codegen/arc/coroutineSuspendedScopedBorrow.kt')
+    checkPrefix = "OPT-OWNED"
+    extraOpts = ["-opt"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_coroutine_suspended_scoped_borrow_owned_abi") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('codegen/arc/coroutineSuspendedScopedBorrow.kt')
+    checkPrefix = "OWNED-ABI"
+    extraOpts = ["-opt"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_coroutine_suspended_scoped_borrow_debug") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('codegen/arc/coroutineSuspendedScopedBorrow.kt')
+    checkPrefix = "FALLBACK"
+    extraOpts = ["-opt", "-g"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_coroutine_suspended_scoped_borrow_noopt") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('codegen/arc/coroutineSuspendedScopedBorrow.kt')
+    checkPrefix = "FALLBACK"
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_coroutine_suspended_scoped_borrow_diagnostics") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('codegen/arc/coroutineSuspendedScopedBorrow.kt')
+    checkPrefix = "FALLBACK"
+    extraOpts = ["-opt", "-Xbinary=arcLeakCheck=report"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_coroutine_suspended_scoped_borrow_asan") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('codegen/arc/coroutineSuspendedScopedBorrow.kt')
+    checkPrefix = "FALLBACK"
+    extraOpts = ["-opt", "-Xbinary=sanitizer=address"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_coroutine_suspended_scoped_borrow_ubsan") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('codegen/arc/coroutineSuspendedScopedBorrow.kt')
+    checkPrefix = "FALLBACK"
+    extraOpts = ["-opt", "-Xbinary=undefinedBehaviorSanitizer=true"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_coroutine_suspended_scoped_borrow_strict") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('codegen/arc/coroutineSuspendedScopedBorrow.kt')
+    checkPrefix = "FALLBACK"
+    extraOpts = ["-opt", "-memory-model", "strict"]
     phaseToCheck = "Codegen"
 }
 

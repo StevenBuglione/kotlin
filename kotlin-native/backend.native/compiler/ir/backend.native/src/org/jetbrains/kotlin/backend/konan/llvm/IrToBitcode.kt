@@ -35,7 +35,11 @@ import org.jetbrains.kotlin.backend.konan.arc.ArcOwnedResultHeapStoreIRBindingRo
 import org.jetbrains.kotlin.backend.konan.arc.ArcOwnedResultHeapStoreKotlinIRSelection
 import org.jetbrains.kotlin.backend.konan.arc.ArcCoroutineEmptyContextReturnConsumptionLedger
 import org.jetbrains.kotlin.backend.konan.arc.ArcCoroutineEmptyContextReturnKotlinIRSelection
+import org.jetbrains.kotlin.backend.konan.arc.ArcCoroutineSuspendedBorrowConsumptionLedger
+import org.jetbrains.kotlin.backend.konan.arc.ArcCoroutineSuspendedBorrowIRSelection
+import org.jetbrains.kotlin.backend.konan.arc.ArcCoroutineSuspendedBorrowKotlinIRSelection
 import org.jetbrains.kotlin.backend.konan.arc.exactIdentityInventory
+import org.jetbrains.kotlin.backend.konan.arc.hasExactCoroutineSingletonValuesInitializer
 import org.jetbrains.kotlin.backend.konan.arc.hasExactCoroutinePhysicalBackedge
 import org.jetbrains.kotlin.backend.konan.arc.unwrapExactArcCoroutineSpillRead
 import org.jetbrains.kotlin.backend.konan.optimizations.ARC_SELECTIVE_INLINE_METADATA
@@ -269,6 +273,90 @@ internal class CodeGeneratorVisitor(
     private var currentOwnedResultHeapStoreEmission: OwnedResultHeapStoreEmission? = null
     private var currentCoroutineEmptyContextImmortalReturnEmission:
             CoroutineEmptyContextImmortalReturnEmission? = null
+    private var currentCoroutineSuspendedScopedBorrowEmission:
+            CoroutineSuspendedScopedBorrowEmission? = null
+
+    /** Emits exact process-rooted enum projections only into bounded identity comparisons. */
+    private inner class CoroutineSuspendedScopedBorrowEmission(
+        val selection: ArcCoroutineSuspendedBorrowKotlinIRSelection,
+    ) {
+        private val ledger = ArcCoroutineSuspendedBorrowConsumptionLedger(
+            selection.sites.map { it.ownership },
+        )
+
+        fun emit(
+            call: IrCall,
+            site: ArcCoroutineSuspendedBorrowIRSelection<IrElement>,
+        ): LLVMValueRef {
+            val bindings = site.bindings
+            val comparison = bindings.comparison as? IrCall
+                ?: error("COROUTINE_SUSPENDED comparison lost call identity")
+            val getter = bindings.propertyGetter as? IrSimpleFunction
+                ?: error("COROUTINE_SUSPENDED getter lost function identity")
+            val propertyReturn = bindings.propertyReturn as? IrReturn
+                ?: error("COROUTINE_SUSPENDED getter return lost identity")
+            val initializerCall = bindings.initializerCall as? IrCall
+                ?: error("COROUTINE_SUSPENDED initializer call lost identity")
+            val enumGetterCall = bindings.enumGetterCall as? IrCall
+                ?: error("COROUTINE_SUSPENDED enum getter call lost identity")
+            val initializer = bindings.initializer as? IrSimpleFunction
+                ?: error("COROUTINE_SUSPENDED global initializer lost function identity")
+            val root = bindings.valuesRoot as? IrField
+                ?: error("COROUTINE_SUSPENDED values root lost field identity")
+            val enumClass = bindings.enumClass as? IrClass
+                ?: error("COROUTINE_SUSPENDED enum class lost identity")
+            val exactArrayGet = (bindings.arrayGet as? IrCall)?.symbol?.owner
+                ?: error("COROUTINE_SUSPENDED array projection lost identity")
+            check(call === bindings.call && bindings.function === selection.function &&
+                    call.symbol.owner === getter && call.dispatchReceiver == null &&
+                    call.extensionReceiver == null && call.superQualifierSymbol == null &&
+                    call.valueArgumentsCount == 0 && call.typeArgumentsCount == 0 &&
+                    comparison.symbol == context.irBuiltIns.eqeqeqSymbol &&
+                    comparison.getArgumentsWithIr().count { it.second === call } == 1 &&
+                    propertyReturn.returnTargetSymbol == getter.symbol &&
+                    propertyReturn.value === enumGetterCall &&
+                    (bindings.enumGetter as? IrSimpleFunction)?.body.let { body ->
+                        val statements = (body as? IrBlockBody)?.statements
+                        statements?.size == 2 && statements[0] === initializerCall &&
+                                statements[1] === bindings.enumGetterReturn
+                    } &&
+                    initializerCall.symbol.owner === initializer &&
+                    enumGetterCall.symbol.owner === bindings.enumGetter &&
+                    initializer.origin == DECLARATION_ORIGIN_STATIC_GLOBAL_INITIALIZER &&
+                    root.isStatic && root.isFinal && root.type.binaryTypeIsReference() &&
+                    hasExactCoroutineSingletonValuesInitializer(root, enumClass, exactArrayGet, context)) {
+                "COROUTINE_SUSPENDED scoped-borrow structural fingerprint drifted"
+            }
+
+            // Preserve the public getter's exact initialization semantics before bypassing its
+            // owned result. The selected value remains +0 and is consumed only by identity eq.
+            evaluateFileGlobalInitializerCall(initializer)
+            if (context.config.threadsAreAllowed && root.isGlobalNonPrimitive(context)) {
+                functionGenerationContext.checkGlobalsAccessible(currentCodeContext.exceptionHandler)
+            }
+            val values = functionGenerationContext.loadSlot(
+                staticFieldPtr(root, functionGenerationContext),
+                false,
+                null,
+                alignment = generationState.llvmDeclarations.forStaticField(root).alignment,
+            )
+            val borrowedGetter = llvm.externalNativeRuntimeFunction(
+                "Kotlin_Array_get_borrowed",
+                LlvmRetType(codegen.kObjHeaderPtr),
+                listOf(LlvmParamType(codegen.kObjHeaderPtr), LlvmParamType(llvm.int32Type)),
+            )
+            val result = functionGenerationContext.call(
+                borrowedGetter,
+                listOf(values, llvm.int32(0)),
+                exceptionHandler = currentCodeContext.exceptionHandler,
+                verbatim = true,
+            )
+            ledger.consume(call, bindings.exactIdentityInventory())
+            return result
+        }
+
+        fun verifyConsumed() = ledger.verifyComplete()
+    }
 
     /** Publishes one exact permanent EmptyCoroutineContext root without retaining it. */
     private inner class CoroutineEmptyContextImmortalReturnEmission(
@@ -1322,6 +1410,8 @@ internal class CodeGeneratorVisitor(
         val previousOwnedResultHeapStoreEmission = currentOwnedResultHeapStoreEmission
         val previousCoroutineEmptyContextImmortalReturnEmission =
             currentCoroutineEmptyContextImmortalReturnEmission
+        val previousCoroutineSuspendedScopedBorrowEmission =
+            currentCoroutineSuspendedScopedBorrowEmission
         currentDiscardedReturnedReceiverSeedSlots = IdentityHashMap()
         currentCoroutineGuaranteedPhiEmission = (declaration as? IrSimpleFunction)?.let {
             arcOwnership.coroutineGuaranteedPhiSelections[it]
@@ -1344,6 +1434,9 @@ internal class CodeGeneratorVisitor(
         currentCoroutineEmptyContextImmortalReturnEmission = (declaration as? IrSimpleFunction)?.let {
             arcOwnership.coroutineEmptyContextImmortalReturns[it]
         }?.let(::CoroutineEmptyContextImmortalReturnEmission)
+        currentCoroutineSuspendedScopedBorrowEmission = arcOwnership
+            .coroutineSuspendedScopedBorrowsByFunction[declaration]
+            ?.let(::CoroutineSuspendedScopedBorrowEmission)
         currentArcOwnedResultForwarding = if (!context.shouldContainDebugInfo()) {
             (declaration as? IrSimpleFunction)?.let { arcOwnership.ownedResultForwarding[it] }
         } else {
@@ -1389,6 +1482,7 @@ internal class CodeGeneratorVisitor(
                                 currentStringBuilderBackingArrayProjectionEmission?.verifyConsumed()
                                 currentOwnedResultHeapStoreEmission?.verifyConsumed()
                                 currentCoroutineEmptyContextImmortalReturnEmission?.verifyConsumed()
+                                currentCoroutineSuspendedScopedBorrowEmission?.verifyConsumed()
                             }
                         }
                     }
@@ -1406,6 +1500,8 @@ internal class CodeGeneratorVisitor(
             currentOwnedResultHeapStoreEmission = previousOwnedResultHeapStoreEmission
             currentCoroutineEmptyContextImmortalReturnEmission =
                     previousCoroutineEmptyContextImmortalReturnEmission
+            currentCoroutineSuspendedScopedBorrowEmission =
+                    previousCoroutineSuspendedScopedBorrowEmission
         }
 
 
@@ -3138,6 +3234,17 @@ internal class CodeGeneratorVisitor(
     private fun evaluateCallBody(value: IrFunctionAccessExpression, resultSlot: LLVMValueRef?): LLVMValueRef {
         context.log{"evaluateCall                   : ${ir2string(value)}"}
         if (value is IrCall) currentCoroutineGuaranteedPhiEmission?.markCall(value)
+
+        if (value is IrCall) {
+            arcOwnership.coroutineSuspendedScopedBorrowsByCall[value]?.let { site ->
+                require(resultSlot == null) {
+                    "selected COROUTINE_SUSPENDED scoped borrow reached an owning result slot"
+                }
+                val emission = currentCoroutineSuspendedScopedBorrowEmission
+                    ?: error("COROUTINE_SUSPENDED scoped borrow escaped its selected function")
+                return emission.emit(value, site)
+            }
+        }
 
         if (value is IrCall) {
             arcOwnership.resultCompanionImmortalLoadsByCall[value]?.let { plan ->

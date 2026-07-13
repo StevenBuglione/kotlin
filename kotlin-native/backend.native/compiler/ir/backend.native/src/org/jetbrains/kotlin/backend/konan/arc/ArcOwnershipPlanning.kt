@@ -357,6 +357,10 @@ internal data class ArcCodegenOwnershipPlan(
     val ownedResultHeapStoreSelections: Map<IrSimpleFunction, ArcOwnedResultHeapStoreKotlinIRSelection>,
     val coroutineEmptyContextImmortalReturns:
             Map<IrSimpleFunction, ArcCoroutineEmptyContextReturnKotlinIRSelection>,
+    val coroutineSuspendedScopedBorrowsByCall:
+            Map<IrCall, ArcCoroutineSuspendedBorrowIRSelection<IrElement>>,
+    val coroutineSuspendedScopedBorrowsByFunction:
+            Map<IrFunction, ArcCoroutineSuspendedBorrowKotlinIRSelection>,
 ) {
     val scopedArcReferenceLoadBoundaries: Set<IrExpression> =
         Collections.newSetFromMap(IdentityHashMap<IrExpression, Boolean>()).apply {
@@ -416,6 +420,8 @@ internal data class ArcCodegenOwnershipPlan(
             stringBuilderBackingArrayProjectionPlans = emptyMap(),
             ownedResultHeapStoreSelections = emptyMap(),
             coroutineEmptyContextImmortalReturns = emptyMap(),
+            coroutineSuspendedScopedBorrowsByCall = emptyMap(),
+            coroutineSuspendedScopedBorrowsByFunction = emptyMap(),
         )
     }
 }
@@ -958,6 +964,21 @@ internal fun runArcOwnershipPlanning(
                     "${selection.function.fqNameForIrSerialization.asString()}: selected=1"
         }
     }
+    val coroutineSuspendedScopedBorrowsByCall =
+        IdentityHashMap<IrCall, ArcCoroutineSuspendedBorrowIRSelection<IrElement>>()
+    val coroutineSuspendedScopedBorrowsByFunction =
+        IdentityHashMap<IrFunction, ArcCoroutineSuspendedBorrowKotlinIRSelection>()
+    selectVerifiedCoroutineSuspendedScopedBorrows(generationState, input.module).forEach { selection ->
+        check(coroutineSuspendedScopedBorrowsByFunction.put(selection.function, selection) == null) {
+            "duplicate COROUTINE_SUSPENDED scoped-borrow function: ${selection.function.fqNameForIrSerialization}"
+        }
+        selection.sites.forEach { site ->
+            val call = site.bindings.call as IrCall
+            check(coroutineSuspendedScopedBorrowsByCall.put(call, site) == null) {
+                "duplicate COROUTINE_SUSPENDED scoped-borrow call: ${selection.function.fqNameForIrSerialization}"
+            }
+        }
+    }
     val canonicalLockedReadPlans = resolveCanonicalLockedReadPlans(generationState, input.module)
     canonicalLockedReadPlans.forEach { plan ->
         lockedReadResultSlotForwardingCalls[plan.tailCall] = plan
@@ -1212,6 +1233,8 @@ internal fun runArcOwnershipPlanning(
             stringBuilderBackingArrayProjectionPlans,
             ownedResultHeapStoreSelections,
             coroutineEmptyContextImmortalReturns,
+            coroutineSuspendedScopedBorrowsByCall,
+            coroutineSuspendedScopedBorrowsByFunction,
         ),
     )
 }
@@ -3669,7 +3692,7 @@ private fun selectVerifiedRootedGlobalProjections(
     return selected
 }
 
-private fun hasOnlyVerifiedEnumRootUses(
+internal fun hasOnlyVerifiedEnumRootUses(
     module: org.jetbrains.kotlin.ir.declarations.IrModuleFragment,
     root: IrField,
     getterRootRead: IrGetField,
