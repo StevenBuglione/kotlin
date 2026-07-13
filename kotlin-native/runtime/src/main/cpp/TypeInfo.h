@@ -51,8 +51,17 @@ enum Konan_TypeFlags {
   TF_HAS_FINALIZER = 1 << 6,
   TF_HAS_FREEZE_HOOK = 1 << 7,
   TF_REFLECTION_SHOW_PKG_NAME = 1 << 8, // If package name is available in reflection, e.g. in `KClass.qualifiedName`.
-  TF_REFLECTION_SHOW_REL_NAME = 1 << 9 // If relative name is available in reflection, e.g. in `KClass.simpleName`.
+  TF_REFLECTION_SHOW_REL_NAME = 1 << 9, // If relative name is available in reflection, e.g. in `KClass.simpleName`.
+  // The processObjectInMark slot contains an ARC field-destroy thunk rather than a tracing callback.
+  // This flag is emitted only by the ARC compiler and lets the ARC runtime safely fall back for
+  // TypeInfos originating in older KLIBs or caches.
+  TF_HAS_ARC_DESTROY_THUNK = 1 << 10,
 };
+
+#ifdef __cplusplus
+static_assert((TF_HAS_ARC_DESTROY_THUNK & ((1 << 10) - 1)) == 0,
+              "ARC destroy-thunk TypeInfo flag must not overlap an existing flag");
+#endif
 
 // Flags per object instance.
 enum Konan_MetaFlags {

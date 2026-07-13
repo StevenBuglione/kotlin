@@ -1,0 +1,92 @@
+{
+  "wave": 24,
+  "name": "per-class ARC field-destroy thunks",
+  "baseCommit": "bea5a8f7c926efebf40d2b10693515e2fc220a18",
+  "oracleCommit": "bea5a8f7c926efebf40d2b10693515e2fc220a18",
+  "target": "linux_x64",
+  "host": {
+    "name": "posidon",
+    "address": "10.10.10.12",
+    "cpu": "11th Gen Intel(R) Core(TM) i7-11700K @ 3.60GHz",
+    "logicalCpus": 16,
+    "kernel": "Linux 6.8.0-134-generic x86_64"
+  },
+  "design": {
+    "typeInfoLayoutChanged": false,
+    "callbackSlot": "TypeInfo.processObjectInMark",
+    "dispatchFlag": "TF_HAS_ARC_DESTROY_THUNK (1 << 10)",
+    "callbackSignature": "void(void*, ObjHeader*)",
+    "fieldOperation": "ZeroHeapRef",
+    "fieldOrder": "canonical ascending physical reference offsets",
+    "arrayPolicy": "dynamic object arrays use metadata traversal fallback",
+    "fallbackPolicy": "missing flag, missing callback, legacy callback, prebuilt type, and arrays use traverseObjectFields",
+    "swiftMapping": "swift/lib/IRGen/GenHeap.cpp:createDtorFn"
+  },
+  "emittedCode": {
+    "fixture": "tools/arc/fixtures/destroy-thunk.kt",
+    "runnableOutput": "ARC_DESTROY_THUNK_OK",
+    "codegenIrSha256": "e0023e8c5e87c01adbc45349ba359ace13d45d6acbd8912963a55b4348bd29f5",
+    "executableSha256": "d96607e610a776f468192dc0d0a61eda2409940a5c1aed95837dfecf1d7dfcaa",
+    "derivedTypeInfoFlags": 1792,
+    "derivedReferenceOffsets": [8, 16, 24],
+    "derivedZeroHeapRefCalls": 3,
+    "thunkLinkage": "private",
+    "thunkNounwind": true
+  },
+  "verification": {
+    "compilerAndDistribution": "passed",
+    "runtime": "passed",
+    "asanRuntime": "passed",
+    "ubsanRuntime": "passed",
+    "runtimeTests": {
+      "total": 1024,
+      "passed": 1015,
+      "skipped": 9
+    },
+    "focusedTests": [
+      "FlaggedFieldDestroyThunkUsesCanonicalBarrierAndLegacyCallbackFallsBack",
+      "FieldDestroyThunkReleasesInitializedFieldsAfterConstructorFailure",
+      "DeepGraphUsesIterativeDestructionWorklist",
+      "RunsInitializedHooksDerivedToBaseExactlyOnceBeforeFieldsAreReleased"
+    ],
+    "strictRuntimeBitcode": {
+      "strict.bc": "ee435386dad30b49234b13bfe660ee9289f09d6d85b6183bf4da1367c2d1d979",
+      "strict_ubsan.bc": "bd65a383860388b9f6c55629f7508db78588a0e6e84a8e8a861fe21258c0bcc9"
+    },
+    "strictSameNameExecutableSha256": "ca85e346adc8b99248303739dc245f1f98e7ec9d56833027a13d12393a7cd523",
+    "strictExecutableByteIdentical": true
+  },
+  "benchmark": {
+    "fixture": "tools/arc/fixtures/destroy-thunk-benchmark.kt",
+    "rawData": "raw.tsv",
+    "rawDataSha256": "a402c702adaccb58e51daf47a7359ebb93cbc87c8d5c1404e458ea2675a95a8a",
+    "samplesPerModelPerScenario": 15,
+    "cpuPinned": true,
+    "executionOrder": "alternating oracle/candidate",
+    "observableOutputsEqual": true,
+    "scenarios": {
+      "destruction": {
+        "candidateMedianNs": 254900444,
+        "oracleMedianNs": 257625540,
+        "candidateThroughputPercentOfOracle": 101.069082,
+        "candidateMedianRssKiB": 2432,
+        "oracleMedianRssKiB": 2432
+      },
+      "fields": {
+        "candidateMedianNs": 297695371,
+        "oracleMedianNs": 309166851,
+        "candidateThroughputPercentOfOracle": 103.853429,
+        "candidateMedianRssKiB": 2688,
+        "oracleMedianRssKiB": 2688
+      }
+    },
+    "binary": {
+      "candidateBytes": 388104,
+      "oracleBytes": 379912,
+      "deltaBytes": 8192,
+      "deltaPercent": 2.156289,
+      "candidateSha256": "29a0ccb629ea2e669abcd23b0ed9d9f8b9c2d3f059bd42856aa24eba9cf7c9f0",
+      "oracleSha256": "04087ac85d18140df3ca0c1926a989fc480919776dd5b23e82ef8b924cc5b126"
+    }
+  }
+}

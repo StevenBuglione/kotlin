@@ -1472,6 +1472,23 @@ ALWAYS_INLINE void runDeallocationHooks(ContainerHeader* container) {
 }
 
 #if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+ALWAYS_INLINE void releaseArcObjectFields(ObjHeader* object) {
+  const TypeInfo* typeInfo = object->type_info();
+  auto destroyFields = typeInfo->processObjectInMark;
+  // The explicit flag distinguishes new ARC thunks from arbitrary class-specific tracing
+  // callbacks stored in TypeInfos from old KLIBs or caches. Arrays retain the generic metadata
+  // traversal because their element count is dynamic.
+  if ((typeInfo->flags_ & TF_HAS_ARC_DESTROY_THUNK) != 0 &&
+      typeInfo->instanceSize_ >= 0 && destroyFields != nullptr) {
+    destroyFields(nullptr, object);
+    return;
+  }
+
+  kotlin::traverseObjectFields(object, [](ObjHeader** location) {
+    ZeroHeapRef(location);
+  });
+}
+
 RUNTIME_NOTHROW void runArcDeinitHooks(ContainerHeader* container) {
   const TypeInfo* initializedType = container->takeArcInitializedDeinitType();
   if (initializedType == nullptr) return;
@@ -1515,10 +1532,17 @@ void freeContainer(ContainerHeader* container) {
 #endif
   runDeallocationHooks(container);
 
-  // Now let's clean all object's fields in this container.
-  traverseContainerObjectFields(container, [](ObjHeader** location) {
-      ZeroHeapRef(location);
+  // Now clean all object fields. ARC TypeInfos produced by this compiler use an unrolled,
+  // per-class thunk; old/prebuilt/no-thunk types retain the exact metadata traversal fallback.
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+  traverseContainerObjects(container, [](ObjHeader* object) {
+    releaseArcObjectFields(object);
   });
+#else
+  traverseContainerObjectFields(container, [](ObjHeader** location) {
+    ZeroHeapRef(location);
+  });
+#endif
 
   // And release underlying memory.
   if (isFreeable(container)) {
