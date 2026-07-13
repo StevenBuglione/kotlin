@@ -119,6 +119,12 @@ internal sealed class ArcOwnedToGuaranteedPhiIRActionId {
         val frontier: ArcSemanticLifetimeFrontier,
     ) : ArcOwnedToGuaranteedPhiIRActionId()
 
+    /** Authenticated Swift-style pruned-liveness boundary consumed by the atomic rewrite. */
+    data class ApplyPrunedLifetimeBoundary(
+        override val plan: ArcOwnedToGuaranteedPhiIRPlanId,
+        val boundary: ArcPrunedOwnershipBoundaryPoint,
+    ) : ArcOwnedToGuaranteedPhiIRActionId()
+
     data class SplitCriticalEdge(
         val edge: ArcSSAEdge,
         val splitBlock: ArcBlockId,
@@ -148,6 +154,7 @@ internal data class ArcOwnedToGuaranteedPhiIRSelection<T : Any>(
     val inventory: ArcOwnedToGuaranteedPhiIRInventory<T>,
     val input: ArcSemanticARCInput,
     val plans: List<ArcSemanticPhiWebPlan>,
+    val prunedLiveness: Map<ArcOwnedToGuaranteedPhiIRPlanId, ArcPrunedOwnershipLivenessProof>,
     val exactBindings: ArcOwnedToGuaranteedPhiIRExactBindings<T>,
     val actions: Map<ArcOwnedToGuaranteedPhiIRActionId, ArcOwnedToGuaranteedPhiIRAction<T>>,
 )
@@ -211,6 +218,7 @@ internal enum class ArcOwnedToGuaranteedPhiIRRejectionReason {
     InvalidBlockSeal,
     InvalidSeedIdentity,
     SemanticAnalysisRejected,
+    PrunedLivenessRejected,
     IncompleteSemanticCoverage,
     MissingCriticalEdgeSplit,
     InvalidCriticalEdgeSplit,
@@ -458,8 +466,126 @@ internal object ArcOwnedToGuaranteedPhiIRAdapter {
             )),
         )
 
-        val requiredCriticalEdges = semantic.accepted.flatMap { it.frontier }
-            .filterIsInstance<ArcSemanticLifetimeFrontier.OnEdge>()
+        val plans = semantic.accepted.sortedBy { plan -> plan.seeds.minOf { it.copy.name } }
+        val dominators = adapterDominators(cfg)
+        val prunedLiveness = linkedMapOf<ArcOwnedToGuaranteedPhiIRPlanId, ArcPrunedOwnershipLivenessProof>()
+        plans.forEach planLoop@{ plan ->
+            val planId = ArcOwnedToGuaranteedPhiIRPlanId(plan.seeds.map { it.copy }.sortedBy { it.name })
+            val prunedDefinitions = plan.members.mapTo(linkedSetOf()) { value ->
+                val position = definitions.getValue(value).first
+                ArcPrunedOwnershipDefinition(value, position.block, position.operationIndex)
+            }
+            val prunedUses = linkedSetOf<ArcPrunedOwnershipUse>()
+            var malformedPhiEdge: String? = null
+            cfg.blocks.values.sortedBy { it.id.name }.forEach { block ->
+                block.operations.forEachIndexed { index, operation ->
+                    if (operation is ArcSSAOperation.Join) {
+                        operation.incoming.entries.sortedBy { it.key.name }.forEach incomingLoop@{ (predecessor, incoming) ->
+                            if (incoming !in plan.members) return@incomingLoop
+                            val edge = cfg.edges.singleOrNull {
+                                it.from == predecessor && it.to == block.id && it.kind == ArcSSAEdgeKind.Normal
+                            }
+                            if (edge == null) {
+                                malformedPhiEdge = "join ${operation.result} has no unique normal edge from $predecessor"
+                            } else {
+                                prunedUses += ArcPrunedOwnershipUse.Edge(
+                                    incoming, edge, ArcPrunedOwnershipUseLifetime.NonLifetimeEnding,
+                                )
+                            }
+                        }
+                    } else {
+                        operation.adapterOperands().filter { it in plan.members }.distinct().forEach { operand ->
+                            val lifetime = when (operation) {
+                                is ArcSSAOperation.DestroyOwned -> ArcPrunedOwnershipUseLifetime.LifetimeEnding
+                                is ArcSSAOperation.Use -> if (operation.kind == ArcSSAUseKind.Consume) {
+                                    ArcPrunedOwnershipUseLifetime.LifetimeEnding
+                                } else ArcPrunedOwnershipUseLifetime.NonLifetimeEnding
+                                else -> ArcPrunedOwnershipUseLifetime.NonLifetimeEnding
+                            }
+                            prunedUses += ArcPrunedOwnershipUse.Operation(
+                                operand, block.id, index, lifetime,
+                            )
+                        }
+                    }
+                }
+            }
+            exitBindings.keys.sortedBy { it.name }.forEach { exitBlock ->
+                plan.members.sortedBy { it.name }.forEach { value ->
+                    val definition = definitions.getValue(value).first
+                    if (adapterDefinitionDominatesBlockEnd(definition, exitBlock, dominators)) {
+                        prunedUses += ArcPrunedOwnershipUse.Exit(
+                            value, exitBlock, ArcPrunedOwnershipUseLifetime.LifetimeEnding,
+                        )
+                    }
+                }
+            }
+            if (malformedPhiEdge != null) {
+                reject(
+                    ArcOwnedToGuaranteedPhiIRRejectionReason.PrunedLivenessRejected,
+                    malformedPhiEdge!!,
+                )
+                return@planLoop
+            }
+            val graphUnitCount = inventory.blocks.size.toLong() + inventory.edges.size + instructionCount +
+                    prunedUses.size + prunedDefinitions.size
+            val iterationLimit = minOf(
+                inventory.blocks.size.toLong() + 1,
+                inventory.budget.maximumRewriteSteps.toLong(),
+            ).coerceAtLeast(1)
+            val maximumDataflowSteps = (graphUnitCount * iterationLimit).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+            val result = ArcPrunedOwnershipLivenessAnalysis.analyze(
+                ArcPrunedOwnershipLivenessInput(
+                    cfg = cfg,
+                    definitions = prunedDefinitions,
+                    uses = prunedUses,
+                    deadEndBlocks = deadEndBindings.keys,
+                    barriers = barrierGroups.keys,
+                    budget = ArcPrunedOwnershipLivenessBudget(
+                        maximumBlocks = maxOf(1, inventory.blocks.size),
+                        maximumEdges = maxOf(1, inventory.edges.size),
+                        maximumDefinitions = maxOf(1, prunedDefinitions.size),
+                        maximumUses = maxOf(1, inventory.budget.maximumUses),
+                        maximumDataflowSteps = maxOf(1, maximumDataflowSteps),
+                    ),
+                    completeInventory = true,
+                ),
+            )
+            val proof = result.proof
+            if (proof == null) {
+                reject(
+                    ArcOwnedToGuaranteedPhiIRRejectionReason.PrunedLivenessRejected,
+                    "$planId: ${result.rejection}",
+                )
+            } else {
+                // Swift's boundary visitor always records LiveOut -> Dead edges before it asks the
+                // single-/multi-def scanner for local boundaries. Reconstruct that outer visitor
+                // step from the authenticated proof so definition-bearing source blocks cannot
+                // lose a normal critical frontier or exceptional cleanup frontier.
+                val edgeBoundary = cfg.edges.filter { edge ->
+                    proof.blockLiveness[edge.from] == ArcPrunedBlockLiveness.LiveOut &&
+                            proof.blockLiveness[edge.to] == ArcPrunedBlockLiveness.Dead &&
+                            proof.liveOnEdges[edge] != true && edge.from !in deadEndBindings &&
+                            edge.to !in deadEndBindings
+                }.mapTo(linkedSetOf()) { edge ->
+                    ArcPrunedOwnershipBoundaryPoint.OnEdge(
+                        edge,
+                        requiresEdgeSplit = edge.kind == ArcSSAEdgeKind.Normal && adapterIsCritical(edge, cfg),
+                        requiresExceptionalCleanup = edge.kind == ArcSSAEdgeKind.Exceptional,
+                    )
+                }
+                val completeProof = proof.copy(boundary = proof.boundary + edgeBoundary)
+                if (prunedLiveness.put(planId, completeProof) != null) reject(
+                    ArcOwnedToGuaranteedPhiIRRejectionReason.PrunedLivenessRejected,
+                    "duplicate pruned-liveness plan identity $planId",
+                )
+            }
+        }
+        if (rejected.isNotEmpty()) return ArcOwnedToGuaranteedPhiIRAdapterResult(null, rejected)
+
+        // The semantic frontier remains an independent oracle. Pruned liveness is the sole
+        // authoritative emitted lifetime boundary, preventing two ends for one ownership range.
+        val requiredCriticalEdges = prunedLiveness.values.flatMap { proof -> proof.boundary }
+            .filterIsInstance<ArcPrunedOwnershipBoundaryPoint.OnEdge>()
             .filter { it.requiresEdgeSplit }.mapTo(linkedSetOf()) { it.edge }
         val splitGroups = inventory.criticalEdgeSplits.groupBy { it.edge }
         if (splitGroups.keys != requiredCriticalEdges || splitGroups.any { it.value.size != 1 }) reject(
@@ -493,7 +619,6 @@ internal object ArcOwnedToGuaranteedPhiIRAdapter {
             exitLifetimeUses = exitBindings,
             criticalEdgeSplits = splitBindingMap,
         )
-        val plans = semantic.accepted.sortedBy { plan -> plan.seeds.minOf { it.copy.name } }
         val actions = linkedMapOf<ArcOwnedToGuaranteedPhiIRActionId, ArcOwnedToGuaranteedPhiIRAction<T>>()
         fun add(id: ArcOwnedToGuaranteedPhiIRActionId, bindings: List<T>): Boolean {
             if (bindings.isEmpty() || actions.put(id, ArcOwnedToGuaranteedPhiIRAction(id, bindings)) != null) {
@@ -557,25 +682,59 @@ internal object ArcOwnedToGuaranteedPhiIRAdapter {
                     listOf(ownedOperation.binding),
                 )
             } }
-            plan.frontier.sortedBy { it.toString() }.forEach { frontier ->
-                val bindings = when (frontier) {
-                    is ArcSemanticLifetimeFrontier.AfterOperation -> listOf(
-                        operationBindings.getValue(ArcSemanticEmissionOperationId(frontier.block, frontier.operationIndex)),
-                    )
-                    is ArcSemanticLifetimeFrontier.BeforeBarrier -> listOf(barrierBindings.getValue(frontier.barrier))
-                    is ArcSemanticLifetimeFrontier.BeforeExit -> listOf(blockBindings.getValue(frontier.block))
-                    is ArcSemanticLifetimeFrontier.OnEdge -> buildList {
-                        add(edgeBindings.getValue(frontier.edge))
-                        inventory.edges.single { it.edge == frontier.edge }.throwingOperationBinding?.let { add(it) }
-                        splitBindingMap[frontier.edge]?.let { add(it) }
+            prunedLiveness.getValue(planId).boundary.sortedBy { it.toString() }.forEach { boundary ->
+                val bindings: List<T>? = when (boundary) {
+                    is ArcPrunedOwnershipBoundaryPoint.AfterOperation ->
+                        operationBindings[ArcSemanticEmissionOperationId(
+                            boundary.block, boundary.operationIndex,
+                        )]?.let(::listOf)
+                    is ArcPrunedOwnershipBoundaryPoint.AfterDeadDefinition -> {
+                        val definition = definitions[boundary.definition.value]
+                        if (definition?.first?.block == boundary.definition.block &&
+                            definition.first.operationIndex == boundary.definition.operationIndex
+                        ) listOf(definition.second) else null
                     }
+                    is ArcPrunedOwnershipBoundaryPoint.ExistingLifetimeEnd -> when (val use = boundary.use) {
+                        is ArcPrunedOwnershipUse.Operation ->
+                            operationBindings[ArcSemanticEmissionOperationId(
+                                use.block, use.operationIndex,
+                            )]?.let(::listOf)
+                        is ArcPrunedOwnershipUse.Edge -> edgeBindings[use.edge]?.let(::listOf)
+                        is ArcPrunedOwnershipUse.Exit -> exitBindings[use.block]?.let(::listOf)
+                    }
+                    is ArcPrunedOwnershipBoundaryPoint.OnEdge -> {
+                        val edgeBinding = edgeBindings[boundary.edge]
+                        val throwingBinding = if (boundary.requiresExceptionalCleanup) {
+                            inventory.edges.singleOrNull { it.edge == boundary.edge }?.throwingOperationBinding
+                        } else null
+                        val splitBinding = if (boundary.requiresEdgeSplit) splitBindingMap[boundary.edge] else null
+                        if (edgeBinding == null || boundary.requiresExceptionalCleanup && throwingBinding == null ||
+                            boundary.requiresEdgeSplit && splitBinding == null
+                        ) null else buildList {
+                            add(edgeBinding)
+                            throwingBinding?.let { add(it) }
+                            splitBinding?.let { add(it) }
+                        }
+                    }
+                    is ArcPrunedOwnershipBoundaryPoint.BeforeExit ->
+                        exitBindings[boundary.block]?.let(::listOf)
                 }
-                add(ArcOwnedToGuaranteedPhiIRActionId.EndLifetime(planId, frontier), bindings)
+                if (bindings == null) {
+                    reject(
+                        ArcOwnedToGuaranteedPhiIRRejectionReason.ActionBindingFailure,
+                        "pruned lifetime boundary $boundary has no authenticated exact identity",
+                    )
+                } else {
+                    add(
+                        ArcOwnedToGuaranteedPhiIRActionId.ApplyPrunedLifetimeBoundary(planId, boundary),
+                        bindings,
+                    )
+                }
             }
         }
         if (rejected.isNotEmpty()) return ArcOwnedToGuaranteedPhiIRAdapterResult(null, rejected)
         return ArcOwnedToGuaranteedPhiIRAdapterResult(
-            ArcOwnedToGuaranteedPhiIRSelection(inventory, input, plans, exactBindings, actions),
+            ArcOwnedToGuaranteedPhiIRSelection(inventory, input, plans, prunedLiveness, exactBindings, actions),
             emptyList(),
         )
     }
@@ -604,3 +763,42 @@ private fun ArcSSAOperation.adapterOperands(): List<ArcSSAValue> = when (this) {
     is ArcSSAOperation.Use -> listOf(value)
     is ArcSSAOperation.EndBorrow, is ArcSSAOperation.DeinitBarrier -> emptyList()
 }
+
+private fun adapterDominators(cfg: ArcOwnershipSSAInput): Map<ArcBlockId, Set<ArcBlockId>> {
+    if (cfg.entry !in cfg.blocks) return emptyMap()
+    val reachable = linkedSetOf<ArcBlockId>()
+    val worklist = ArrayDeque<ArcBlockId>().apply { add(cfg.entry) }
+    while (worklist.isNotEmpty()) {
+        val block = worklist.removeFirst()
+        if (!reachable.add(block)) continue
+        cfg.edges.filter { it.from == block }.sortedWith(
+            compareBy({ it.to.name }, { it.kind.name }),
+        ).forEach { worklist += it.to }
+    }
+    val result = reachable.associateWithTo(linkedMapOf()) {
+        if (it == cfg.entry) setOf(it) else reachable.toSet()
+    }
+    var changed = true
+    while (changed) {
+        changed = false
+        reachable.filter { it != cfg.entry }.sortedBy { it.name }.forEach { block ->
+            val predecessors = cfg.edges.filter { it.to == block && it.from in reachable }.map { it.from }
+            val next = if (predecessors.isEmpty()) setOf(block) else
+                predecessors.map { result.getValue(it) }.reduce { left, right -> left intersect right } + block
+            if (result[block] != next) {
+                result[block] = next
+                changed = true
+            }
+        }
+    }
+    return result
+}
+
+private fun adapterDefinitionDominatesBlockEnd(
+    definition: ArcSemanticEmissionOperationId,
+    block: ArcBlockId,
+    dominators: Map<ArcBlockId, Set<ArcBlockId>>,
+): Boolean = definition.block in dominators[block].orEmpty()
+
+private fun adapterIsCritical(edge: ArcSSAEdge, cfg: ArcOwnershipSSAInput): Boolean =
+    cfg.edges.count { it.from == edge.from } > 1 && cfg.edges.count { it.to == edge.to } > 1

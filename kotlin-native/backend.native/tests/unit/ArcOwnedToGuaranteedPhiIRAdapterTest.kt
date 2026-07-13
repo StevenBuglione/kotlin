@@ -27,6 +27,7 @@ class ArcOwnedToGuaranteedPhiIRAdapterTest {
         assertTrue(result.rejections.toString(), result.rejections.isEmpty())
         val selection = result.selection!!
         assertEquals(1, selection.plans.size)
+        assertEquals(1, selection.prunedLiveness.size)
         assertEquals(fixture.inventory.blocks.size, selection.exactBindings.blocks.size)
         assertEquals(fixture.inventory.edges.size, selection.exactBindings.edges.size)
         assertEquals(3, selection.actions.keys.filterIsInstance<
@@ -35,7 +36,14 @@ class ArcOwnedToGuaranteedPhiIRAdapterTest {
         assertEquals(2, selection.actions.keys.filterIsInstance<ArcOwnedToGuaranteedPhiIRActionId.InstallReborrow>().size)
         assertEquals(2, selection.actions.keys.filterIsInstance<ArcOwnedToGuaranteedPhiIRActionId.EliminateCopy>().size)
         assertEquals(1, selection.actions.keys.filterIsInstance<ArcOwnedToGuaranteedPhiIRActionId.RemoveDestroy>().size)
-        assertTrue(selection.actions.keys.any { it is ArcOwnedToGuaranteedPhiIRActionId.EndLifetime })
+        assertTrue(selection.actions.keys.none { it is ArcOwnedToGuaranteedPhiIRActionId.EndLifetime })
+        val authoritativeBoundaries = selection.actions.keys.filterIsInstance<
+                ArcOwnedToGuaranteedPhiIRActionId.ApplyPrunedLifetimeBoundary>()
+        assertEquals(selection.prunedLiveness.values.sumOf { it.boundary.size }, authoritativeBoundaries.size)
+        assertEquals(authoritativeBoundaries.size, authoritativeBoundaries.map { it.boundary }.distinct().size)
+        assertTrue(authoritativeBoundaries.any {
+            it.boundary is ArcPrunedOwnershipBoundaryPoint.ExistingLifetimeEnd
+        })
 
         ArcOwnedToGuaranteedPhiIRConsumptionLedger(selection, fixture.inventory.functionBinding).also { ledger ->
             selection.actions.values.forEach { ledger.stage(it.id, it.bindingIdentities) }
@@ -153,6 +161,18 @@ class ArcOwnedToGuaranteedPhiIRAdapterTest {
             }),
             ArcOwnedToGuaranteedPhiIRRejectionReason.InvalidExceptionalEdge,
         )
+
+        val cleanupFixture = exceptionalCleanupFixture()
+        val cleanupSelection = ArcOwnedToGuaranteedPhiIRAdapter.adapt(cleanupFixture.inventory).selection!!
+        val exceptionalBoundaryAction = cleanupSelection.actions.values.single { action ->
+            val id = action.id as? ArcOwnedToGuaranteedPhiIRActionId.ApplyPrunedLifetimeBoundary
+            val boundary = id?.boundary as? ArcPrunedOwnershipBoundaryPoint.OnEdge
+            boundary?.requiresExceptionalCleanup == true
+        }
+        val cleanupEdge = cleanupFixture.inventory.edges.single { it.edge.kind === ArcSSAEdgeKind.Exceptional }
+        assertEquals(2, exceptionalBoundaryAction.bindingIdentities.size)
+        assertTrue(exceptionalBoundaryAction.bindingIdentities[0] === cleanupEdge.binding)
+        assertTrue(exceptionalBoundaryAction.bindingIdentities[1] === cleanupEdge.throwingOperationBinding)
     }
 
     @Test
@@ -169,9 +189,16 @@ class ArcOwnedToGuaranteedPhiIRAdapterTest {
         val exitFixture = exitLifetimeFixture()
         val exitAccepted = ArcOwnedToGuaranteedPhiIRAdapter.adapt(exitFixture.inventory)
         assertTrue(exitAccepted.rejections.toString(), exitAccepted.rejections.isEmpty())
-        assertTrue(exitAccepted.selection!!.plans.single().frontier.any {
+        val exitSelection = exitAccepted.selection!!
+        assertTrue(exitSelection.plans.single().frontier.any {
             it is ArcSemanticLifetimeFrontier.BeforeExit && it.block.name == "exit"
         })
+        val exitBoundary = exitSelection.actions.values.single { action ->
+            val id = action.id as? ArcOwnedToGuaranteedPhiIRActionId.ApplyPrunedLifetimeBoundary
+            id?.boundary is ArcPrunedOwnershipBoundaryPoint.ExistingLifetimeEnd &&
+                    (id.boundary as ArcPrunedOwnershipBoundaryPoint.ExistingLifetimeEnd).use is ArcPrunedOwnershipUse.Exit
+        }
+        assertTrue(exitBoundary.bindingIdentities.single() === exitFixture.inventory.exitLifetimeUses.single().binding)
         val seal = exitFixture.inventory.exitLifetimeUses.single()
         assertRejected(
             exitFixture.inventory.copy(exitLifetimeUses = listOf(seal.copy(binding = Token("wrong.exit")))),
@@ -208,10 +235,12 @@ class ArcOwnedToGuaranteedPhiIRAdapterTest {
         assertTrue(accepted.rejections.toString(), accepted.rejections.isEmpty())
         val selection = accepted.selection!!
         assertTrue(selection.actions.keys.any { it is ArcOwnedToGuaranteedPhiIRActionId.SplitCriticalEdge })
-        assertTrue(selection.actions.keys.any {
-            it is ArcOwnedToGuaranteedPhiIRActionId.EndLifetime &&
-                    it.frontier is ArcSemanticLifetimeFrontier.OnEdge
-        })
+        val prunedCritical = selection.actions.values.single { action ->
+            val id = action.id as? ArcOwnedToGuaranteedPhiIRActionId.ApplyPrunedLifetimeBoundary
+            val boundary = id?.boundary as? ArcPrunedOwnershipBoundaryPoint.OnEdge
+            boundary?.requiresEdgeSplit == true
+        }
+        assertTrue(prunedCritical.bindingIdentities.last() === split.splitBlockBinding)
         assertRejected(
             fixture.inventory.copy(criticalEdgeSplits = listOf(split, split)),
             ArcOwnedToGuaranteedPhiIRRejectionReason.MissingCriticalEdgeSplit,
@@ -310,6 +339,24 @@ class ArcOwnedToGuaranteedPhiIRAdapterTest {
             ),
         )
         return buildFixture(cfg, seeds(values), deadEnds = setOf(dead))
+    }
+
+    private fun exceptionalCleanupFixture(): Fixture {
+        val values = values("exceptional.cleanup")
+        val normal = ArcBlockId("normal.cleanup")
+        val landingPad = ArcBlockId("landing.pad")
+        val cfg = baseDiamond(
+            values,
+            mergeOperations = listOf(
+                ArcSSAOperation.Join(values.joined, linkedMapOf(left to values.leftCopy, right to values.rightCopy)),
+                ArcSSAOperation.Use(values.joined, ArcSSAUseKind.Borrow, mayThrow = true),
+            ),
+            additionalBlocks = listOf(block(normal, destroy(values.joined)), block(landingPad)),
+            additionalEdges = setOf(
+                edge(merge, normal), edge(merge, landingPad, ArcSSAEdgeKind.Exceptional),
+            ),
+        )
+        return buildFixture(cfg, seeds(values))
     }
 
     private fun preLifetimeBarrierFixture(): Fixture {
