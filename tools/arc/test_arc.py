@@ -506,6 +506,58 @@ class ArcProfileTest(unittest.TestCase):
                 benchmark_cache.validate_manifest(manifest, dist, "commit", "tree", "/baseline")
             )
 
+    def test_candidate_cache_is_exact_and_rejects_artifact_or_source_mutation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            dist = root / "dist"
+            dist.mkdir()
+            (dist / "compiler.jar").write_bytes(b"compiler")
+            (dist / "bin").mkdir()
+            (dist / "bin" / "konanc").write_text("launcher")
+            manifest = dist / ".arc-benchmark-candidate-cache.json"
+            benchmark_cache.write_candidate_manifest(manifest, dist, "commit", "tree", "/candidate")
+            self.assertTrue(
+                benchmark_cache.validate_candidate_manifest(
+                    manifest, dist, "commit", "tree", "/candidate"
+                )
+            )
+            self.assertFalse(
+                benchmark_cache.validate_candidate_manifest(
+                    manifest, dist, "commit", "other-tree", "/candidate"
+                )
+            )
+            self.assertFalse(
+                benchmark_cache.validate_candidate_manifest(
+                    manifest, dist, "commit", "tree", "/other-host"
+                )
+            )
+            (dist / "compiler.jar").write_bytes(b"mutated")
+            self.assertFalse(
+                benchmark_cache.validate_candidate_manifest(
+                    manifest, dist, "commit", "tree", "/candidate"
+                )
+            )
+
+    def test_candidate_build_cache_is_exact_and_force_rebuild_is_explicit(self):
+        script = (Path(__file__).parent / "benchmark_candidate.sh").read_text()
+        self.assertIn("ARC_BENCH_REBUILD_CANDIDATE", script)
+        self.assertIn('valid_provenance &&', script)
+        self.assertIn('validate-candidate "$cache_manifest"', script)
+        self.assertIn("ARC_BENCH_CANDIDATE_CACHE_HIT", script)
+        self.assertIn("ARC_BENCH_CANDIDATE_CACHE_MISS", script)
+        compare = (Path(__file__).parent / "benchmark_compare.sh").read_text()
+        self.assertIn('validate-candidate "$candidate_dist/.arc-benchmark-candidate-cache.json"', compare)
+        self.assertIn("candidate distribution fingerprint is missing, stale, or corrupt", compare)
+
+    def test_candidate_rebuild_setting_is_forwarded_only_to_candidate_profile(self):
+        with patch.dict(os.environ, {"ARC_BENCH_REBUILD_CANDIDATE": "1"}, clear=True):
+            candidate = arc.profile_command("arc-bench-candidate")
+            baseline = arc.profile_command("arc-bench-baseline")
+            comparison = arc.profile_command("arc-bench")
+        self.assertIn("ARC_BENCH_REBUILD_CANDIDATE=1", candidate)
+        self.assertNotIn("ARC_BENCH_REBUILD_CANDIDATE=1", baseline)
+        self.assertNotIn("ARC_BENCH_REBUILD_CANDIDATE=1", comparison)
+
     def test_baseline_cache_is_exact_and_force_rebuild_is_explicit(self):
         script = (Path(__file__).parent / "benchmark_baseline.sh").read_text()
         self.assertIn("ARC_BENCH_REBUILD_BASELINE", script)

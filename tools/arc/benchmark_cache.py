@@ -16,6 +16,7 @@ SCHEMA = 1
 EXCLUDED = {
     ".arc-benchmark-provenance.json",
     ".arc-benchmark-baseline-cache.json",
+    ".arc-benchmark-candidate-cache.json",
 }
 
 
@@ -59,8 +60,18 @@ def expected_fields(commit: str, tree: str, source: str) -> dict[str, object]:
     }
 
 
-def write_manifest(path: Path, dist: Path, commit: str, tree: str, source: str) -> None:
-    payload = expected_fields(commit, tree, source)
+def candidate_expected_fields(commit: str, tree: str, source: str) -> dict[str, object]:
+    return {
+        "schema": SCHEMA,
+        "role": "candidate",
+        "commit": commit,
+        "tree": tree,
+        "source": source,
+    }
+
+
+def _write_manifest(path: Path, dist: Path, fields: dict[str, object]) -> None:
+    payload = dict(fields)
     payload["distributionSha256"] = distribution_fingerprint(dist)
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as stream:
@@ -70,28 +81,54 @@ def write_manifest(path: Path, dist: Path, commit: str, tree: str, source: str) 
     temporary.replace(path)
 
 
-def validate_manifest(path: Path, dist: Path, commit: str, tree: str, source: str) -> bool:
+def _validate_manifest(path: Path, dist: Path, fields: dict[str, object]) -> bool:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return False
-    expected = expected_fields(commit, tree, source)
-    if any(payload.get(key) != value for key, value in expected.items()):
+    if any(payload.get(key) != value for key, value in fields.items()):
         return False
     fingerprint = payload.get("distributionSha256")
     return isinstance(fingerprint, str) and fingerprint == distribution_fingerprint(dist)
 
 
+def write_manifest(path: Path, dist: Path, commit: str, tree: str, source: str) -> None:
+    _write_manifest(path, dist, expected_fields(commit, tree, source))
+
+
+def validate_manifest(path: Path, dist: Path, commit: str, tree: str, source: str) -> bool:
+    return _validate_manifest(path, dist, expected_fields(commit, tree, source))
+
+
+def write_candidate_manifest(path: Path, dist: Path, commit: str, tree: str, source: str) -> None:
+    _write_manifest(path, dist, candidate_expected_fields(commit, tree, source))
+
+
+def validate_candidate_manifest(path: Path, dist: Path, commit: str, tree: str, source: str) -> bool:
+    return _validate_manifest(path, dist, candidate_expected_fields(commit, tree, source))
+
+
 def main() -> int:
-    if len(sys.argv) != 7 or sys.argv[1] not in {"write", "validate"}:
-        raise SystemExit("usage: benchmark_cache.py write|validate MANIFEST DIST COMMIT TREE SOURCE")
+    actions = {"write", "validate", "write-candidate", "validate-candidate"}
+    if len(sys.argv) != 7 or sys.argv[1] not in actions:
+        raise SystemExit(
+            "usage: benchmark_cache.py "
+            "write|validate|write-candidate|validate-candidate MANIFEST DIST COMMIT TREE SOURCE"
+        )
     action, manifest, dist, commit, tree, source = sys.argv[1:]
     manifest_path = Path(manifest)
     dist_path = Path(dist)
     if action == "write":
         write_manifest(manifest_path, dist_path, commit, tree, source)
         return 0
-    return 0 if validate_manifest(manifest_path, dist_path, commit, tree, source) else 1
+    if action == "validate":
+        valid = validate_manifest(manifest_path, dist_path, commit, tree, source)
+    elif action == "write-candidate":
+        write_candidate_manifest(manifest_path, dist_path, commit, tree, source)
+        return 0
+    else:
+        valid = validate_candidate_manifest(manifest_path, dist_path, commit, tree, source)
+    return 0 if valid else 1
 
 
 if __name__ == "__main__":

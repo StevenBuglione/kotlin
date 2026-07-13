@@ -103,6 +103,11 @@ PY
 }
 validate_provenance "$candidate_dist/.arc-benchmark-provenance.json" candidate "$candidate_head" "$candidate_tree" "$root"
 validate_provenance "$baseline_dist/.arc-benchmark-provenance.json" baseline-strict "$expected_baseline" "$baseline_tree" "$baseline_source"
+python3 "$cache_tool" validate-candidate "$candidate_dist/.arc-benchmark-candidate-cache.json" "$candidate_dist" \
+    "$candidate_head" "$candidate_tree" "$root" || {
+    echo "candidate distribution fingerprint is missing, stale, or corrupt; run arc-bench-candidate" >&2
+    exit 1
+}
 python3 "$cache_tool" validate "$baseline_dist/.arc-benchmark-baseline-cache.json" "$baseline_dist" \
     "$expected_baseline" "$baseline_tree" "$baseline_source" || {
     echo "baseline distribution fingerprint is missing, stale, or corrupt; run arc-bench-baseline" >&2

@@ -332,10 +332,11 @@ def profile_command(profile: str) -> list[str]:
         return ["bash", "tools/arc/sanitizer_probe.sh", sanitizer]
     if profile == "arc-bench-candidate":
         command = ["bash", "tools/arc/benchmark_candidate.sh"]
-        values = (
-            [f"ARC_BENCH_BUILD_WORKERS={os.environ['ARC_BENCH_BUILD_WORKERS']}"]
-            if "ARC_BENCH_BUILD_WORKERS" in os.environ else []
-        )
+        values = [
+            f"{name}={os.environ[name]}"
+            for name in ("ARC_BENCH_BUILD_WORKERS", "ARC_BENCH_REBUILD_CANDIDATE")
+            if name in os.environ
+        ]
         return ["env", *values, *command] if values else command
     if profile == "arc-bench-baseline":
         command = ["bash", "tools/arc/benchmark_baseline.sh"]
