@@ -6782,6 +6782,13 @@ fileCheckTest("filecheck_arc_semantic_branch_phi") {
     phaseToCheck = "Codegen"
 }
 
+standaloneTest("arc_semantic_branch_phi_runtime") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    source = "filecheck/arc_semantic_branch_phi.kt"
+    flags = ["-opt"]
+    outputChecker = { output -> output.contains("ARC_SEMANTIC_BRANCH_PHI_OK:50000\n") }
+}
+
 fileCheckTest("filecheck_arc_semantic_branch_phi_final") {
     enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
     annotatedSource = project.file('filecheck/arc_semantic_branch_phi.kt')
@@ -6795,6 +6802,14 @@ fileCheckTest("filecheck_arc_semantic_branch_phi_diagnostics") {
     annotatedSource = project.file('filecheck/arc_semantic_branch_phi.kt')
     checkPrefix = "DIAGNOSTICS"
     extraOpts = ["-opt", "-Xbinary=arcLeakCheck=report"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_semantic_branch_phi_debug") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('filecheck/arc_semantic_branch_phi.kt')
+    checkPrefix = "DEBUG"
+    extraOpts = ["-opt", "-g"]
     phaseToCheck = "Codegen"
 }
 

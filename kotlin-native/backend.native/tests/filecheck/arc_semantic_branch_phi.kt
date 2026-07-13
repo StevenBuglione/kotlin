@@ -34,6 +34,11 @@ private fun semanticBranchPhi(
 // DIAGNOSTICS: call void @UpdateStackRef(%struct.ObjHeader** %selected,
 // DIAGNOSTICS: ret i1
 
+// DEBUG-LABEL: define internal zeroext i1 @"kfun:semanticBranchPhi#internal"
+// DEBUG: %selected = getelementptr %struct.ObjHeader*
+// DEBUG: call void @UpdateStackRef(%struct.ObjHeader** %selected,
+// DEBUG: ret i1
+
 // STRICT-LABEL: define internal zeroext i1 @"kfun:semanticBranchPhi#internal"
 // STRICT: %selected = getelementptr %struct.ObjHeader*
 // STRICT: store %struct.ObjHeader*

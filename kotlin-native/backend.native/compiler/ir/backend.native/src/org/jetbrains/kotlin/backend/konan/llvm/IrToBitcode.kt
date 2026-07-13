@@ -24,11 +24,10 @@ import org.jetbrains.kotlin.backend.konan.arc.ArcMatchingSetConsumptionLedger
 import org.jetbrains.kotlin.backend.konan.arc.ArcMatchingSetLocalAliasIRSelection
 import org.jetbrains.kotlin.backend.konan.arc.ArcSafeContinuationResumeBorrowConsumptionLedger
 import org.jetbrains.kotlin.backend.konan.arc.ArcSafeContinuationResumeBorrowPlan
-import org.jetbrains.kotlin.backend.konan.arc.ArcBranchGuaranteedPhiBindingRole
-import org.jetbrains.kotlin.backend.konan.arc.ArcBranchGuaranteedPhiExactBinding
-import org.jetbrains.kotlin.backend.konan.arc.ArcBranchGuaranteedPhiKotlinIRSelection
-import org.jetbrains.kotlin.backend.konan.arc.ArcSemanticEmissionActionId
-import org.jetbrains.kotlin.backend.konan.arc.ArcSemanticPhiEmissionLedger
+import org.jetbrains.kotlin.backend.konan.arc.ArcOwnedToGuaranteedPhiIRActionId
+import org.jetbrains.kotlin.backend.konan.arc.ArcOwnedToGuaranteedPhiIRConsumptionLedger
+import org.jetbrains.kotlin.backend.konan.arc.ArcOwnedToGuaranteedPhiKotlinIRBindingRole
+import org.jetbrains.kotlin.backend.konan.arc.ArcOwnedToGuaranteedPhiKotlinIRSelection
 import org.jetbrains.kotlin.backend.konan.arc.ArcStringBuilderBackingArrayProjectionConsumptionLedger
 import org.jetbrains.kotlin.backend.konan.arc.ArcStringBuilderBackingArrayProjectionPlan
 import org.jetbrains.kotlin.backend.konan.arc.ArcOwnedResultHeapStoreConsumptionLedger
@@ -353,16 +352,16 @@ internal class CodeGeneratorVisitor(
         }
     }
 
-    /** Consumes one exact non-suspend SemanticARC diamond as a promotable non-owning local. */
+    /** Consumes one generalized, exact-identity diamond as a promotable non-owning local. */
     private inner class BranchGuaranteedPhiEmission(
-        val selection: ArcBranchGuaranteedPhiKotlinIRSelection,
+        productionSelection: ArcOwnedToGuaranteedPhiKotlinIRSelection,
     ) {
-        private val proof = selection.semanticSelection
-        private val exactBindings = proof.exactBindings
-        private val emission = proof.emission
-        private val ledger = ArcSemanticPhiEmissionLedger(
-            emission,
-            exactBindings.getValue(ArcBranchGuaranteedPhiBindingRole.EntryBlock),
+        val selection = productionSelection.branchSelection
+        private val generalized = productionSelection.generalizedSelection
+        private val exactBindings = productionSelection.bindings
+        private val ledger = ArcOwnedToGuaranteedPhiIRConsumptionLedger(
+            generalized,
+            exactBindings.getValue(ArcOwnedToGuaranteedPhiKotlinIRBindingRole.Function),
         )
         private val declarations = Collections.newSetFromMap(IdentityHashMap<IrVariable, Boolean>())
         private val reads = Collections.newSetFromMap(IdentityHashMap<IrGetValue, Boolean>())
@@ -371,17 +370,17 @@ internal class CodeGeneratorVisitor(
         private var terminalEqualityEmissions = 0
 
         private fun consume(
-            matches: (ArcSemanticEmissionActionId) -> Boolean,
-            vararg roles: ArcBranchGuaranteedPhiBindingRole,
+            matches: (ArcOwnedToGuaranteedPhiIRActionId) -> Boolean,
+            vararg roles: ArcOwnedToGuaranteedPhiKotlinIRBindingRole,
         ) {
             val bindings = roles.map(exactBindings::getValue)
-            val action = emission.actions.values.singleOrNull { candidate ->
+            val action = generalized.actions.values.singleOrNull { candidate ->
                 matches(candidate.id) && candidate.bindingIdentities.size == bindings.size &&
                         candidate.bindingIdentities.indices.all {
                             candidate.bindingIdentities[it] === bindings[it]
                         }
-            } ?: error("missing exact branch guaranteed-phi emission action for ${roles.toList()}")
-            ledger.consume(action.id, bindings)
+            } ?: error("missing exact generalized owned-to-guaranteed action for ${roles.toList()}")
+            ledger.stage(action.id, bindings)
         }
 
         fun markDeclaration(variable: IrVariable) {
@@ -419,8 +418,8 @@ internal class CodeGeneratorVisitor(
                 "duplicate branch guaranteed-phi terminal equality: ${ir2string(call)}"
             }
             consume(
-                { it is ArcSemanticEmissionActionId.EndAfterOperation },
-                ArcBranchGuaranteedPhiBindingRole.TerminalUse,
+                { it is ArcOwnedToGuaranteedPhiIRActionId.ApplyPrunedLifetimeBoundary },
+                ArcOwnedToGuaranteedPhiKotlinIRBindingRole.TerminalUse,
             )
         }
 
@@ -429,16 +428,25 @@ internal class CodeGeneratorVisitor(
             val elseArm = store === selection.elseStore
             if (!thenArm && !elseArm) return
             check(stores.add(store)) { "duplicate branch guaranteed-phi store: ${ir2string(store)}" }
-            val copyRole = if (thenArm) ArcBranchGuaranteedPhiBindingRole.ThenOwnedCopy
-                    else ArcBranchGuaranteedPhiBindingRole.ElseOwnedCopy
-            val blockRole = if (thenArm) ArcBranchGuaranteedPhiBindingRole.ThenBlock
-                    else ArcBranchGuaranteedPhiBindingRole.ElseBlock
-            consume({ it is ArcSemanticEmissionActionId.EliminateCopy }, copyRole)
+            val copyRole = if (thenArm) ArcOwnedToGuaranteedPhiKotlinIRBindingRole.ThenCopyDefinition
+                    else ArcOwnedToGuaranteedPhiKotlinIRBindingRole.ElseCopyDefinition
+            val sourceRole = if (thenArm) ArcOwnedToGuaranteedPhiKotlinIRBindingRole.ThenSourceDefinition
+                    else ArcOwnedToGuaranteedPhiKotlinIRBindingRole.ElseSourceDefinition
+            val anchorRole = if (thenArm) ArcOwnedToGuaranteedPhiKotlinIRBindingRole.ThenAnchorDefinition
+                    else ArcOwnedToGuaranteedPhiKotlinIRBindingRole.ElseAnchorDefinition
+            val edgeRole = if (thenArm) ArcOwnedToGuaranteedPhiKotlinIRBindingRole.ThenMergeEdge
+                    else ArcOwnedToGuaranteedPhiKotlinIRBindingRole.ElseMergeEdge
             consume(
-                { it is ArcSemanticEmissionActionId.Reborrow },
-                blockRole,
-                ArcBranchGuaranteedPhiBindingRole.JoinedPhi,
-                ArcBranchGuaranteedPhiBindingRole.MergeBlock,
+                { it is ArcOwnedToGuaranteedPhiIRActionId.EliminateCopy },
+                copyRole,
+                sourceRole,
+                anchorRole,
+            )
+            consume(
+                { it is ArcOwnedToGuaranteedPhiIRActionId.InstallReborrow },
+                edgeRole,
+                copyRole,
+                ArcOwnedToGuaranteedPhiKotlinIRBindingRole.JoinDefinition,
             )
         }
 
@@ -447,8 +455,8 @@ internal class CodeGeneratorVisitor(
                 "duplicate or drifted branch guaranteed-phi conditional: ${ir2string(expression)}"
             }
             consume(
-                { it is ArcSemanticEmissionActionId.ConvertJoin },
-                ArcBranchGuaranteedPhiBindingRole.JoinedPhi,
+                { it is ArcOwnedToGuaranteedPhiIRActionId.ConvertJoin },
+                ArcOwnedToGuaranteedPhiKotlinIRBindingRole.JoinDefinition,
             )
         }
 
@@ -469,7 +477,7 @@ internal class CodeGeneratorVisitor(
                         "decls=${declarations.size} reads=${reads.size} stores=${stores.size} " +
                         "conditionals=$conditionalEmissions terminalEqualities=$terminalEqualityEmissions"
             }
-            ledger.verifyComplete()
+            ledger.commit()
         }
     }
 

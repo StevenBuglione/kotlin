@@ -114,6 +114,207 @@ internal data class ArcOwnershipPlanningReport(
 }
 
 /**
+ * A unique production-emission site backed by one exact Kotlin IR identity.  Some lowered IR
+ * objects own more than one abstract CFG role (for example the `when` owns both the merge and its
+ * joined definition), so the role is part of the binding identity just as it is in the existing
+ * exact branch adapter.
+ */
+internal enum class ArcOwnedToGuaranteedPhiKotlinIRBindingRole {
+    Function,
+    EntryBlock,
+    ThenBlock,
+    ElseBlock,
+    MergeBlock,
+    ExitBlock,
+    ThenAnchorDefinition,
+    ThenSourceDefinition,
+    ThenCopyDefinition,
+    ElseAnchorDefinition,
+    ElseSourceDefinition,
+    ElseCopyDefinition,
+    JoinDefinition,
+    TerminalUse,
+    EntryThenEdge,
+    EntryElseEdge,
+    ThenMergeEdge,
+    ElseMergeEdge,
+    MergeExitEdge,
+}
+
+internal class ArcOwnedToGuaranteedPhiKotlinIRBinding(
+    val owner: IrElement,
+    val role: ArcOwnedToGuaranteedPhiKotlinIRBindingRole,
+)
+
+/** Generalized proof plus the exact source selection whose physical emission it authorizes. */
+internal data class ArcOwnedToGuaranteedPhiKotlinIRSelection(
+    val branchSelection: ArcBranchGuaranteedPhiKotlinIRSelection,
+    val generalizedSelection: ArcOwnedToGuaranteedPhiIRSelection<ArcOwnedToGuaranteedPhiKotlinIRBinding>,
+    val bindings: Map<ArcOwnedToGuaranteedPhiKotlinIRBindingRole, ArcOwnedToGuaranteedPhiKotlinIRBinding>,
+)
+
+/**
+ * Re-authenticate the first exact Kotlin IR diamond with the generalized multi-definition
+ * owned-to-guaranteed analysis.  The older branch adapter remains the syntactic all-node seal;
+ * only this generalized result is exposed to codegen.
+ */
+private fun selectGeneralOwnedToGuaranteedBranchPhi(
+    generationState: NativeGenerationState,
+    branch: ArcBranchGuaranteedPhiKotlinIRSelection,
+): ArcOwnedToGuaranteedPhiKotlinIRSelection? {
+    fun reject(reason: String): ArcOwnedToGuaranteedPhiKotlinIRSelection? {
+        generationState.context.log {
+            "ARC generalized owned-to-guaranteed phi selector " +
+                    "${branch.function.fqNameForIrSerialization.asString()}: $reason"
+        }
+        return null
+    }
+
+    val bindings = ArcOwnedToGuaranteedPhiKotlinIRBindingRole.values().associateWith { role ->
+        val owner: IrElement = when (role) {
+            ArcOwnedToGuaranteedPhiKotlinIRBindingRole.Function,
+            ArcOwnedToGuaranteedPhiKotlinIRBindingRole.EntryBlock -> branch.function
+            ArcOwnedToGuaranteedPhiKotlinIRBindingRole.ThenBlock -> branch.thenBranch
+            ArcOwnedToGuaranteedPhiKotlinIRBindingRole.ElseBlock -> branch.elseBranch
+            ArcOwnedToGuaranteedPhiKotlinIRBindingRole.MergeBlock -> branch.conditional
+            ArcOwnedToGuaranteedPhiKotlinIRBindingRole.ExitBlock -> branch.terminalReturn
+            ArcOwnedToGuaranteedPhiKotlinIRBindingRole.ThenAnchorDefinition -> branch.thenSourceParameter
+            ArcOwnedToGuaranteedPhiKotlinIRBindingRole.ThenSourceDefinition -> branch.thenSourceRead
+            ArcOwnedToGuaranteedPhiKotlinIRBindingRole.ThenCopyDefinition -> branch.thenStore
+            ArcOwnedToGuaranteedPhiKotlinIRBindingRole.ElseAnchorDefinition -> branch.elseSourceParameter
+            ArcOwnedToGuaranteedPhiKotlinIRBindingRole.ElseSourceDefinition -> branch.elseSourceRead
+            ArcOwnedToGuaranteedPhiKotlinIRBindingRole.ElseCopyDefinition -> branch.elseStore
+            ArcOwnedToGuaranteedPhiKotlinIRBindingRole.JoinDefinition -> branch.conditional
+            ArcOwnedToGuaranteedPhiKotlinIRBindingRole.TerminalUse -> branch.selectedRead
+            ArcOwnedToGuaranteedPhiKotlinIRBindingRole.EntryThenEdge,
+            ArcOwnedToGuaranteedPhiKotlinIRBindingRole.EntryElseEdge -> branch.conditional
+            ArcOwnedToGuaranteedPhiKotlinIRBindingRole.ThenMergeEdge -> branch.thenBranch
+            ArcOwnedToGuaranteedPhiKotlinIRBindingRole.ElseMergeEdge -> branch.elseBranch
+            ArcOwnedToGuaranteedPhiKotlinIRBindingRole.MergeExitEdge -> branch.terminalReturn
+        }
+        ArcOwnedToGuaranteedPhiKotlinIRBinding(owner, role)
+    }
+    fun binding(role: ArcOwnedToGuaranteedPhiKotlinIRBindingRole) = bindings.getValue(role)
+
+    val entry = ArcBlockId("production_branch_phi_entry")
+    val thenBlock = ArcBlockId("production_branch_phi_then")
+    val elseBlock = ArcBlockId("production_branch_phi_else")
+    val merge = ArcBlockId("production_branch_phi_merge")
+    val exit = ArcBlockId("production_branch_phi_exit")
+    val thenAnchor = ArcSSAValue("production_branch_phi_then_anchor")
+    val thenSource = ArcSSAValue("production_branch_phi_then_source")
+    val thenCopy = ArcSSAValue("production_branch_phi_then_copy")
+    val elseAnchor = ArcSSAValue("production_branch_phi_else_anchor")
+    val elseSource = ArcSSAValue("production_branch_phi_else_source")
+    val elseCopy = ArcSSAValue("production_branch_phi_else_copy")
+    val joined = ArcSSAValue("production_branch_phi_joined")
+
+    fun operation(
+        operation: ArcSSAOperation,
+        role: ArcOwnedToGuaranteedPhiKotlinIRBindingRole,
+    ) = ArcOwnedToGuaranteedPhiIROperation(operation, binding(role))
+    val blocks = listOf(
+        ArcOwnedToGuaranteedPhiIRBlock(entry, binding(ArcOwnedToGuaranteedPhiKotlinIRBindingRole.EntryBlock), listOf(
+            operation(
+                ArcSSAOperation.Introduce(thenAnchor, ArcOwnership.Immortal),
+                ArcOwnedToGuaranteedPhiKotlinIRBindingRole.ThenAnchorDefinition,
+            ),
+            operation(
+                ArcSSAOperation.Introduce(thenSource, ArcOwnership.Guaranteed, setOf(thenAnchor)),
+                ArcOwnedToGuaranteedPhiKotlinIRBindingRole.ThenSourceDefinition,
+            ),
+            operation(
+                ArcSSAOperation.Introduce(elseAnchor, ArcOwnership.Immortal),
+                ArcOwnedToGuaranteedPhiKotlinIRBindingRole.ElseAnchorDefinition,
+            ),
+            operation(
+                ArcSSAOperation.Introduce(elseSource, ArcOwnership.Guaranteed, setOf(elseAnchor)),
+                ArcOwnedToGuaranteedPhiKotlinIRBindingRole.ElseSourceDefinition,
+            ),
+        )),
+        ArcOwnedToGuaranteedPhiIRBlock(thenBlock, binding(ArcOwnedToGuaranteedPhiKotlinIRBindingRole.ThenBlock), listOf(
+            operation(
+                ArcSSAOperation.Introduce(thenCopy, ArcOwnership.Owned),
+                ArcOwnedToGuaranteedPhiKotlinIRBindingRole.ThenCopyDefinition,
+            ),
+        )),
+        ArcOwnedToGuaranteedPhiIRBlock(elseBlock, binding(ArcOwnedToGuaranteedPhiKotlinIRBindingRole.ElseBlock), listOf(
+            operation(
+                ArcSSAOperation.Introduce(elseCopy, ArcOwnership.Owned),
+                ArcOwnedToGuaranteedPhiKotlinIRBindingRole.ElseCopyDefinition,
+            ),
+        )),
+        ArcOwnedToGuaranteedPhiIRBlock(merge, binding(ArcOwnedToGuaranteedPhiKotlinIRBindingRole.MergeBlock), listOf(
+            operation(
+                ArcSSAOperation.Join(joined, linkedMapOf(thenBlock to thenCopy, elseBlock to elseCopy)),
+                ArcOwnedToGuaranteedPhiKotlinIRBindingRole.JoinDefinition,
+            ),
+            operation(
+                ArcSSAOperation.Use(joined, ArcSSAUseKind.Borrow),
+                ArcOwnedToGuaranteedPhiKotlinIRBindingRole.TerminalUse,
+            ),
+        )),
+        ArcOwnedToGuaranteedPhiIRBlock(
+            exit,
+            binding(ArcOwnedToGuaranteedPhiKotlinIRBindingRole.ExitBlock),
+            emptyList(),
+        ),
+    )
+    fun edge(
+        from: ArcBlockId,
+        to: ArcBlockId,
+        role: ArcOwnedToGuaranteedPhiKotlinIRBindingRole,
+    ) = ArcOwnedToGuaranteedPhiIREdge(ArcSSAEdge(from, to), binding(role))
+    val inventory = ArcOwnedToGuaranteedPhiIRInventory(
+        functionBinding = binding(ArcOwnedToGuaranteedPhiKotlinIRBindingRole.Function),
+        mode = ArcOwnedToGuaranteedPhiIRCompilationMode(
+            arcEnabled = generationState.context.memoryModel == MemoryModel.ARC,
+            optimizationsEnabled = generationState.context.config.optimizationsEnabled,
+            debugInfoDisabled = !generationState.context.shouldContainDebugInfo(),
+            diagnosticsDisabled = !generationState.context.config.arcDiagnosticsEnabled,
+        ),
+        entry = entry,
+        blocks = blocks,
+        edges = listOf(
+            edge(entry, thenBlock, ArcOwnedToGuaranteedPhiKotlinIRBindingRole.EntryThenEdge),
+            edge(entry, elseBlock, ArcOwnedToGuaranteedPhiKotlinIRBindingRole.EntryElseEdge),
+            edge(thenBlock, merge, ArcOwnedToGuaranteedPhiKotlinIRBindingRole.ThenMergeEdge),
+            edge(elseBlock, merge, ArcOwnedToGuaranteedPhiKotlinIRBindingRole.ElseMergeEdge),
+            edge(merge, exit, ArcOwnedToGuaranteedPhiKotlinIRBindingRole.MergeExitEdge),
+        ),
+        seeds = listOf(
+            ArcOwnedToGuaranteedPhiIRSeed(
+                ArcGuaranteedCopySeed(thenCopy, thenSource, setOf(thenAnchor)),
+                binding(ArcOwnedToGuaranteedPhiKotlinIRBindingRole.ThenCopyDefinition),
+                binding(ArcOwnedToGuaranteedPhiKotlinIRBindingRole.ThenSourceDefinition),
+                mapOf(thenAnchor to binding(ArcOwnedToGuaranteedPhiKotlinIRBindingRole.ThenAnchorDefinition)),
+            ),
+            ArcOwnedToGuaranteedPhiIRSeed(
+                ArcGuaranteedCopySeed(elseCopy, elseSource, setOf(elseAnchor)),
+                binding(ArcOwnedToGuaranteedPhiKotlinIRBindingRole.ElseCopyDefinition),
+                binding(ArcOwnedToGuaranteedPhiKotlinIRBindingRole.ElseSourceDefinition),
+                mapOf(elseAnchor to binding(ArcOwnedToGuaranteedPhiKotlinIRBindingRole.ElseAnchorDefinition)),
+            ),
+        ),
+        completeLoweredIRWalk = true,
+    )
+    val adapted = ArcOwnedToGuaranteedPhiIRAdapter.adapt(inventory)
+    val selection = adapted.selection ?: return reject("general adapter: ${adapted.rejections}")
+    val actionIds = selection.actions.keys
+    if (selection.plans.size != 1 || actionIds.size != 6 ||
+        actionIds.filterIsInstance<ArcOwnedToGuaranteedPhiIRActionId.ConvertJoin>().size != 1 ||
+        actionIds.filterIsInstance<ArcOwnedToGuaranteedPhiIRActionId.InstallReborrow>().size != 2 ||
+        actionIds.filterIsInstance<ArcOwnedToGuaranteedPhiIRActionId.EliminateCopy>().size != 2 ||
+        actionIds.filterIsInstance<ArcOwnedToGuaranteedPhiIRActionId.ApplyPrunedLifetimeBoundary>().size != 1 ||
+        actionIds.any { it is ArcOwnedToGuaranteedPhiIRActionId.ConvertForwardingDefinition ||
+                it is ArcOwnedToGuaranteedPhiIRActionId.RemoveDestroy ||
+                it is ArcOwnedToGuaranteedPhiIRActionId.EndLifetime ||
+                it is ArcOwnedToGuaranteedPhiIRActionId.SplitCriticalEdge }
+    ) return reject("unexpected generalized action inventory: $actionIds")
+    return ArcOwnedToGuaranteedPhiKotlinIRSelection(branch, selection, bindings)
+}
+
+/**
  * The deliberately small part of a verified ownership plan that codegen is allowed to consume.
  *
  * IR declarations are used as identity keys. This plan never crosses the compilation boundary and
@@ -151,7 +352,7 @@ internal data class ArcCodegenOwnershipPlan(
     val selectiveInlineStringAppendCalls: Set<IrCall>,
     val coroutineGuaranteedPhiSelections: Map<IrSimpleFunction, ArcCoroutineGuaranteedPhiIRSelection>,
     val matchingSetLocalAliases: Map<IrVariable, ArcMatchingSetLocalAliasIRSelection>,
-    val branchGuaranteedPhiSelections: Map<IrSimpleFunction, ArcBranchGuaranteedPhiKotlinIRSelection>,
+    val branchGuaranteedPhiSelections: Map<IrSimpleFunction, ArcOwnedToGuaranteedPhiKotlinIRSelection>,
     val stringBuilderBackingArrayProjectionPlans: Map<IrSimpleFunction, ArcStringBuilderBackingArrayProjectionPlan>,
     val ownedResultHeapStoreSelections: Map<IrSimpleFunction, ArcOwnedResultHeapStoreKotlinIRSelection>,
 ) {
@@ -738,7 +939,7 @@ internal fun runArcOwnershipPlanning(
     val selectiveInlineStringAppendCalls = linkedSetOf<IrCall>()
     val coroutineGuaranteedPhiSelections = IdentityHashMap<IrSimpleFunction, ArcCoroutineGuaranteedPhiIRSelection>()
     val matchingSetLocalAliases = IdentityHashMap<IrVariable, ArcMatchingSetLocalAliasIRSelection>()
-    val branchGuaranteedPhiSelections = IdentityHashMap<IrSimpleFunction, ArcBranchGuaranteedPhiKotlinIRSelection>()
+    val branchGuaranteedPhiSelections = IdentityHashMap<IrSimpleFunction, ArcOwnedToGuaranteedPhiKotlinIRSelection>()
     val stringBuilderBackingArrayProjectionPlans =
         IdentityHashMap<IrSimpleFunction, ArcStringBuilderBackingArrayProjectionPlan>()
     val ownedResultHeapStoreSelections =
@@ -788,15 +989,17 @@ internal fun runArcOwnershipPlanning(
                                 plan.consumer.symbol.owner.fqNameForIrSerialization.asString()
                     }
                 }
-                selectVerifiedBranchGuaranteedPhiWeb(generationState, declaration)?.let { selection ->
+                selectVerifiedBranchGuaranteedPhiWeb(generationState, declaration)?.let { branchSelection ->
+                    val selection = selectGeneralOwnedToGuaranteedBranchPhi(generationState, branchSelection)
+                            ?: return@let
                     check(branchGuaranteedPhiSelections.put(declaration, selection) == null) {
                         "duplicate branch guaranteed-phi selection: ${declaration.fqNameForIrSerialization}"
                     }
                     generationState.context.log {
-                        "ARC branch guaranteed-phi selection " +
+                        "ARC generalized owned-to-guaranteed phi selection " +
                                 "${declaration.fqNameForIrSerialization.asString()}: " +
-                                "actions=${selection.semanticSelection.emission.actions.size}, " +
-                                "copiesRemoved=2, destroysRemoved=2, joins=1"
+                                "actions=${selection.generalizedSelection.actions.size}, " +
+                                "slotRetainsRemoved=2, slotReleasesRemoved=2, joins=1"
                     }
                 }
                 val matchingSelections = selectVerifiedMatchingSetLocalAliases(generationState, declaration)
