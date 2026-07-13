@@ -8,6 +8,7 @@ baseline=${ARC_BENCH_BASELINE_SOURCE:-${root}-baseline-v1.9.10}
 dist=${ARC_BENCH_BASELINE_DIST:-$baseline/kotlin-native/dist}
 workers=${ARC_BENCH_BUILD_WORKERS:-8}
 rebuild=${ARC_BENCH_REBUILD_BASELINE:-0}
+quick=${ARC_BENCH_QUICK:-0}
 cache_tool="$root/tools/arc/benchmark_cache.py"
 
 [[ "$workers" =~ ^[0-9]+$ && $workers -ge 1 && $workers -le 28 ]] || {
@@ -16,6 +17,10 @@ cache_tool="$root/tools/arc/benchmark_cache.py"
 }
 [[ "$rebuild" == 0 || "$rebuild" == 1 ]] || {
     echo "ARC_BENCH_REBUILD_BASELINE must be 0 or 1" >&2
+    exit 2
+}
+[[ "$quick" == 0 || "$quick" == 1 ]] || {
+    echo "ARC_BENCH_QUICK must be 0 or 1" >&2
     exit 2
 }
 command -v python3 >/dev/null || { echo "python3 is required for baseline cache validation" >&2; exit 1; }
@@ -65,9 +70,12 @@ PY
 }
 
 mkdir -p "$state/artifacts"
+# The comparison profile performs the authoritative full-byte validation. Avoid doing
+# the same multi-gigabyte read once more during distribution preparation.
+validation=validate-fast
 if [[ "$rebuild" == 0 && -x "$dist/bin/konanc" && -x "$dist/bin/cinterop" ]] &&
         valid_provenance &&
-        python3 "$cache_tool" validate "$cache_manifest" "$dist" "$actual" "$tree" "$baseline"; then
+        python3 "$cache_tool" "$validation" "$cache_manifest" "$dist" "$actual" "$tree" "$baseline"; then
     cp "$provenance" "$state/artifacts/baseline-provenance.json"
     echo "ARC_BENCH_BASELINE_CACHE_HIT tag=v1.9.10 commit=$actual tree=$tree dist=$dist"
     exit 0

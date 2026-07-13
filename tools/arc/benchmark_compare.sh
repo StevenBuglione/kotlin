@@ -4,7 +4,14 @@ export LC_ALL=C
 
 root=$(git rev-parse --show-toplevel)
 state=${ARC_RUN_STATE_DIR:?ARC_RUN_STATE_DIR is set by the durable remote runner}
-candidate_dist=${ARC_DIST_DIR:-$root/kotlin-native/dist}
+candidate_pointer="$root/.arc-runs/benchmark-cache/candidate-dist"
+if [[ -n "${ARC_DIST_DIR:-}" ]]; then
+    candidate_dist=$ARC_DIST_DIR
+elif [[ -f "$candidate_pointer" ]]; then
+    IFS= read -r candidate_dist <"$candidate_pointer"
+else
+    candidate_dist=$root/kotlin-native/dist
+fi
 baseline_source=${ARC_BENCH_BASELINE_SOURCE:-${root}-baseline-v1.9.10}
 baseline_dist=${ARC_BENCH_BASELINE_DIST:-$baseline_source/kotlin-native/dist}
 expected_baseline=3db61efe5e892bf27115f1ebcab957d903067ed4
@@ -123,14 +130,32 @@ if (value.get("role"), value.get("commit"), value.get("tree"), value.get("source
     )
 PY
 }
-validate_provenance "$candidate_dist/.arc-benchmark-provenance.json" candidate "$candidate_head" "$candidate_tree" "$root"
 validate_provenance "$baseline_dist/.arc-benchmark-provenance.json" baseline-strict "$expected_baseline" "$baseline_tree" "$baseline_source"
-python3 "$cache_tool" validate-candidate "$candidate_dist/.arc-benchmark-candidate-cache.json" "$candidate_dist" \
-    "$candidate_head" "$candidate_tree" "$root" || {
-    echo "candidate distribution fingerprint is missing, stale, or corrupt; run arc-bench-candidate" >&2
-    exit 1
-}
-python3 "$cache_tool" validate "$baseline_dist/.arc-benchmark-baseline-cache.json" "$baseline_dist" \
+candidate_content_manifest="$(dirname "$candidate_dist")/manifest.json"
+if [[ -f "$candidate_content_manifest" ]]; then
+    candidate_provenance="$root/.arc-runs/benchmark-cache/candidate-provenance.json"
+    validate_provenance "$candidate_provenance" candidate "$candidate_head" "$candidate_tree" "$root"
+    candidate_cache_action=validate-content-candidate
+    [[ "$quick" == 1 ]] && candidate_cache_action=validate-content-candidate-fast
+    python3 "$cache_tool" "$candidate_cache_action" "$candidate_content_manifest" "$candidate_dist" \
+        "$candidate_head" "$candidate_tree" "$root" || {
+        echo "candidate content-addressed distribution is stale or corrupt; run arc-bench-candidate" >&2
+        exit 1
+    }
+else
+    candidate_provenance="$candidate_dist/.arc-benchmark-provenance.json"
+    validate_provenance "$candidate_provenance" candidate "$candidate_head" "$candidate_tree" "$root"
+    candidate_cache_action=validate-candidate
+    [[ "$quick" == 1 ]] && candidate_cache_action=validate-candidate-fast
+    python3 "$cache_tool" "$candidate_cache_action" "$candidate_dist/.arc-benchmark-candidate-cache.json" \
+        "$candidate_dist" "$candidate_head" "$candidate_tree" "$root" || {
+        echo "candidate distribution fingerprint is missing, stale, or corrupt; run arc-bench-candidate" >&2
+        exit 1
+    }
+fi
+baseline_cache_action=validate
+[[ "$quick" == 1 ]] && baseline_cache_action=validate-fast
+python3 "$cache_tool" "$baseline_cache_action" "$baseline_dist/.arc-benchmark-baseline-cache.json" "$baseline_dist" \
     "$expected_baseline" "$baseline_tree" "$baseline_source" || {
     echo "baseline distribution fingerprint is missing, stale, or corrupt; run arc-bench-baseline" >&2
     exit 1
@@ -425,7 +450,7 @@ mkdir -p "$wave"
 cp "$artifacts"/inputs.json "$artifacts"/hardware.json "$artifacts"/raw.tsv "$artifacts"/raw.json "$artifacts"/compile-raw.tsv \
     "$artifacts"/static.tsv "$artifacts"/summary.tsv "$artifacts"/summary.json "$artifacts"/comparison.md \
     "$artifacts"/shard.json "$wave/"
-cp "$candidate_dist/.arc-benchmark-provenance.json" "$wave/candidate-provenance.json"
+cp "$candidate_provenance" "$wave/candidate-provenance.json"
 cp "$baseline_dist/.arc-benchmark-provenance.json" "$wave/baseline-provenance.json"
 echo "ARC_BENCH_WAVE_READY path=$wave status=$report_status"
 exit "$report_status"

@@ -131,12 +131,11 @@ ci2-arc-bench wave: ci2-bench-snapshot
     {{python}} tools/arc/arc.py --machine ci2-bench run arc-bench-baseline
     status=0; {{python}} tools/arc/arc.py --machine ci2-bench run arc-bench || status=$?; {{python}} tools/arc/arc.py --machine ci2-bench benchmark-bundle {{wave}}; exit "$status"
 
-# Fast development oracle: one compile, three pinned runs, no warmup, and no release-gate failure.
+# Fast development oracle: cached distributions, one compile, three pinned runs, no warmup,
+# and no release-gate failure. One remote profile holds the host lock for the complete run.
 # Full `ci2-arc-bench` remains the only evidence-producing benchmark recipe.
 ci2-arc-bench-quick scenarios: ci2-bench-snapshot
-    {{python}} tools/arc/arc.py --machine ci2-bench run arc-bench-candidate --quick --scenarios "{{scenarios}}"
-    {{python}} tools/arc/arc.py --machine ci2-bench run arc-bench-baseline --quick --scenarios "{{scenarios}}"
-    {{python}} tools/arc/arc.py --machine ci2-bench run arc-bench --quick --scenarios "{{scenarios}}"
+    {{python}} tools/arc/arc.py --machine ci2-bench run arc-bench-quick --quick --scenarios "{{scenarios}}"
 
 ci2-bench-status profile:
     {{python}} tools/arc/arc.py --machine ci2-bench status {{profile}}

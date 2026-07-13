@@ -39,6 +39,25 @@ The pinned baseline distribution is content-fingerprinted and reused after its e
 source worktree, provenance, and complete distribution fingerprint validate. Set
 `ARC_BENCH_REBUILD_BASELINE=1` only when an explicit cache refresh is required.
 
+Candidate distributions are also published atomically into a shared, read-only cache below the
+remote repository's Git common directory. The cache key covers the exact commit and complete source
+tree (including compiler, runtime, and platform libraries), host architecture, JDK/CMake/Ninja
+identities, Gradle wrapper/properties, and the fixed distribution tasks. This lets isolated benchmark
+worktrees reuse the same compiler without copying it back into each checkout. Preparation performs a
+fast identity check; every evidence-producing comparison still validates current-run provenance and
+recomputes the complete distribution fingerprints before compiling or timing a fixture.
+
+For a focused, non-enforcing development sample, run:
+
+```text
+just ci2-arc-bench-quick "strings,coroutines"
+```
+
+That single remote profile reuses validated distributions, compiles only the requested scenarios,
+and takes three samples with no warmup. It does not export an evidence bundle. All benchmark profiles,
+including quick diagnostics and distribution preparation, take the physical-host lock so their build
+or timing work cannot overlap compiler, runtime, or another benchmark lane on the same machine.
+
 The durable remote run keeps binaries and verbose logs under `.arc-runs`. The final recipe exports
 only the commit-ready evidence bundle to `tools/arc/benchmark-results/<wave>`: input and hardware
 manifests, both provenance files, raw TSV/JSON, static metrics, summaries, and the Markdown report.

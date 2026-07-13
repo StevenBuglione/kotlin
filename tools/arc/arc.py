@@ -82,7 +82,7 @@ PROFILES = (
     "arc-unowned-death", "arc-no-collector", "arc-frame-elision-unit", "arc-return-update-coalescing-unit",
     "arc-field-projection", "arc-rooted-loop", "arc-deinit-synthetic-root",
     "arc-sanitize", "arc-sanitize-asan", "arc-sanitize-ubsan", "arc-sanitize-tsan",
-    "arc-bench-candidate", "arc-bench-baseline", "arc-bench",
+    "arc-bench-candidate", "arc-bench-baseline", "arc-bench", "arc-bench-quick",
 )
 BENCHMARK_ENVIRONMENT = (
     "ARC_BENCH_BUILD_WORKERS", "ARC_BENCH_REPETITIONS", "ARC_BENCH_WARMUPS",
@@ -92,6 +92,7 @@ BENCHMARK_ENVIRONMENT = (
     "ARC_BENCH_RSS_LIMIT_PERCENT", "ARC_BENCH_SIZE_LIMIT_PERCENT", "ARC_BENCH_ENFORCE",
     "ARC_BENCH_OBJDUMP",
     "ARC_BENCH_BASELINE_SOURCE", "ARC_BENCH_BASELINE_DIST",
+    "ARC_BENCH_CANDIDATE_CACHE_ROOT",
     "ARC_BENCH_SHARD_ID", "ARC_BENCH_SHARD_COUNT",
     "ARC_BENCH_MACHINE_PROFILE", "ARC_BENCH_EXPECTED_COMMIT", "ARC_BENCH_EXPECTED_TREE",
     "ARC_BENCH_EXPECTED_RUNTIME_TREE", "ARC_BENCH_EXPECTED_RUNTIME_PATCH_SHA256",
@@ -336,21 +337,26 @@ def profile_command(profile: str) -> list[str]:
         command = ["bash", "tools/arc/benchmark_candidate.sh"]
         values = [
             f"{name}={os.environ[name]}"
-            for name in ("ARC_BENCH_BUILD_WORKERS", "ARC_BENCH_REBUILD_CANDIDATE")
+            for name in ("ARC_BENCH_BUILD_WORKERS", "ARC_BENCH_REBUILD_CANDIDATE", "ARC_BENCH_QUICK")
             if name in os.environ
         ]
         return ["env", *values, *command] if values else command
     if profile == "arc-bench-baseline":
         command = ["bash", "tools/arc/benchmark_baseline.sh"]
-        values = (
-            [f"ARC_BENCH_BUILD_WORKERS={os.environ['ARC_BENCH_BUILD_WORKERS']}"]
-            if "ARC_BENCH_BUILD_WORKERS" in os.environ else []
-        )
+        values = [
+            f"{name}={os.environ[name]}"
+            for name in ("ARC_BENCH_BUILD_WORKERS", "ARC_BENCH_QUICK")
+            if name in os.environ
+        ]
         if "ARC_BENCH_REBUILD_BASELINE" in os.environ:
             values.append(f"ARC_BENCH_REBUILD_BASELINE={os.environ['ARC_BENCH_REBUILD_BASELINE']}")
         return ["env", *values, *command] if values else command
     if profile == "arc-bench":
         command = ["bash", "tools/arc/benchmark_compare.sh"]
+        values = [f"{name}={os.environ[name]}" for name in BENCHMARK_ENVIRONMENT if name in os.environ]
+        return ["env", *values, *command] if values else command
+    if profile == "arc-bench-quick":
+        command = ["bash", "tools/arc/benchmark_quick.sh"]
         values = [f"{name}={os.environ[name]}" for name in BENCHMARK_ENVIRONMENT if name in os.environ]
         return ["env", *values, *command] if values else command
     raise SystemExit(f"Unknown remote profile: {profile}")

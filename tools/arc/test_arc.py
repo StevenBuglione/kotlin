@@ -130,8 +130,9 @@ class ArcProfileTest(unittest.TestCase):
         quick_recipe = justfile.split(
             "ci2-arc-bench-quick scenarios: ci2-bench-snapshot", 1
         )[1].split("ci2-bench-status profile:", 1)[0]
-        self.assertEqual(3, quick_recipe.count("--quick"))
-        self.assertEqual(3, quick_recipe.count("--scenarios"))
+        self.assertEqual(1, quick_recipe.count("--quick"))
+        self.assertEqual(1, quick_recipe.count("--scenarios"))
+        self.assertIn("run arc-bench-quick", quick_recipe)
         self.assertNotIn("benchmark-bundle", quick_recipe)
 
         script = (Path(__file__).parent / "benchmark_compare.sh").read_text()
@@ -144,9 +145,8 @@ class ArcProfileTest(unittest.TestCase):
         self.assertIn("rev-parse --path-format=absolute --git-common-dir", script)
         self.assertIn("codex-arc-host.lock", script)
         self.assertIn("command -v flock", script)
-        self.assertIn('[[ "$argument" == ARC_BENCH_QUICK=1 ]] && quick_benchmark=1', script)
         self.assertIn("mode=-s", script)
-        self.assertIn('[[ "$profile" == arc-bench && $quick_benchmark -eq 0 ]] && mode=-x', script)
+        self.assertIn('[[ "$profile" == arc-bench* ]] && mode=-x', script)
         self.assertIn("flock %q %q", script)
         self.assertGreaterEqual(script.count("acquire_shared_host_lock"), 3)
         self.assertIn("mv %q %q", script)
@@ -398,7 +398,7 @@ class ArcProfileTest(unittest.TestCase):
         self.assertIn('finalize_compile candidate-arc "$candidate_compiler" arc "$candidate_head"', script)
         self.assertNotIn('compile_one candidate-arc "$candidate_compiler" strict', script)
         self.assertIn('common_flags=(-target linux_x64 -opt)', script)
-        self.assertIn('validate_provenance "$candidate_dist/.arc-benchmark-provenance.json"', script)
+        self.assertIn('validate_provenance "$candidate_provenance"', script)
         self.assertIn('validate_provenance "$baseline_dist/.arc-benchmark-provenance.json"', script)
 
     def test_benchmark_profile_forwards_only_declared_measurement_settings(self):
@@ -466,7 +466,7 @@ class ArcProfileTest(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "overlaps shards"):
                 benchmark_shards.merge(root / "merged", sources)
 
-    def test_benchmark_build_profiles_ignore_measurement_selection(self):
+    def test_benchmark_build_profiles_ignore_scenarios_but_receive_quick_cache_mode(self):
         with patch.dict(
             os.environ,
             {
@@ -481,7 +481,7 @@ class ArcProfileTest(unittest.TestCase):
         for command in (candidate, baseline):
             self.assertIn("ARC_BENCH_BUILD_WORKERS=6", command)
             self.assertNotIn("ARC_BENCH_SCENARIOS=strings", command)
-            self.assertNotIn("ARC_BENCH_QUICK=1", command)
+            self.assertIn("ARC_BENCH_QUICK=1", command)
 
     def test_named_benchmark_sets_are_stable_and_disjoint_lanes_are_wired(self):
         self.assertEqual("coroutines", arc.BENCHMARK_PRESETS["coroutines"])
@@ -561,16 +561,79 @@ class ArcProfileTest(unittest.TestCase):
                 )
             )
 
+    def test_candidate_content_key_covers_tree_and_external_compiler_inputs(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            with patch.object(
+                benchmark_cache, "compiler_build_inputs", return_value={"toolchain": "a"}
+            ):
+                first = benchmark_cache.candidate_content_key("commit", "tree", source)
+                self.assertEqual(first, benchmark_cache.candidate_content_key("commit", "tree", source))
+                self.assertNotEqual(
+                    first, benchmark_cache.candidate_content_key("commit", "other-tree", source)
+                )
+            with patch.object(
+                benchmark_cache, "compiler_build_inputs", return_value={"toolchain": "b"}
+            ):
+                self.assertNotEqual(
+                    first, benchmark_cache.candidate_content_key("commit", "tree", source)
+                )
+
+    def test_content_addressed_candidate_is_sealed_and_fully_fingerprinted(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source"
+            source.mkdir()
+            dist = root / "build-dist"
+            (dist / "bin").mkdir(parents=True)
+            for launcher in ("konanc", "cinterop"):
+                path = dist / "bin" / launcher
+                path.write_text("launcher", encoding="utf-8")
+                path.chmod(0o755)
+            cache = root / "cache"
+            inputs = {"toolchain": "pinned"}
+            with patch.object(benchmark_cache, "compiler_build_inputs", return_value=inputs):
+                cached = benchmark_cache.publish_content_candidate(
+                    cache, dist, "commit", "tree", source
+                )
+                manifest = cached.parent / "manifest.json"
+                self.assertEqual(
+                    benchmark_cache.candidate_content_key("commit", "tree", source),
+                    cached.parent.name,
+                )
+                self.assertFalse(cached.stat().st_mode & 0o200)
+                self.assertTrue(benchmark_cache.validate_content_candidate_manifest(
+                    manifest, cached, "commit", "tree", source
+                ))
+                self.assertTrue(benchmark_cache.validate_content_candidate_manifest(
+                    manifest, cached, "commit", "tree", source, fast=True
+                ))
+                compiler = cached / "bin" / "konanc"
+                compiler.chmod(0o755)
+                compiler.write_text("mutated", encoding="utf-8")
+                self.assertFalse(benchmark_cache.validate_content_candidate_manifest(
+                    manifest, cached, "commit", "tree", source
+                ))
+
     def test_candidate_build_cache_is_exact_and_force_rebuild_is_explicit(self):
         script = (Path(__file__).parent / "benchmark_candidate.sh").read_text()
         self.assertIn("ARC_BENCH_REBUILD_CANDIDATE", script)
         self.assertIn('valid_provenance &&', script)
-        self.assertIn('validate-candidate "$cache_manifest"', script)
+        self.assertIn("legacy_validation=validate-candidate", script)
         self.assertIn("ARC_BENCH_CANDIDATE_CACHE_HIT", script)
         self.assertIn("ARC_BENCH_CANDIDATE_CACHE_MISS", script)
+        self.assertIn("ARC_BENCH_CANDIDATE_CONTENT_CACHE_HIT", script)
+        self.assertIn("candidate-key", script)
         compare = (Path(__file__).parent / "benchmark_compare.sh").read_text()
-        self.assertIn('validate-candidate "$candidate_dist/.arc-benchmark-candidate-cache.json"', compare)
+        self.assertIn("validate-content-candidate", compare)
         self.assertIn("candidate distribution fingerprint is missing, stale, or corrupt", compare)
+
+    def test_full_evidence_requires_current_provenance_and_full_content_validation(self):
+        compare = (Path(__file__).parent / "benchmark_compare.sh").read_text()
+        self.assertIn('validate_provenance "$candidate_provenance"', compare)
+        self.assertIn("candidate_cache_action=validate-content-candidate", compare)
+        self.assertIn('[[ "$quick" == 1 ]] && candidate_cache_action=validate-content-candidate-fast', compare)
+        self.assertIn('cp "$candidate_provenance" "$wave/candidate-provenance.json"', compare)
 
     def test_candidate_rebuild_setting_is_forwarded_only_to_candidate_profile(self):
         with patch.dict(os.environ, {"ARC_BENCH_REBUILD_CANDIDATE": "1"}, clear=True):
@@ -585,7 +648,7 @@ class ArcProfileTest(unittest.TestCase):
         script = (Path(__file__).parent / "benchmark_baseline.sh").read_text()
         self.assertIn("ARC_BENCH_REBUILD_BASELINE", script)
         self.assertIn('valid_provenance &&', script)
-        self.assertIn('python3 "$cache_tool" validate', script)
+        self.assertIn("validation=validate", script)
         self.assertIn("ARC_BENCH_BASELINE_CACHE_HIT", script)
         self.assertIn("ARC_BENCH_BASELINE_CACHE_MISS", script)
         compare = (Path(__file__).parent / "benchmark_compare.sh").read_text()
