@@ -175,7 +175,7 @@ private val flattenStringConcatenationPhase = createFileLoweringPhase(
 )
 
 private val stringConcatenationPhase = createFileLoweringPhase(
-        ::StringConcatenationLowering,
+        { context -> StringConcatenationLowering(context, context::arcStringConcatenationCapacity) },
         name = "StringConcatenation",
         description = "String concatenation lowering"
 )

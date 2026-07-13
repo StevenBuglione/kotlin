@@ -7,12 +7,50 @@
 
 package org.jetbrains.kotlin.backend.konan.arc
 
+import org.jetbrains.kotlin.backend.konan.lower.ArcStringConcatenationCapacityEligibility
+import org.jetbrains.kotlin.backend.konan.lower.isAuthorized
+import org.jetbrains.kotlin.backend.konan.lower.planArcStringConcatenationCapacity
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ArcOwnershipIRAdapterTest {
+    @Test
+    fun stringConcatenationCapacityFailsClosedForEveryCompilerModeGate() {
+        val accepted = ArcStringConcatenationCapacityEligibility(
+            arcEnabled = true,
+            linuxX64 = true,
+            finalBinary = true,
+            optimizationsEnabled = true,
+            debugInfoDisabled = true,
+            diagnosticsDisabled = true,
+            sanitizerDisabled = true,
+            coverageDisabled = true,
+        )
+        assertTrue(accepted.isAuthorized())
+        assertFalse(accepted.copy(arcEnabled = false).isAuthorized())
+        assertFalse(accepted.copy(linuxX64 = false).isAuthorized())
+        assertFalse(accepted.copy(finalBinary = false).isAuthorized())
+        assertFalse(accepted.copy(optimizationsEnabled = false).isAuthorized())
+        assertFalse(accepted.copy(debugInfoDisabled = false).isAuthorized())
+        assertFalse(accepted.copy(diagnosticsDisabled = false).isAuthorized())
+        assertFalse(accepted.copy(sanitizerDisabled = false).isAuthorized())
+        assertFalse(accepted.copy(coverageDisabled = false).isAuthorized())
+    }
+
+    @Test
+    fun stringConcatenationCapacityUsesUtf16LiteralsAndBoundedInterpolationAllowance() {
+        assertEquals(21, planArcStringConcatenationCapacity(listOf(4, 1), 2))
+        assertEquals(12, planArcStringConcatenationCapacity(listOf(12), 0))
+        assertEquals(18, planArcStringConcatenationCapacity(listOf(2), 2))
+        assertEquals(null, planArcStringConcatenationCapacity(listOf(2), 1))
+        assertEquals(null, planArcStringConcatenationCapacity(emptyList(), -1))
+        assertEquals(null, planArcStringConcatenationCapacity(emptyList(), Int.MAX_VALUE))
+        assertEquals(null, planArcStringConcatenationCapacity(listOf(Int.MAX_VALUE), 1))
+        assertEquals(null, planArcStringConcatenationCapacity(listOf(4096), 1))
+    }
+
     @Test
     fun resultCompanionImmortalLoadFailsClosedForEveryRequiredFact() {
         val accepted = ArcResultCompanionImmortalLoadEligibility(

@@ -36,7 +36,12 @@ import org.jetbrains.kotlin.util.OperatorNameConventions
 /**
  * This lowering pass replaces [IrStringConcatenation]s with StringBuilder appends.
  */
-class StringConcatenationLowering(context: CommonBackendContext) : FileLoweringPass, IrBuildingTransformer(context) {
+class StringConcatenationLowering(
+    context: CommonBackendContext,
+    private val initialCapacity: (IrStringConcatenation) -> Int?,
+) : FileLoweringPass, IrBuildingTransformer(context) {
+    constructor(context: CommonBackendContext) : this(context, { null })
+
     override fun lower(irFile: IrFile) {
         irFile.transformChildrenVoid(this)
     }
@@ -50,9 +55,12 @@ class StringConcatenationLowering(context: CommonBackendContext) : FileLoweringP
 
     private val stringBuilder = context.ir.symbols.stringBuilder.owner
 
-    //TODO: calculate and pass string length to the constructor.
     private val constructor = stringBuilder.constructors.single {
         it.valueParameters.isEmpty()
+    }
+
+    private val capacityConstructor = stringBuilder.constructors.singleOrNull {
+        it.valueParameters.singleOrNull()?.type == irBuiltIns.intType
     }
 
     private val defaultAppendFunction = stringBuilder.functions.single {
@@ -104,7 +112,13 @@ class StringConcatenationLowering(context: CommonBackendContext) : FileLoweringP
                     }
 
             else -> builder.irBlock(expression) {
-                val stringBuilderImpl = createTmpVariable(irCall(constructor))
+                val plannedCapacity = initialCapacity(expression)
+                val stringBuilderConstruction = if (plannedCapacity != null && capacityConstructor != null) {
+                    irCall(capacityConstructor).apply { putValueArgument(0, irInt(plannedCapacity)) }
+                } else {
+                    irCall(constructor)
+                }
+                val stringBuilderImpl = createTmpVariable(stringBuilderConstruction)
                 expression.arguments.forEach { arg ->
                     val appendFunction = typeToAppendFunction(arg.type)
                     +irCall(appendFunction).apply {

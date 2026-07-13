@@ -6994,6 +6994,38 @@ fileCheckTest("filecheck_arc_selective_string_append_inlining_strict") {
     phaseToCheck = "LinkBitcodeDependencies"
 }
 
+fileCheckTest("filecheck_arc_string_concatenation_capacity") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('filecheck/arc_string_concatenation_capacity.kt')
+    checkPrefix = "OPT"
+    extraOpts = ["-opt"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_string_concatenation_capacity_debug") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('filecheck/arc_string_concatenation_capacity.kt')
+    checkPrefix = "NEG"
+    extraOpts = ["-opt", "-g"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_string_concatenation_capacity_diagnostics") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('filecheck/arc_string_concatenation_capacity.kt')
+    checkPrefix = "NEG"
+    extraOpts = ["-opt", "-Xbinary=arcLeakCheck=report"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_string_concatenation_capacity_strict") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('filecheck/arc_string_concatenation_capacity.kt')
+    checkPrefix = "NEG"
+    extraOpts = ["-opt", "-memory-model", "strict"]
+    phaseToCheck = "Codegen"
+}
+
 fileCheckTest("filecheck_arc_return_update_coalescing_before") {
     enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
     annotatedSource = project.file('filecheck/arc_return_update_coalescing.kt')

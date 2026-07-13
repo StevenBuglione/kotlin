@@ -1,0 +1,118 @@
+{
+  "wave": 20,
+  "scenario": "strings",
+  "host": {
+    "hostname": "venus",
+    "cpu": "AMD RYZEN AI MAX+ 395 w/ Radeon 8060S",
+    "logicalCpus": 32,
+    "pinnedCpu": 0,
+    "kernel": "Linux 6.18.6-061806-generic x86_64"
+  },
+  "inputs": {
+    "fixture": "tools/arc/fixtures/benchmark.kt",
+    "fixtureSha256": "e69a89cda9684c695a7dedd90808ab20375fe32c1e589fbe1d2ebf028142e35b",
+    "interopDefinitionSha256": "da598d7809b1271ee0183265c95e85e84de177d73501605ce3f34b845706c4b6",
+    "interopHeaderSha256": "3b7556fa9c4deab30cabb252aa1abf392d5c15d9fdc86e298edfccd8fb4e5eb2",
+    "flags": ["-target", "linux_x64", "-opt"],
+    "warmups": 3,
+    "pairs": 25,
+    "affinity": "taskset -c 0"
+  },
+  "candidate": {
+    "snapshotCommit": "4c487f670ee7101db71d2d6f80a5bd3ec20d269d",
+    "tree": "2853a47980b929665d4f81659beae88fee24d269",
+    "compilerJarSha256": "adf575901dc824bdb8ecb7d88a1ff2971f55fe6b97a9b3353c298606e8959115",
+    "binarySha256": "68176cd2e46966e6e1c2e4c3cd2aaf409237dbe18b6d19f0c875711036db6c50",
+    "binaryBytes": 485680,
+    "compileSeconds": 7.46,
+    "compileMaxRssKiB": 624572,
+    "runtimeMedianNs": 104128883,
+    "runtimeMedianMaxRssKiB": 2652,
+    "retainCallsites": 429,
+    "releaseCallsites": 442,
+    "allocationCallsites": 194,
+    "dynamicCounts": {
+      "arrayAllocations": 1800008,
+      "heapReferenceUpdates": 1200006,
+      "retains": 3600028,
+      "referenceCountDecrements": 5400025
+    }
+  },
+  "sameArcOracle": {
+    "commit": "9b309fa5499c34f6ca7fc2dfda6645526797f7f9",
+    "tree": "399ee1e24ca54d79e6d4349b0f14ffd7e55b512e",
+    "compilerJarSha256": "837f71e9398b57d7ab4a31afaf26f11552828003f8768e6b48b8748dc1dca24b",
+    "binarySha256": "8f4c75e814184e09b1871518a710fdb1a42b54c4534b8e07bb0d92953ed7aa1f",
+    "binaryBytes": 489688,
+    "compileSeconds": 7.56,
+    "compileMaxRssKiB": 625692,
+    "runtimeMedianNs": 131051108,
+    "runtimeMedianMaxRssKiB": 2644,
+    "retainCallsites": 453,
+    "releaseCallsites": 466,
+    "allocationCallsites": 194,
+    "dynamicCounts": {
+      "arrayAllocations": 2400010,
+      "heapReferenceUpdates": 2400010,
+      "retains": 5400024,
+      "referenceCountDecrements": 7800033
+    }
+  },
+  "strictBaseline": {
+    "commit": "3db61efe5e892bf27115f1ebcab957d903067ed4",
+    "tree": "c1771ad840cc5e08506c522bf7ff8160d3537f39",
+    "compilerJarSha256": "dad6fdbbe38bd7ade35b10e205cc7f5ceb292887ee18d372031bb3e48350f138",
+    "binarySha256": "ac249e436d11f31e68d88d852e3180638f93d0e2fd80a1a382bb8944e78f1003",
+    "binaryBytes": 507168,
+    "compileSeconds": 7.85,
+    "compileMaxRssKiB": 556332,
+    "runtimeMedianNs": 113139716,
+    "runtimeMedianMaxRssKiB": 3184,
+    "retainCallsites": 12,
+    "releaseCallsites": 0,
+    "allocationCallsites": 269
+  },
+  "comparison": {
+    "candidateVsOraclePairedThroughputGeomean": 1.2561738913,
+    "candidateVsOraclePairedThroughputMedian": 1.2599127852,
+    "candidateVsStrictPairedThroughputGeomean": 1.0851441477,
+    "candidateVsStrictPairedThroughputMedian": 1.0928513749,
+    "candidateMedianLatencyDeltaVsOraclePercent": -20.5433021,
+    "candidateMedianLatencyDeltaVsStrictPercent": -7.9643412,
+    "candidateBinaryDeltaVsOraclePercent": -0.8184803,
+    "candidateBinaryDeltaVsStrictPercent": -4.2368604,
+    "candidateRuntimeRssDeltaVsOraclePercent": 0.3025719,
+    "candidateRuntimeRssDeltaVsStrictPercent": -16.7085427,
+    "candidateCompileTimeDeltaVsOraclePercent": -1.3227513,
+    "candidateCompileTimeDeltaVsStrictPercent": -4.9681529,
+    "candidateCompileRssDeltaVsOraclePercent": -0.1790018,
+    "candidateCompileRssDeltaVsStrictPercent": 12.2660570,
+    "arrayAllocationsRemovedVsOracle": 600002,
+    "heapReferenceUpdatesRemovedVsOracle": 1200004,
+    "retainsRemovedVsOracle": 1799996,
+    "referenceCountDecrementsRemovedVsOracle": 2400008
+  },
+  "dynamicProfiler": {
+    "tool": "bpftrace uprobes",
+    "symbols": [
+      "AllocArrayInstanceRelaxed",
+      "UpdateHeapRefRelaxed",
+      "(anonymous namespace)::addHeapRef(ObjHeader const*)",
+      "(anonymous namespace)::decrementRC(ContainerHeader*)"
+    ],
+    "affinity": "taskset -c 0",
+    "scenario": "strings",
+    "checksumValidated": true
+  },
+  "strictFocusedCompatibility": {
+    "candidateAndOracleOutputName": "capacity",
+    "llvmCodegenSha256": "676e57bd44a1fde53d6536ddcfb4a8d1a454f5265078c309f0346251382ec652",
+    "binarySha256": "55b521f526c9094b38f4a5fd14d9c946dea6665a0f59b7fc1e91fd433fb406e6",
+    "llvmByteIdentical": true,
+    "binaryByteIdentical": true,
+    "runtimeOutput": "-50994528632"
+  },
+  "observableOutput": "ARC_BENCH_OK scenario=strings checksum=-14061657653598 operations=600000 allocations=1800000",
+  "raw": "raw.tsv",
+  "rss": "rss.tsv"
+}
