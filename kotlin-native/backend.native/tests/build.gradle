@@ -6683,6 +6683,9 @@ task buildKonanTests { t ->
             // They must not be linked together into the monolithic localTest executable.
             "codegen/arc/coroutineLockedReadStrict.kt",
             "codegen/arc/discardedReturnedReceiverGroupsStrict.kt",
+            "codegen/arc/discardedReturnedReceiverGroupsGeneratedStrict.kt",
+            "codegen/arc/immortalCompletionContextPropagationStrict.kt",
+            "codegen/arc/pinnedByteArrayAddressProjection.kt",
     ]
     project.tasks
             .withType(KonanStandaloneTest.class)
