@@ -13,6 +13,31 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ArcOwnershipIRAdapterTest {
+    @Test
+    fun stringConcatenationRCIdentityRequiresAWebAndKeepsExceptionalBarriers() {
+        assertFalse(proveLinearStringBuilderRCIdentity(0))
+        assertFalse(proveLinearStringBuilderRCIdentity(1))
+        assertTrue(proveLinearStringBuilderRCIdentity(2))
+        assertTrue(proveLinearStringBuilderRCIdentity(8))
+    }
+
+    @Test
+    fun stringConcatenationRCIdentityFailsClosedForEveryCompilerModeGate() {
+        val accepted = ArcStringConcatenationRCIdentityEligibility(
+            arcEnabled = true,
+            optimizationsEnabled = true,
+            debugInfoDisabled = true,
+            diagnosticsDisabled = true,
+            nonSuspendFunction = true,
+        )
+        assertTrue(accepted.isAuthorized())
+        assertFalse(accepted.copy(arcEnabled = false).isAuthorized())
+        assertFalse(accepted.copy(optimizationsEnabled = false).isAuthorized())
+        assertFalse(accepted.copy(debugInfoDisabled = false).isAuthorized())
+        assertFalse(accepted.copy(diagnosticsDisabled = false).isAuthorized())
+        assertFalse(accepted.copy(nonSuspendFunction = false).isAuthorized())
+    }
+
     private val accepted = ArcCanonicalReferenceJoinEligibility(
         arcEnabled = true,
         optimizationsEnabled = true,

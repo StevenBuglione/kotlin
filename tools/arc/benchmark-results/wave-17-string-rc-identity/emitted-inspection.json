@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "scenario": "strings",
+  "method": "objdump -d -C inspection of the inlined stringsWork append sequence in kfun:#main(kotlin.Array<kotlin.String>)",
+  "wave15": {
+    "candidateCommit": "aa4186d1e7a5856a763db0d28ec19d3359664e80",
+    "candidateTree": "194f34e93303336603c911cc6487072e4f7d28be",
+    "binarySha256": "c10116e58d5a2ecb7edb25f8137754944b1cd5f88aa4905e18b21e473a4a37b2",
+    "disassemblySha256": "4e6ae5bbd0449a1fc9baadde15da395915daab4706345a5e0f37591398567c55",
+    "resultSlots": [
+      {
+        "appendAddress": "0x427f8e",
+        "slotSetupAddress": "0x427f89",
+        "slot": "rsp+0x28"
+      },
+      {
+        "appendAddress": "0x427fa4",
+        "slotSetupAddress": "0x427f9f",
+        "slot": "rsp+0x30"
+      },
+      {
+        "appendAddress": "0x427fb8",
+        "slotSetupAddress": "0x427fb3",
+        "slot": "rsp+0x38"
+      },
+      {
+        "appendAddress": "0x4281c8",
+        "slotSetupAddress": "0x4281c3",
+        "slot": "rsp+0x48"
+      }
+    ],
+    "distinctSlotCount": 4
+  },
+  "wave17": {
+    "candidateCommit": "4022aee98e659d711530dc554cce283da6a47c09",
+    "candidateTree": "4b648385c39845f520a26707ecd5ca8a9e30b795",
+    "binarySha256": "a1e0f4656a83d366a5a7efb32574de367a8af10b13869039dac74f908de40cf6",
+    "disassemblySha256": "b9cddba67424448f0dde5c54be404f1637f1a52251e34be20260a9726a891ce9",
+    "resultSlots": [
+      {
+        "appendAddress": "0x427119",
+        "slotSetupAddress": "0x427116",
+        "slot": "rbp"
+      },
+      {
+        "appendAddress": "0x42712d",
+        "slotSetupAddress": "0x42712a",
+        "slot": "rbp"
+      },
+      {
+        "appendAddress": "0x42713f",
+        "slotSetupAddress": "0x42713c",
+        "slot": "rbp"
+      },
+      {
+        "appendAddress": "0x427351",
+        "slotSetupAddress": "0x42734e",
+        "slot": "rbp"
+      }
+    ],
+    "distinctSlotCount": 1
+  },
+  "conclusion": "The four returned-receiver append results changed from four independent frame slots in Wave 15 to one shared owning seed in Wave 17."
+}

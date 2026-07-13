@@ -1,0 +1,100 @@
+{
+  "schemaVersion": 1,
+  "benchmark": {
+    "scenario": "strings",
+    "baseline": {
+      "role": "baseline-strict",
+      "tag": "v1.9.10",
+      "commit": "3db61efe5e892bf27115f1ebcab957d903067ed4",
+      "tree": "c1771ad840cc5e08506c522bf7ff8160d3537f39",
+      "memoryModel": "strict"
+    },
+    "candidate": {
+      "role": "candidate-arc",
+      "commit": "4022aee98e659d711530dc554cce283da6a47c09",
+      "tree": "4b648385c39845f520a26707ecd5ca8a9e30b795",
+      "memoryModel": "arc"
+    },
+    "fixture": {
+      "path": "tools/arc/fixtures/benchmark.kt",
+      "sha256": "e69a89cda9684c695a7dedd90808ab20375fe32c1e589fbe1d2ebf028142e35b"
+    },
+    "execution": {
+      "measuredRepetitionsPerModel": 9,
+      "warmupRepetitionsPerModel": 1,
+      "compileRepetitionsPerModel": 3,
+      "cpuAffinity": "0",
+      "compilerFlags": [
+        "-target",
+        "linux_x64",
+        "-opt"
+      ],
+      "javaOptions": "-XX:ReservedCodeCacheSize=256m"
+    },
+    "output": {
+      "line": "ARC_BENCH_OK scenario=strings checksum=-14061657653598 operations=600000 allocations=1800000",
+      "semanticChecksum": "-14061657653598",
+      "operationsPerRepetition": 600000,
+      "logicalAllocationsPerRepetition": 1800000,
+      "stdoutSha256": "4a9b12298a97d8141fd58362a6546e7fb884244ebc38eddbd0d1923975b74f16",
+      "allBaselineMeasuredAndWarmupLogsMatch": true,
+      "allCandidateMeasuredAndWarmupLogsMatch": true
+    },
+    "result": {
+      "baselineMedianSeconds": 0.114486168,
+      "candidateMedianSeconds": 0.134017348,
+      "latencyDeltaPercent": 17.059860017325423,
+      "throughputRatioPercent": 85.42637927741251,
+      "baselinePeakRssKiB": 3440,
+      "candidatePeakRssKiB": 2684,
+      "rssDeltaPercent": -21.976744186046517
+    }
+  },
+  "testMatrix": {
+    "host": "olfa@10.10.10.12",
+    "workingTreeBaseCommit": "a5d0e89769c1c9d5f8983536197131f68cdce50e",
+    "runLog": {
+      "remotePath": "/home/olfa/codex-kotlin-arc-ci2-rcidentity/.arc-runs/rcidentity-final-hardened/log",
+      "sha256": "a8dca59e89cb1747c947b15513d24a11fa853de69542e0a097f4fdb759b5d18d",
+      "gradleResult": "BUILD SUCCESSFUL",
+      "elapsed": "1m 44s"
+    },
+    "checks": [
+      {
+        "task": ":kotlin-native:backend.native:tests:test",
+        "filter": "org.jetbrains.kotlin.backend.konan.arc.ArcOwnershipIRAdapterTest",
+        "status": "passed"
+      },
+      {
+        "task": ":kotlin-native:backend.native:tests:arc_discarded_returned_receiver_groups",
+        "coverage": "runtime behavior and throwing-argument unwind cleanup",
+        "status": "passed"
+      },
+      {
+        "task": ":kotlin-native:backend.native:tests:filecheck_arc_discarded_returned_receiver_groups",
+        "coverage": "optimized generated string templates, nested variable initializer, four-to-one seed",
+        "status": "passed"
+      },
+      {
+        "task": ":kotlin-native:backend.native:tests:filecheck_arc_discarded_returned_receiver_groups_debug",
+        "coverage": "debug fallback keeps distinct result slots",
+        "status": "passed"
+      },
+      {
+        "task": ":kotlin-native:backend.native:tests:filecheck_arc_discarded_returned_receiver_groups_noopt",
+        "coverage": "unoptimized fallback keeps distinct result slots",
+        "status": "passed"
+      },
+      {
+        "task": ":kotlin-native:backend.native:tests:filecheck_arc_discarded_returned_receiver_groups_diagnostics",
+        "coverage": "ARC diagnostics fallback keeps distinct result slots",
+        "status": "passed"
+      },
+      {
+        "task": ":kotlin-native:backend.native:tests:filecheck_arc_discarded_returned_receiver_groups_generated_strict",
+        "coverage": "strict memory model fallback keeps distinct result slots",
+        "status": "passed"
+      }
+    ]
+  }
+}

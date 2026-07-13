@@ -53,6 +53,47 @@ private fun stringBuilderStyle(): String {
     return builder.toString()
 }
 
+// CHECK-LABEL: define internal %struct.ObjHeader* @"kfun:loweredStringTemplate#internal"
+// CHECK: {{call|invoke}} %struct.ObjHeader* @"kfun:kotlin.text.StringBuilder#append(kotlin.String?){}kotlin.text.StringBuilder"({{.*}}%struct.ObjHeader** [[CONCAT_SEED:%[-a-zA-Z$._0-9]+]])
+// CHECK: {{call|invoke}} %struct.ObjHeader* @"kfun:kotlin.text.StringBuilder#append(kotlin.Int){}kotlin.text.StringBuilder"({{.*}}%struct.ObjHeader** [[CONCAT_SEED]])
+// CHECK: {{call|invoke}} %struct.ObjHeader* @"kfun:kotlin.text.StringBuilder#append(kotlin.String?){}kotlin.text.StringBuilder"({{.*}}%struct.ObjHeader** [[CONCAT_SEED]])
+// DEBUG: {{call|invoke}} %struct.ObjHeader* @"kfun:kotlin.text.StringBuilder#append(kotlin.String?){}kotlin.text.StringBuilder"({{.*}}%struct.ObjHeader** [[CONCAT_DEBUG_FIRST:%[-a-zA-Z$._0-9]+]])
+// DEBUG-NOT: @"kfun:kotlin.text.StringBuilder#append(kotlin.Int){}kotlin.text.StringBuilder"({{.*}}%struct.ObjHeader** [[CONCAT_DEBUG_FIRST]])
+// DEBUG: {{call|invoke}} %struct.ObjHeader* @"kfun:kotlin.text.StringBuilder#append(kotlin.Int){}kotlin.text.StringBuilder"({{.*}}%struct.ObjHeader** [[CONCAT_DEBUG_SECOND:%[-a-zA-Z$._0-9]+]])
+// NOOPT-LABEL: define internal %struct.ObjHeader* @"kfun:loweredStringTemplate#internal"
+// NOOPT: {{call|invoke}} %struct.ObjHeader* @"kfun:kotlin.text.StringBuilder#append(kotlin.Any?){}kotlin.text.StringBuilder"({{.*}}%struct.ObjHeader** [[CONCAT_NOOPT_FIRST:%[-a-zA-Z$._0-9]+]])
+// NOOPT-NOT: @"kfun:kotlin.text.StringBuilder#append(kotlin.Int){}kotlin.text.StringBuilder"({{.*}}%struct.ObjHeader** [[CONCAT_NOOPT_FIRST]])
+// NOOPT: {{call|invoke}} %struct.ObjHeader* @"kfun:kotlin.text.StringBuilder#append(kotlin.Int){}kotlin.text.StringBuilder"({{.*}}%struct.ObjHeader** [[CONCAT_NOOPT_SECOND:%[-a-zA-Z$._0-9]+]])
+// DIAGNOSTICS-LABEL: define internal %struct.ObjHeader* @"kfun:loweredStringTemplate#internal"
+// DIAGNOSTICS: {{call|invoke}} %struct.ObjHeader* @"kfun:kotlin.text.StringBuilder#append(kotlin.String?){}kotlin.text.StringBuilder"({{.*}}%struct.ObjHeader** [[CONCAT_DIAGNOSTICS_FIRST:%[-a-zA-Z$._0-9]+]])
+// DIAGNOSTICS-NOT: @"kfun:kotlin.text.StringBuilder#append(kotlin.Int){}kotlin.text.StringBuilder"({{.*}}%struct.ObjHeader** [[CONCAT_DIAGNOSTICS_FIRST]])
+// DIAGNOSTICS: {{call|invoke}} %struct.ObjHeader* @"kfun:kotlin.text.StringBuilder#append(kotlin.Int){}kotlin.text.StringBuilder"({{.*}}%struct.ObjHeader** [[CONCAT_DIAGNOSTICS_SECOND:%[-a-zA-Z$._0-9]+]])
+// STRICT-LABEL: define internal %struct.ObjHeader* @"kfun:loweredStringTemplate#internal"
+// STRICT: {{call|invoke}} %struct.ObjHeader* @"kfun:kotlin.text.StringBuilder#append(kotlin.String?){}kotlin.text.StringBuilder"({{.*}}%struct.ObjHeader** [[CONCAT_STRICT_FIRST:%[-a-zA-Z$._0-9]+]])
+// STRICT-NOT: @"kfun:kotlin.text.StringBuilder#append(kotlin.Int){}kotlin.text.StringBuilder"({{.*}}%struct.ObjHeader** [[CONCAT_STRICT_FIRST]])
+// STRICT: {{call|invoke}} %struct.ObjHeader* @"kfun:kotlin.text.StringBuilder#append(kotlin.Int){}kotlin.text.StringBuilder"({{.*}}%struct.ObjHeader** [[CONCAT_STRICT_SECOND:%[-a-zA-Z$._0-9]+]])
+private fun loweredStringTemplate(index: Int): String =
+    "arc-${index and 1023}-${index.toString(16)}"
+
+// CHECK-LABEL: define internal i32 @"kfun:nestedStringInitializer#internal"
+// CHECK: {{call|invoke}} %struct.ObjHeader* @"kfun:kotlin.text.StringBuilder#append(kotlin.String?){}kotlin.text.StringBuilder"({{.*}}%struct.ObjHeader** [[NESTED_SEED:%[-a-zA-Z$._0-9]+]])
+// CHECK: {{call|invoke}} %struct.ObjHeader* @"kfun:kotlin.text.StringBuilder#append(kotlin.Int){}kotlin.text.StringBuilder"({{.*}}%struct.ObjHeader** [[NESTED_SEED]])
+// CHECK: {{call|invoke}} %struct.ObjHeader* @"kfun:kotlin.text.StringBuilder#append(kotlin.String?){}kotlin.text.StringBuilder"({{.*}}%struct.ObjHeader** [[NESTED_SEED]])
+private fun nestedStringInitializer(index: Int): Int {
+    val value = "v-${index}-x"
+    return value.length
+}
+
+private fun throwingPart(fail: Boolean): String {
+    if (fail) throw IllegalArgumentException("part")
+    return "ok"
+}
+
+// CHECK-LABEL: define internal %struct.ObjHeader* @"kfun:throwingStringTemplate#internal"
+// CHECK: {{call|invoke}} %struct.ObjHeader* @"kfun:kotlin.text.StringBuilder#append(kotlin.String?){}kotlin.text.StringBuilder"({{.*}}%struct.ObjHeader** [[THROWING_SEED:%[-a-zA-Z$._0-9]+]])
+// CHECK: {{call|invoke}} %struct.ObjHeader* @"kfun:kotlin.text.StringBuilder#append(kotlin.String?){}kotlin.text.StringBuilder"({{.*}}%struct.ObjHeader** [[THROWING_SEED]])
+private fun throwingStringTemplate(fail: Boolean): String = "a-${throwingPart(fail)}-z"
+
 // CHECK-LABEL: define internal i32 @"kfun:groupedFluent#internal"
 // CHECK: alloca %struct.ObjHeader*, i32 11
 // CHECK: call void @EnterFrame({{.*}}i32 11)
@@ -122,6 +163,15 @@ private fun groupedArgumentThrow(fail: Boolean): Int {
 
 fun main() {
     check(stringBuilderStyle() == "ab")
+    check(loweredStringTemplate(7) == "arc-7-7")
+    check(nestedStringInitializer(7) == 5)
+    check(throwingStringTemplate(false) == "a-ok-z")
+    try {
+        throwingStringTemplate(true)
+        error("expected string argument failure")
+    } catch (_: IllegalArgumentException) {
+        // The shared seed is a normal frame slot and must unwind exactly once.
+    }
     check(groupedFluent(false) == 21)
     check(deinitCount == 2)
     check(branchProofs() == 8)

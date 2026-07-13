@@ -631,6 +631,18 @@ internal fun runArcOwnershipPlanning(
                         discardedReturnedReceiverGroupsByCall[call] = group
                     }
                 }
+                selectVerifiedStringConcatenationRCIdentityGroups(generationState, declaration).forEach { group ->
+                    // A local-body proof may become available under a different KLIB/lowering
+                    // configuration. Never replace or partially merge that independently proven
+                    // seed web; either this complete generated block is new or it stays untouched.
+                    if (group.calls.none { it in discardedReturnedReceiverGroupsByCall }) {
+                        // These compiler-generated calls use the same returned-receiver ABI path as
+                        // locally proven fluent methods; the RC-identity proof supplies the missing
+                        // deserialized-stdlib-body fact.
+                        returnedReceiverBorrowCalls += group.calls
+                        group.calls.forEach { call -> discardedReturnedReceiverGroupsByCall[call] = group }
+                    }
+                }
                 coroutineResultSlotForwardingCalls +=
                     selectVerifiedCoroutineResultSlotForwardingCalls(generationState, declaration)
                 borrowedCharArrayConsumerSymbols?.let { exactConsumers ->

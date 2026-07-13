@@ -1,0 +1,7 @@
+model	repetition	compile_seconds	compile_max_rss_kib
+baseline-strict	1	7.71	935008
+candidate-arc	1	7.39	954068
+candidate-arc	2	7.25	838544
+baseline-strict	2	7.69	1005032
+baseline-strict	3	7.79	1006772
+candidate-arc	3	7.40	979412
