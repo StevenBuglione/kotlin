@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 import io
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -24,6 +26,25 @@ IDENTITY = benchmark_parallel.SnapshotIdentity(
     runtime_patch_base="d" * 40,
     runtime_patch_sha256="e" * 64,
 )
+
+
+def initialize_git_repository(path: Path) -> str:
+    subprocess.run(["git", "init", "--quiet"], cwd=path, check=True)
+    subprocess.run(["git", "config", "user.name", "ARC benchmark test"], cwd=path, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "arc-benchmark-test@example.invalid"], cwd=path, check=True
+    )
+    subprocess.run(["git", "config", "core.autocrlf", "false"], cwd=path, check=True)
+    (path / "seed.txt").write_text("seed\n", encoding="utf-8")
+    subprocess.run(["git", "add", "seed.txt"], cwd=path, check=True)
+    subprocess.run(["git", "commit", "--quiet", "-m", "seed"], cwd=path, check=True)
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=path,
+        check=True,
+        text=True,
+        stdout=subprocess.PIPE,
+    ).stdout.strip()
 
 
 def write_bundle(path: Path, shard: benchmark_parallel.HostShard, *, runtime_hash: str | None = None) -> None:
@@ -170,6 +191,145 @@ class ParallelBenchmarkTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "same host"):
                 benchmark_parallel.execute("test-wave", shards, None)
         snapshot.assert_not_called()
+
+    def test_snapshot_identity_failure_deletes_only_the_local_reference(self):
+        shards = benchmark_parallel.build_host_shards("strings", "coroutines")
+        reference = "refs/codex/arc/tests/identity-failure-cleanup"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            commit = initialize_git_repository(root)
+            subprocess.run(["git", "update-ref", reference, "HEAD"], cwd=root, check=True)
+            with patch.object(benchmark_parallel.arc, "ROOT", root), \
+                    patch.object(benchmark_parallel, "RESULTS", root / "results"), \
+                    patch.object(
+                        benchmark_parallel,
+                        "probe_hostname",
+                        side_effect=lambda shard: f"host-{shard.shard_id}",
+                    ), \
+                    patch.object(
+                        benchmark_parallel.arc,
+                        "create_snapshot_ref",
+                        return_value=(reference, commit),
+                    ), \
+                    patch.object(
+                        benchmark_parallel,
+                        "snapshot_identity",
+                        side_effect=RuntimeError("identity failed"),
+                    ), \
+                    patch.object(benchmark_parallel, "run_host") as run_host, \
+                    patch.object(benchmark_parallel, "remote_url") as remote_url:
+                with self.assertRaisesRegex(RuntimeError, "identity failed"):
+                    benchmark_parallel.execute("identity-failure", shards, None)
+                run_host.assert_not_called()
+                remote_url.assert_not_called()
+                self.assertNotEqual(
+                    0,
+                    subprocess.run(
+                        ["git", "show-ref", "--verify", "--quiet", reference], cwd=root
+                    ).returncode,
+                )
+
+    def test_remote_cleanup_continues_after_one_host_delete_raises(self):
+        shards = benchmark_parallel.build_host_shards("strings", "coroutines")
+        reference = "refs/codex/arc/tests/multi-host-cleanup"
+        original_subprocess_run = subprocess.run
+        barrier = threading.Barrier(2)
+
+        def fail_after_push_attempt(shard, reference, identity, output_root, callback):
+            callback(shard)
+            barrier.wait()
+            raise RuntimeError("host failed")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            commit = initialize_git_repository(root)
+            original_subprocess_run(
+                ["git", "update-ref", reference, "HEAD"], cwd=root, check=True
+            )
+            with patch.object(benchmark_parallel.arc, "ROOT", root), \
+                    patch.object(benchmark_parallel, "RESULTS", root / "results"), \
+                    patch.object(
+                        benchmark_parallel,
+                        "probe_hostname",
+                        side_effect=lambda shard: f"host-{shard.shard_id}",
+                    ), \
+                    patch.object(
+                        benchmark_parallel.arc,
+                        "create_snapshot_ref",
+                        return_value=(reference, commit),
+                    ), \
+                    patch.object(benchmark_parallel, "snapshot_identity", return_value=IDENTITY), \
+                    patch.object(benchmark_parallel, "run_host", side_effect=fail_after_push_attempt), \
+                    patch.object(
+                        benchmark_parallel,
+                        "remote_url",
+                        side_effect=lambda shard: f"ssh://{shard.host}/repository/.git",
+                    ), \
+                    patch.object(
+                        benchmark_parallel.arc,
+                        "delete_remote_ref",
+                        side_effect=[ValueError("unsafe cleanup config"), True],
+                    ) as cleanup, \
+                    redirect_stderr(io.StringIO()) as cleanup_stderr:
+                with self.assertRaisesRegex(RuntimeError, "host failed"):
+                    benchmark_parallel.execute("multi-host-cleanup", shards, None)
+            self.assertEqual(2, cleanup.call_count)
+            self.assertIn("cleanup failed before verification", cleanup_stderr.getvalue())
+            self.assertEqual(
+                {reference}, {call.args[1] for call in cleanup.call_args_list}
+            )
+            self.assertNotEqual(
+                0,
+                original_subprocess_run(
+                    ["git", "show-ref", "--verify", "--quiet", reference],
+                    cwd=root,
+                ).returncode,
+            )
+
+    def test_successful_parallel_run_fails_when_remote_cleanup_is_unresolved(self):
+        shards = benchmark_parallel.build_host_shards("strings", "coroutines")
+        reference = "refs/codex/arc/tests/unresolved-parallel-cleanup"
+
+        def successful_host(shard, reference, identity, output_root, callback):
+            callback(shard)
+            return output_root / shard.shard_id, 0, f"result-{shard.shard_id}"
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            commit = initialize_git_repository(root)
+            subprocess.run(["git", "update-ref", reference, "HEAD"], cwd=root, check=True)
+            with patch.object(benchmark_parallel.arc, "ROOT", root), \
+                    patch.object(benchmark_parallel, "RESULTS", root / "results"), \
+                    patch.object(
+                        benchmark_parallel,
+                        "probe_hostname",
+                        side_effect=lambda shard: f"host-{shard.shard_id}",
+                    ), \
+                    patch.object(
+                        benchmark_parallel.arc,
+                        "create_snapshot_ref",
+                        return_value=(reference, commit),
+                    ), \
+                    patch.object(benchmark_parallel, "snapshot_identity", return_value=IDENTITY), \
+                    patch.object(benchmark_parallel, "run_host", side_effect=successful_host), \
+                    patch.object(benchmark_parallel.benchmark_shards, "merge", return_value=0), \
+                    patch.object(
+                        benchmark_parallel,
+                        "remote_url",
+                        side_effect=lambda shard: f"ssh://{shard.host}/repository/.git",
+                    ), \
+                    patch.object(
+                        benchmark_parallel.arc, "delete_remote_ref", return_value=False
+                    ) as cleanup:
+                with self.assertRaisesRegex(RuntimeError, "cleanup remains unresolved"):
+                    benchmark_parallel.execute("unresolved-parallel-cleanup", shards, None)
+            self.assertEqual(2, cleanup.call_count)
+            self.assertNotEqual(
+                0,
+                subprocess.run(
+                    ["git", "show-ref", "--verify", "--quiet", reference], cwd=root
+                ).returncode,
+            )
 
     def test_dry_run_has_no_snapshot_or_remote_mutation(self):
         output = io.StringIO()

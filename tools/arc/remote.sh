@@ -32,8 +32,13 @@ validate_managed_paths() {
             fail "resolved checkout path $resolved_repo is not an approved ARC worktree"
             ;;
     esac
-    [[ "$resolved_source" == /home/olfa/codex-kotlin-rust ]] ||
-        fail "resolved source repository $resolved_source is not the approved shared object store"
+    case "$resolved_source" in
+        /home/olfa/codex-kotlin-rust|/home/olfa/codex-kotlin-arc-git)
+            ;;
+        *)
+            fail "resolved source repository $resolved_source is not an approved shared object store"
+            ;;
+    esac
     [[ "$resolved_repo" != "$resolved_source" ]] ||
         fail "managed checkout and shared source repository must be distinct"
 }
@@ -75,9 +80,14 @@ marker_path() {
 }
 
 check_managed_repo() {
+    local repo_common source_common
     git -C "$repo" rev-parse --is-inside-work-tree >/dev/null 2>&1 || fail "$repo is not a Git worktree"
     [[ -f "$(marker_path)" ]] || fail "$repo is not a tools/arc-managed checkout; refusing to touch it"
     [[ -z "$(git -C "$repo" ls-files -- .arc-runs)" ]] || fail "$repo has a tracked .arc-runs path; refusing unsafe state access"
+    repo_common=$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir)
+    source_common=$(git -C "$source_repo" rev-parse --path-format=absolute --git-common-dir)
+    [[ "$repo_common" == "$source_common" ]] ||
+        fail "$repo belongs to $repo_common, not configured source repository $source_common"
 }
 
 check_managed_clean_repo() {

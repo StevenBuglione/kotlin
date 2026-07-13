@@ -57,6 +57,7 @@ class ArcProfileTest(unittest.TestCase):
             arc.select_machine("primary-bench")
             self.assertEqual("olfa@10.10.10.8", os.environ["ARC_REMOTE"])
             self.assertEqual("/home/olfa/codex-kotlin-arc-primary-bench", os.environ["ARC_REMOTE_DIR"])
+            self.assertEqual("/home/olfa/codex-kotlin-arc-git", os.environ["ARC_REMOTE_GIT"])
             self.assertEqual(16, arc.workers())
 
     def test_ci2_cstring_machine_is_an_isolated_benchmark_lane(self):
@@ -93,15 +94,393 @@ class ArcProfileTest(unittest.TestCase):
             ["kotlin-native/runtime/src/legacymm/cpp/Memory.cpp", "tools/arc/arc.py"],
             arc.snapshot_pathspecs([
                 ".\\kotlin-native\\runtime\\src\\legacymm\\cpp\\Memory.cpp",
-                "tools/arc/arc.py",
-                "tools/arc/arc.py",
+                "tools//arc/./arc.py",
+                "././tools/arc/arc.py",
             ]),
         )
-        for invalid in ("../outside", "/absolute", "wasm/wasm.debug.browsers/file", "tools/arc/__pycache__/x.pyc"):
+        for invalid in (
+            ".", "./", "../outside", "/absolute", "C:\\outside", "./C:/outside", "C:relative",
+            "wasm/wasm.debug.browsers/file", "tools/arc/__pycache__/x.pyc",
+        ):
             with self.assertRaises(SystemExit):
                 arc.snapshot_pathspecs([invalid])
         with self.assertRaises(SystemExit):
             arc.snapshot_pathspecs([])
+
+    def test_snapshot_builder_handles_ignored_paths_and_preserves_real_index(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+
+            def git(*arguments: str, capture: bool = False) -> str:
+                result = subprocess.run(
+                    ["git", *arguments],
+                    cwd=root,
+                    check=True,
+                    text=True,
+                    stdout=subprocess.PIPE if capture else subprocess.DEVNULL,
+                )
+                return result.stdout if capture else ""
+
+            git("init", "--quiet")
+            git("config", "user.name", "ARC snapshot test")
+            git("config", "user.email", "arc-snapshot-test@example.invalid")
+            git("config", "core.autocrlf", "false")
+            (root / ".gitignore").write_text(
+                "/.arc-runs/\n/tools/arc/__pycache__/\n", encoding="utf-8"
+            )
+            (root / "tracked.txt").write_text("base\n", encoding="utf-8")
+            (root / "delete me.txt").write_text("base\n", encoding="utf-8")
+            (root / "scoped").mkdir()
+            (root / "scoped" / "modified.txt").write_text("base\n", encoding="utf-8")
+            (root / "outside.txt").write_text("base\n", encoding="utf-8")
+            (root / "index divergence.txt").write_text("base\n", encoding="utf-8")
+            git("add", "-A")
+            git("commit", "--quiet", "-m", "base")
+
+            (root / "index divergence.txt").write_text("staged\n", encoding="utf-8")
+            git("add", "--", "index divergence.txt")
+            staged_before = git("diff", "--cached", "--binary", capture=True)
+            (root / "index divergence.txt").write_text("worktree\n", encoding="utf-8")
+            (root / "tracked.txt").write_text("modified\n", encoding="utf-8")
+            (root / "delete me.txt").unlink()
+            (root / "scoped" / "modified.txt").write_text("scoped change\n", encoding="utf-8")
+            (root / "outside.txt").write_text("outside change\n", encoding="utf-8")
+            (root / " untracked name.txt").write_text("new\n", encoding="utf-8")
+            ignored = root / "tools" / "arc" / "__pycache__" / "ignored.pyc"
+            ignored.parent.mkdir(parents=True)
+            ignored.write_bytes(b"ignored")
+            excluded = root / "wasm" / "wasm.debug.browsers" / "generated.js"
+            excluded.parent.mkdir(parents=True)
+            excluded.write_text("generated\n", encoding="utf-8")
+            nested_allowed = root / "lane" / ".arc-runs" / "input.kt"
+            nested_allowed.parent.mkdir(parents=True)
+            nested_allowed.write_text("nested path is not the excluded root\n", encoding="utf-8")
+            long_paths = [
+                root / "many" / f"{index:03d}-{'nested' * 15}" / "file with spaces.txt"
+                for index in range(80)
+            ]
+            for path in long_paths:
+                path.parent.mkdir(parents=True)
+                path.write_text(f"path {path.parent.name}\n", encoding="utf-8")
+            posix_literal = root / "scoped\\literal\nname.txt"
+            if os.name != "nt":
+                posix_literal.write_text("literal backslash and newline\n", encoding="utf-8")
+
+            references: list[str] = []
+            index_paths: list[Path] = []
+            original_mkstemp = arc.tempfile.mkstemp
+
+            def record_index(*args, **kwargs):
+                descriptor, name = original_mkstemp(*args, **kwargs)
+                index_paths.append(Path(name))
+                return descriptor, name
+
+            with patch.object(arc.tempfile, "mkstemp", side_effect=record_index):
+                try:
+                    reference, commit = arc.create_snapshot_ref(root=root)
+                    references.append(reference)
+                    paths = set(git("ls-tree", "-r", "--name-only", commit, capture=True).splitlines())
+                    self.assertIn(" untracked name.txt", paths)
+                    self.assertIn("tracked.txt", paths)
+                    self.assertNotIn("delete me.txt", paths)
+                    self.assertNotIn("tools/arc/__pycache__/ignored.pyc", paths)
+                    self.assertNotIn("wasm/wasm.debug.browsers/generated.js", paths)
+                    self.assertIn("lane/.arc-runs/input.kt", paths)
+                    self.assertTrue(all(path.relative_to(root).as_posix() in paths for path in long_paths))
+                    self.assertEqual("modified\n", git("show", f"{commit}:tracked.txt", capture=True))
+                    self.assertEqual(
+                        "worktree\n", git("show", f"{commit}:index divergence.txt", capture=True)
+                    )
+                    if os.name != "nt":
+                        self.assertEqual(
+                            "literal backslash and newline\n",
+                            git("show", f"{commit}:scoped\\literal\nname.txt", capture=True),
+                        )
+
+                    scoped_reference, scoped_commit = arc.create_snapshot_ref(["scoped"], root=root)
+                    references.append(scoped_reference)
+                    self.assertEqual(
+                        "scoped change\n",
+                        git("show", f"{scoped_commit}:scoped/modified.txt", capture=True),
+                    )
+                    self.assertEqual("base\n", git("show", f"{scoped_commit}:outside.txt", capture=True))
+                    self.assertEqual("base\n", git("show", f"{scoped_commit}:delete me.txt", capture=True))
+                    self.assertEqual(
+                        "base\n", git("show", f"{scoped_commit}:index divergence.txt", capture=True)
+                    )
+                    self.assertNotIn(
+                        " untracked name.txt",
+                        git("ls-tree", "-r", "--name-only", scoped_commit, capture=True).splitlines(),
+                    )
+                    if os.name != "nt":
+                        self.assertNotEqual(
+                            0,
+                            subprocess.run(
+                                ["git", "cat-file", "-e", f"{scoped_commit}:scoped\\literal\nname.txt"],
+                                cwd=root,
+                            ).returncode,
+                        )
+                    self.assertEqual(staged_before, git("diff", "--cached", "--binary", capture=True))
+                    self.assertTrue(all(not path.exists() for path in index_paths))
+                finally:
+                    for reference in references:
+                        subprocess.run(["git", "update-ref", "-d", reference], cwd=root, check=False)
+            self.assertEqual("", git("for-each-ref", "--format=%(refname)", "refs/codex/arc/snapshots", capture=True))
+
+    def test_remote_snapshot_partial_push_failure_always_deletes_local_reference(self):
+        reference = "refs/codex/arc/tests/remote-snapshot-cleanup"
+        original_subprocess_run = subprocess.run
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            original_subprocess_run(["git", "init", "--quiet"], cwd=root, check=True)
+            original_subprocess_run(
+                ["git", "config", "user.name", "ARC snapshot test"], cwd=root, check=True
+            )
+            original_subprocess_run(
+                ["git", "config", "user.email", "arc-snapshot-test@example.invalid"],
+                cwd=root,
+                check=True,
+            )
+            original_subprocess_run(
+                ["git", "config", "core.autocrlf", "false"], cwd=root, check=True
+            )
+            (root / "seed.txt").write_text("seed\n", encoding="utf-8")
+            original_subprocess_run(["git", "add", "seed.txt"], cwd=root, check=True)
+            original_subprocess_run(
+                ["git", "commit", "--quiet", "-m", "seed"], cwd=root, check=True
+            )
+            commit = original_subprocess_run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                text=True,
+                stdout=subprocess.PIPE,
+            ).stdout.strip()
+            original_subprocess_run(
+                ["git", "update-ref", reference, "HEAD"], cwd=root, check=True
+            )
+            with patch.object(arc, "ROOT", root), \
+                    patch.object(arc, "create_snapshot_ref", return_value=(reference, commit)), \
+                    patch.object(arc, "remote_url", return_value="ssh://builder/repository/.git"), \
+                    patch.object(
+                        arc, "run", side_effect=subprocess.CalledProcessError(1, ["git", "push"])
+                    ) as push, \
+                    patch.object(arc, "remote") as remote, \
+                    patch.object(
+                        arc, "delete_remote_ref", side_effect=ValueError("unsafe cleanup config")
+                    ) as cleanup, \
+                    redirect_stderr(io.StringIO()) as cleanup_stderr:
+                with self.assertRaises(subprocess.CalledProcessError):
+                    arc.remote_snapshot()
+            push.assert_called_once()
+            remote.assert_not_called()
+            cleanup.assert_called_once_with(
+                "ssh://builder/repository/.git",
+                reference,
+                fallback_host=arc.DEFAULT_HOST,
+                fallback_remote_git=arc.DEFAULT_REMOTE_GIT,
+                expected_host=arc.DEFAULT_HOST,
+                expected_remote_git=arc.DEFAULT_REMOTE_GIT,
+            )
+            self.assertIn("cleanup failed before verification", cleanup_stderr.getvalue())
+            self.assertNotEqual(
+                0,
+                original_subprocess_run(
+                    ["git", "show-ref", "--verify", "--quiet", reference], cwd=root
+                ).returncode,
+            )
+
+    def test_verified_remote_ref_deletion_retries_transport_and_server_failures(self):
+        url = "ssh://builder/repository/.git"
+        reference = "refs/codex/arc/snapshots/test"
+
+        def result(status: int, output: str = "") -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess([], status, stdout=output)
+
+        cases = (
+            (
+                "nonzero-then-success",
+                [result(1, "disconnect"), result(0, reference), result(0), result(2)],
+                True,
+                4,
+            ),
+            (
+                "all-nonzero",
+                [value for _ in range(3) for value in (result(1, "failed"), result(0, reference))],
+                False,
+                6,
+            ),
+            (
+                "oserror-then-success",
+                [OSError("transport unavailable"), result(0, reference), result(0), result(2)],
+                True,
+                4,
+            ),
+            (
+                "timeout-then-success",
+                [
+                    subprocess.TimeoutExpired(["git", "push"], 20),
+                    subprocess.TimeoutExpired(["git", "ls-remote"], 20),
+                    result(0),
+                    result(2),
+                ],
+                True,
+                4,
+            ),
+        )
+        for name, sequence, expected, call_count in cases:
+            with self.subTest(name=name), \
+                    patch.object(arc.subprocess, "run", side_effect=sequence) as runner, \
+                    patch.object(arc.time, "sleep") as sleep, \
+                    redirect_stderr(io.StringIO()) as stderr:
+                self.assertEqual(expected, arc.delete_remote_ref(url, reference))
+            self.assertEqual(call_count, runner.call_count)
+            self.assertTrue(
+                all(
+                    call.kwargs["timeout"] == arc.REMOTE_REF_COMMAND_TIMEOUT_SECONDS
+                    for call in runner.call_args_list
+                )
+            )
+            self.assertEqual(2 if name == "all-nonzero" else 1, sleep.call_count)
+            if not expected:
+                self.assertIn("remains unresolved", stderr.getvalue())
+
+    def test_host_local_remote_ref_fallback_is_verified_and_bounded(self):
+        host = "olfa@10.10.10.8"
+        remote_git = "/home/olfa/repository"
+        url = f"ssh://{host}{remote_git}/.git"
+        reference = f"refs/codex/arc/snapshots/{'a' * 32}"
+
+        def result(status: int, output: str = "") -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess([], status, stdout=output)
+
+        cases = (
+            ("success", result(0), result(2), True),
+            ("nonzero", result(1, "failed"), result(0, reference), False),
+            (
+                "timeout",
+                subprocess.TimeoutExpired(["ssh", host], arc.REMOTE_REF_COMMAND_TIMEOUT_SECONDS),
+                result(0, reference),
+                False,
+            ),
+        )
+        for name, fallback_result, final_verification, expected in cases:
+            sequence = [
+                result(1, "push deletion failed"),
+                result(0, reference),
+                fallback_result,
+                final_verification,
+            ]
+            with self.subTest(name=name), \
+                    patch.object(arc.subprocess, "run", side_effect=sequence) as runner, \
+                    redirect_stderr(io.StringIO()) as stderr:
+                actual = arc.delete_remote_ref(
+                    url,
+                    reference,
+                    attempts=1,
+                    fallback_host=host,
+                    fallback_remote_git=remote_git,
+                    expected_host=host,
+                    expected_remote_git=remote_git,
+                )
+            self.assertEqual(expected, actual)
+            self.assertEqual(4, runner.call_count)
+            self.assertEqual(
+                [
+                    "ssh", host, "git", f"--git-dir={remote_git}/.git", "update-ref", "-d",
+                    reference,
+                ],
+                runner.call_args_list[2].args[0],
+            )
+            self.assertTrue(
+                all(
+                    call.kwargs["timeout"] == arc.REMOTE_REF_COMMAND_TIMEOUT_SECONDS
+                    for call in runner.call_args_list
+                )
+            )
+            if not expected:
+                self.assertIn("Host-local snapshot cleanup remains unresolved", stderr.getvalue())
+
+    def test_host_local_remote_ref_fallback_rejects_unconfigured_or_unsafe_inputs(self):
+        valid = {
+            "url": "ssh://olfa@10.10.10.8/home/olfa/repository/.git",
+            "reference": f"refs/codex/arc/snapshots/{'b' * 32}",
+            "attempts": 1,
+            "fallback_host": "olfa@10.10.10.8",
+            "fallback_remote_git": "/home/olfa/repository",
+            "expected_host": "olfa@10.10.10.8",
+            "expected_remote_git": "/home/olfa/repository",
+        }
+        mutations = (
+            {"reference": "refs/heads/main"},
+            {"reference": f"refs/codex/arc/snapshots/{'g' * 32}"},
+            {"fallback_host": "-oProxyCommand=bad"},
+            {"fallback_remote_git": "relative/repository", "expected_remote_git": "relative/repository"},
+            {
+                "fallback_remote_git": "/home/olfa/../repository",
+                "expected_remote_git": "/home/olfa/../repository",
+            },
+            {
+                "fallback_remote_git": "/home/olfa/repository;touch-pwned",
+                "expected_remote_git": "/home/olfa/repository;touch-pwned",
+            },
+            {
+                "fallback_remote_git": "/home/olfa/repository with-space",
+                "expected_remote_git": "/home/olfa/repository with-space",
+            },
+            {
+                "fallback_remote_git": "/home/olfa/$(touch-pwned)",
+                "expected_remote_git": "/home/olfa/$(touch-pwned)",
+            },
+            {
+                "fallback_remote_git": "/home/olfa/`touch-pwned`",
+                "expected_remote_git": "/home/olfa/`touch-pwned`",
+            },
+            {
+                "fallback_remote_git": "/home/olfa/-repository",
+                "expected_remote_git": "/home/olfa/-repository",
+            },
+            {"expected_host": "olfa@10.10.10.12"},
+            {"expected_remote_git": "/home/olfa/another"},
+            {"url": "ssh://olfa@10.10.10.12/home/olfa/repository/.git"},
+            {"fallback_host": None},
+        )
+        for mutation in mutations:
+            arguments = dict(valid)
+            arguments.update(mutation)
+            with self.subTest(mutation=mutation), patch.object(arc.subprocess, "run") as runner:
+                with self.assertRaises(ValueError):
+                    arc.delete_remote_ref(**arguments)
+            runner.assert_not_called()
+
+    def test_successful_remote_snapshot_fails_when_verified_cleanup_is_unresolved(self):
+        reference = "refs/codex/arc/snapshots/unresolved"
+        with patch.object(
+                arc, "create_snapshot_ref", return_value=(reference, "a" * 40)
+            ), \
+            patch.object(
+                arc, "remote_url", return_value="ssh://builder/repository/.git"
+            ), \
+            patch.object(
+                arc, "run"
+            ), \
+            patch.object(
+                arc, "remote"
+            ) as remote, \
+            patch.object(
+                arc, "delete_remote_ref", return_value=False
+            ), \
+            patch.object(
+                arc.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)
+            ) as local_cleanup, \
+            redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(RuntimeError, "cleanup remains unresolved"):
+                arc.remote_snapshot()
+        remote.assert_called_once_with("checkout", reference, "a" * 40)
+        local_cleanup.assert_called_once_with(
+            ["git", "update-ref", "-d", reference], cwd=arc.ROOT, check=False
+        )
 
     def test_ci2_benchmark_recipe_uses_only_the_benchmark_machine(self):
         justfile = (Path(__file__).parents[2] / "Justfile").read_text()
@@ -196,10 +575,8 @@ class ArcProfileTest(unittest.TestCase):
             "/home/olfa/codex-kotlin-arc-interop",
         ):
             self.assertIn(path, script)
-        self.assertIn(
-            '[[ "$resolved_source" == /home/olfa/codex-kotlin-rust ]]',
-            script,
-        )
+        self.assertIn('/home/olfa/codex-kotlin-rust|/home/olfa/codex-kotlin-arc-git)', script)
+        self.assertIn('[[ "$repo_common" == "$source_common" ]]', script)
         self.assertLess(script.index("validate_managed_paths\n"), script.index('case "$action" in'))
 
     def test_distribution_includes_linux_platform_libraries(self):
@@ -1306,7 +1683,7 @@ class ArcProfileTest(unittest.TestCase):
     def test_push_targets_shared_source_repository(self):
         with patch.dict(os.environ, {}, clear=True):
             self.assertEqual(
-                "ssh://olfa@10.10.10.8/home/olfa/codex-kotlin-rust/.git",
+                "ssh://olfa@10.10.10.8/home/olfa/codex-kotlin-arc-git/.git",
                 arc.remote_url(),
             )
 

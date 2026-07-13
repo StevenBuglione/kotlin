@@ -7,11 +7,13 @@ import argparse
 import os
 from pathlib import Path
 from pathlib import PurePosixPath
+import re
 import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 
 
@@ -19,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[2]
 REMOTE_HELPER = Path(__file__).with_name("remote.sh")
 DEFAULT_HOST = "olfa@10.10.10.8"
 DEFAULT_REMOTE_DIR = "/home/olfa/codex-kotlin-arc"
-DEFAULT_REMOTE_GIT = "/home/olfa/codex-kotlin-rust"
+DEFAULT_REMOTE_GIT = "/home/olfa/codex-kotlin-arc-git"
 DEFAULT_JAVA_HOME = "/usr/lib/jvm/java-17-openjdk-amd64"
 EXPECTED_BRANCH = "codex/kotlin-native-arc-1.9.10"
 DEFAULT_BASE_REF = "v1.9.10"
@@ -30,7 +32,7 @@ MACHINE_PROFILES = {
     "primary-bench": {
         "ARC_REMOTE": "olfa@10.10.10.8",
         "ARC_REMOTE_DIR": "/home/olfa/codex-kotlin-arc-primary-bench",
-        "ARC_REMOTE_GIT": "/home/olfa/codex-kotlin-rust",
+        "ARC_REMOTE_GIT": "/home/olfa/codex-kotlin-arc-git",
         "ARC_MAX_WORKERS": "16",
     },
     "ci2": {
@@ -62,13 +64,13 @@ MACHINE_PROFILES = {
     "primary-ssa": {
         "ARC_REMOTE": "olfa@10.10.10.8",
         "ARC_REMOTE_DIR": "/home/olfa/codex-kotlin-arc-ssa",
-        "ARC_REMOTE_GIT": "/home/olfa/codex-kotlin-rust",
+        "ARC_REMOTE_GIT": "/home/olfa/codex-kotlin-arc-git",
         "ARC_MAX_WORKERS": "14",
     },
     "primary-interop": {
         "ARC_REMOTE": "olfa@10.10.10.8",
         "ARC_REMOTE_DIR": "/home/olfa/codex-kotlin-arc-interop",
-        "ARC_REMOTE_GIT": "/home/olfa/codex-kotlin-rust",
+        "ARC_REMOTE_GIT": "/home/olfa/codex-kotlin-arc-git",
         "ARC_MAX_WORKERS": "12",
     },
 }
@@ -104,6 +106,11 @@ BENCHMARK_PRESETS = {
     "interop": "platform-c-interop,platform-c-leaf,platform-c-dynamic-cstring",
     "strings": "strings",
 }
+REMOTE_REF_DELETE_ATTEMPTS = 3
+REMOTE_REF_COMMAND_TIMEOUT_SECONDS = 20
+SAFE_SNAPSHOT_REFERENCE = re.compile(r"^refs/codex/arc/snapshots/[0-9a-f]{32}$")
+SAFE_SSH_HOST = re.compile(r"^(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9][A-Za-z0-9.-]*$")
+SAFE_REMOTE_GIT = re.compile(r"^/[A-Za-z0-9._/-]+$")
 
 
 def run(
@@ -199,20 +206,55 @@ def snapshot_pathspecs(paths: list[str] | None) -> list[str] | None:
         return None
     result: list[str] = []
     for value in paths:
-        normalized = value.replace("\\", "/").removeprefix("./")
+        normalized = value.replace("\\", "/")
         path = PurePosixPath(normalized)
-        if not normalized or path.is_absolute() or ".." in path.parts:
+        canonical = str(path)
+        drive_prefixed = len(canonical) >= 2 and canonical[0].isalpha() and canonical[1] == ":"
+        if canonical == "." or path.is_absolute() or drive_prefixed or ".." in path.parts:
             raise SystemExit(f"invalid snapshot path: {value}")
-        if any(normalized == excluded or normalized.startswith(excluded + "/") for excluded in EXCLUDED_PATHS):
+        if any(canonical == excluded or canonical.startswith(excluded + "/") for excluded in EXCLUDED_PATHS):
             raise SystemExit(f"snapshot path is excluded: {value}")
-        if normalized not in result:
-            result.append(normalized)
+        if canonical not in result:
+            result.append(canonical)
     if not result:
         raise SystemExit("path-scoped snapshot requires at least one path")
     return result
 
 
-def create_snapshot_ref(paths: list[str] | None = None) -> tuple[str, str]:
+def snapshot_changes(
+    environment: dict[str, str], scoped_paths: list[str] | None, *, root: Path = ROOT
+) -> list[str]:
+    """Enumerate snapshot inputs without naming ignored paths to ``git add``."""
+    candidates = run(
+        [
+            "git", "ls-files", "--modified", "--deleted", "--others", "--exclude-standard",
+            *(f"--exclude=/{path}/" for path in EXCLUDED_PATHS),
+            "-z",
+        ],
+        env=environment,
+        capture=True,
+        cwd=root,
+    ).stdout.split("\0")
+
+    def is_within(path: str, roots: tuple[str, ...]) -> bool:
+        return any(path == root or path.startswith(root + "/") for root in roots)
+
+    included_roots = tuple(scoped_paths) if scoped_paths is not None else ()
+    result: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        if not candidate or candidate in seen:
+            continue
+        if is_within(candidate, EXCLUDED_PATHS):
+            continue
+        if scoped_paths is not None and not is_within(candidate, included_roots):
+            continue
+        seen.add(candidate)
+        result.append(candidate)
+    return result
+
+
+def create_snapshot_ref(paths: list[str] | None = None, *, root: Path = ROOT) -> tuple[str, str]:
     """Create a commit of the worktree without reading or modifying the real index."""
     token = uuid.uuid4().hex
     reference = f"refs/codex/arc/snapshots/{token}"
@@ -222,23 +264,23 @@ def create_snapshot_ref(paths: list[str] | None = None) -> tuple[str, str]:
     environment = os.environ.copy()
     environment["GIT_INDEX_FILE"] = index_name
     try:
-        run(["git", "read-tree", "HEAD"], env=environment)
+        run(["git", "read-tree", "HEAD"], env=environment, cwd=root)
         scoped_paths = snapshot_pathspecs(paths)
-        if scoped_paths is None:
-            exclusions = [
-                pattern
-                for path in EXCLUDED_PATHS
-                for pattern in (f":(exclude){path}", f":(exclude){path}/**")
-            ]
-            run(["git", "add", "-A", "--", ".", *exclusions], env=environment)
-        else:
-            run(["git", "add", "-A", "--", *(f":(literal){path}" for path in scoped_paths)], env=environment)
-        tree = output(["git", "write-tree"], env=environment)
+        changes = snapshot_changes(environment, scoped_paths, root=root)
+        if changes:
+            run(
+                ["git", "add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"],
+                env=environment,
+                cwd=root,
+                input_text="".join(f":(literal){path}\0" for path in changes),
+            )
+        tree = output(["git", "write-tree"], env=environment, cwd=root)
         commit = output(
             ["git", "commit-tree", tree, "-p", "HEAD", "-m", f"Codex ARC snapshot {token}"],
             env=environment,
+            cwd=root,
         )
-        run(["git", "update-ref", reference, commit])
+        run(["git", "update-ref", reference, commit], cwd=root)
         return reference, commit
     finally:
         Path(index_name).unlink(missing_ok=True)
@@ -250,19 +292,179 @@ def remote_url() -> str:
     return f"ssh://{host}{directory}/.git"
 
 
+def delete_remote_ref(
+    url: str,
+    reference: str,
+    *,
+    attempts: int = REMOTE_REF_DELETE_ATTEMPTS,
+    fallback_host: str | None = None,
+    fallback_remote_git: str | None = None,
+    expected_host: str | None = None,
+    expected_remote_git: str | None = None,
+) -> bool:
+    """Delete a remote ref and verify absence without raising over primary work."""
+    if attempts < 1:
+        raise ValueError("remote ref deletion requires at least one attempt")
+    fallback_values = (
+        fallback_host, fallback_remote_git, expected_host, expected_remote_git,
+    )
+    fallback_enabled = any(value is not None for value in fallback_values)
+    if fallback_enabled:
+        if any(value is None for value in fallback_values):
+            raise ValueError("host-local cleanup requires host, repository, and expected values")
+        assert fallback_host is not None
+        assert fallback_remote_git is not None
+        assert expected_host is not None
+        assert expected_remote_git is not None
+        remote_path = PurePosixPath(fallback_remote_git)
+        if not SAFE_SNAPSHOT_REFERENCE.fullmatch(reference):
+            raise ValueError(f"unsafe snapshot reference for host-local cleanup: {reference!r}")
+        if not SAFE_SSH_HOST.fullmatch(fallback_host) or fallback_host.startswith("-"):
+            raise ValueError(f"unsafe SSH host for host-local cleanup: {fallback_host!r}")
+        if fallback_host != expected_host or fallback_remote_git != expected_remote_git:
+            raise ValueError("host-local cleanup does not match the configured host/repository")
+        if (
+            not remote_path.is_absolute()
+            or not SAFE_REMOTE_GIT.fullmatch(fallback_remote_git)
+            or str(remote_path) != fallback_remote_git
+            or ".." in remote_path.parts
+            or not remote_path.name
+            or remote_path.name == ".git"
+            or any(part.startswith("-") for part in remote_path.parts if part != "/")
+        ):
+            raise ValueError(f"unsafe remote Git directory for host-local cleanup: {fallback_remote_git!r}")
+        if url != f"ssh://{fallback_host}{fallback_remote_git}/.git":
+            raise ValueError("host-local cleanup host/repository does not match the remote URL")
+    last_detail = "not attempted"
+    for attempt in range(1, attempts + 1):
+        try:
+            deletion = subprocess.run(
+                ["git", "push", url, f":{reference}"],
+                cwd=ROOT,
+                check=False,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                timeout=REMOTE_REF_COMMAND_TIMEOUT_SECONDS,
+            )
+            last_detail = f"delete status {deletion.returncode}: {deletion.stdout.strip()}"
+        except (OSError, subprocess.SubprocessError) as error:
+            last_detail = f"delete invocation failed: {error}"
+
+        try:
+            verification = subprocess.run(
+                ["git", "ls-remote", "--exit-code", url, reference],
+                cwd=ROOT,
+                check=False,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                timeout=REMOTE_REF_COMMAND_TIMEOUT_SECONDS,
+            )
+            if verification.returncode == 2:
+                return True
+            if verification.returncode == 0:
+                last_detail += "; ref still exists"
+            else:
+                last_detail += (
+                    f"; verification status {verification.returncode}: "
+                    f"{verification.stdout.strip()}"
+                )
+        except (OSError, subprocess.SubprocessError) as error:
+            last_detail += f"; verification invocation failed: {error}"
+
+        print(
+            f"Remote snapshot cleanup attempt {attempt}/{attempts} failed for {url} {reference}: "
+            f"{last_detail}",
+            file=sys.stderr,
+        )
+        if attempt < attempts:
+            time.sleep(0.25 * attempt)
+    print(
+        f"Remote snapshot ref remains unresolved after {attempts} attempts: {url} {reference}",
+        file=sys.stderr,
+    )
+    if fallback_enabled:
+        assert fallback_host is not None
+        assert fallback_remote_git is not None
+        try:
+            fallback = subprocess.run(
+                [
+                    "ssh", fallback_host, "git", f"--git-dir={fallback_remote_git}/.git",
+                    "update-ref", "-d", reference,
+                ],
+                cwd=ROOT,
+                check=False,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                timeout=REMOTE_REF_COMMAND_TIMEOUT_SECONDS,
+            )
+            fallback_detail = f"host-local status {fallback.returncode}: {fallback.stdout.strip()}"
+        except (OSError, subprocess.SubprocessError) as error:
+            fallback_detail = f"host-local invocation failed: {error}"
+        try:
+            verification = subprocess.run(
+                ["git", "ls-remote", "--exit-code", url, reference],
+                cwd=ROOT,
+                check=False,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                timeout=REMOTE_REF_COMMAND_TIMEOUT_SECONDS,
+            )
+            if verification.returncode == 2:
+                return True
+            fallback_detail += (
+                f"; verification status {verification.returncode}: {verification.stdout.strip()}"
+            )
+        except (OSError, subprocess.SubprocessError) as error:
+            fallback_detail += f"; verification invocation failed: {error}"
+        print(
+            f"Host-local snapshot cleanup remains unresolved for {fallback_host} "
+            f"{fallback_remote_git} {reference}: {fallback_detail}",
+            file=sys.stderr,
+        )
+    return False
+
+
 def remote_snapshot(paths: list[str] | None = None) -> None:
     reference, commit = create_snapshot_ref(paths)
+    host = setting("ARC_REMOTE", DEFAULT_HOST)
+    remote_git = setting("ARC_REMOTE_GIT", DEFAULT_REMOTE_GIT)
     url = remote_url()
-    pushed = False
+    push_attempted = False
+    primary_completed = False
+    cleanup_resolved = True
     try:
+        push_attempted = True
         run(["git", "push", url, f"{reference}:{reference}"])
-        pushed = True
         remote("checkout", reference, commit)
         print(f"Remote ARC snapshot: {commit}")
+        primary_completed = True
     finally:
-        if pushed:
-            subprocess.run(["git", "push", url, f":{reference}"], cwd=ROOT, check=False)
-        subprocess.run(["git", "update-ref", "-d", reference], cwd=ROOT, check=False)
+        try:
+            if push_attempted:
+                try:
+                    cleanup_resolved = delete_remote_ref(
+                        url,
+                        reference,
+                        fallback_host=host,
+                        fallback_remote_git=remote_git,
+                        expected_host=host,
+                        expected_remote_git=remote_git,
+                    )
+                except Exception as error:
+                    cleanup_resolved = False
+                    print(
+                        f"Remote snapshot cleanup failed before verification for {url} "
+                        f"{reference}: {error}",
+                        file=sys.stderr,
+                    )
+        finally:
+            subprocess.run(["git", "update-ref", "-d", reference], cwd=ROOT, check=False)
+        if primary_completed and not cleanup_resolved:
+            raise RuntimeError(f"remote snapshot ref cleanup remains unresolved: {url} {reference}")
 
 
 def tasks_from_environment(name: str, defaults: list[str]) -> list[str]:

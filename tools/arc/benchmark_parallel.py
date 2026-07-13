@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 import hashlib
@@ -17,6 +18,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from threading import Lock
 from typing import Sequence
 
 import arc
@@ -266,11 +268,17 @@ def validate_bundle(
 
 
 def run_host(
-    shard: HostShard, reference: str, identity: SnapshotIdentity, output_root: Path
+    shard: HostShard,
+    reference: str,
+    identity: SnapshotIdentity,
+    output_root: Path,
+    reference_push_attempted: Callable[[HostShard], None] | None = None,
 ) -> tuple[Path, int, str]:
     validate_remote_worktree(shard)
     environment = command_environment(shard, identity)
     run_command(arc_command(shard, "remote-init"), environment=environment)
+    if reference_push_attempted is not None:
+        reference_push_attempted(shard)
     run_command(["git", "push", remote_url(shard), f"{reference}:{reference}"], environment=environment)
     remote_action(shard, "checkout", reference, identity.commit)
     common = ["--shard-id", shard.shard_id, "--shard-count", "2", "--scenarios", ",".join(shard.scenarios)]
@@ -312,14 +320,24 @@ def execute(wave: str, shards: Sequence[HostShard], paths: list[str] | None) -> 
         hostnames = list(executor.map(probe_hostname, shards))
     validate_distinct_hostnames(hostnames, len(shards))
     reference, commit = arc.create_snapshot_ref(paths)
-    identity = snapshot_identity(commit)
+    push_attempted_shards: set[HostShard] = set()
+    push_attempted_shards_lock = Lock()
+    primary_succeeded = False
+
+    def record_reference_push_attempt(shard: HostShard) -> None:
+        with push_attempted_shards_lock:
+            push_attempted_shards.add(shard)
+
     try:
+        identity = snapshot_identity(commit)
         with tempfile.TemporaryDirectory(prefix="arc-parallel-benchmark-") as temporary:
             output_root = Path(temporary)
             results: list[tuple[Path, int, str]] = []
             with ThreadPoolExecutor(max_workers=2, thread_name_prefix="arc-benchmark") as executor:
                 futures = {
-                    executor.submit(run_host, shard, reference, identity, output_root): shard
+                    executor.submit(
+                        run_host, shard, reference, identity, output_root, record_reference_push_attempt
+                    ): shard
                     for shard in shards
                 }
                 for future in as_completed(futures):
@@ -329,13 +347,38 @@ def execute(wave: str, shards: Sequence[HostShard], paths: list[str] | None) -> 
             remote_statuses = [remote_status for _, remote_status, _ in results]
             if any(remote_statuses) and status == 0:
                 raise RuntimeError(f"remote benchmark gate failed but merged report passed: {remote_statuses}")
+            primary_succeeded = status == 0
             return status
     finally:
-        for shard in shards:
-            subprocess.run(
-                ["git", "push", remote_url(shard), f":{reference}"], cwd=arc.ROOT, check=False
+        unresolved_hosts: list[str] = []
+        try:
+            for shard in push_attempted_shards:
+                try:
+                    resolved = arc.delete_remote_ref(
+                        remote_url(shard),
+                        reference,
+                        fallback_host=shard.host,
+                        fallback_remote_git=shard.remote_git,
+                        expected_host=machine_value(shard.machine, "ARC_REMOTE", arc.DEFAULT_HOST),
+                        expected_remote_git=machine_value(
+                            shard.machine, "ARC_REMOTE_GIT", arc.DEFAULT_REMOTE_GIT
+                        ),
+                    )
+                except Exception as error:
+                    resolved = False
+                    print(
+                        f"Remote snapshot cleanup failed before verification for "
+                        f"{shard.machine} {reference}: {error}",
+                        file=sys.stderr,
+                    )
+                if not resolved:
+                    unresolved_hosts.append(shard.machine)
+        finally:
+            subprocess.run(["git", "update-ref", "-d", reference], cwd=arc.ROOT, check=False)
+        if primary_succeeded and unresolved_hosts:
+            raise RuntimeError(
+                f"remote snapshot ref cleanup remains unresolved for {sorted(unresolved_hosts)}: {reference}"
             )
-        subprocess.run(["git", "update-ref", "-d", reference], cwd=arc.ROOT, check=False)
 
 
 def main(arguments: Sequence[str] | None = None) -> int:
