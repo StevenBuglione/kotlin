@@ -3449,6 +3449,13 @@ standaloneTest("arc_borrowed_field_projection") {
     source = "codegen/arc/borrowedFieldProjection.kt"
 }
 
+standaloneTest("arc_string_builder_backing_array_projection") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    flags = ["-opt"]
+    outputChecker = { it.contains("ARC_STRING_BUILDER_BACKING_ARRAY_OK checksum=") }
+    source = "codegen/arc/stringBuilderBackingArrayProjection.kt"
+}
+
 standaloneTest("arc_rooted_loop_borrowing") {
     enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
     flags = ["-opt", "-Xverbose-phases=ArcOwnershipAnalysis"]

@@ -1,0 +1,7 @@
+mode	selected	stdout_sha256	result
+arc-optimized	3	9a0b04f89f47ed9543c27e02e9b4ce27eac50cd585a1f5bc41e967de3e96388a	PASS
+strict	0	9a0b04f89f47ed9543c27e02e9b4ce27eac50cd585a1f5bc41e967de3e96388a	PASS
+arc-debug	0	9a0b04f89f47ed9543c27e02e9b4ce27eac50cd585a1f5bc41e967de3e96388a	PASS
+arc-diagnostics	0	9a0b04f89f47ed9543c27e02e9b4ce27eac50cd585a1f5bc41e967de3e96388a	PASS
+arc-asan	0	-	PASS:instrumented_compile_and_runtime
+arc-ubsan	0	-	PASS:instrumented_compile_and_runtime

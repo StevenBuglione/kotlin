@@ -152,6 +152,7 @@ internal data class ArcCodegenOwnershipPlan(
     val coroutineGuaranteedPhiSelections: Map<IrSimpleFunction, ArcCoroutineGuaranteedPhiIRSelection>,
     val matchingSetLocalAliases: Map<IrVariable, ArcMatchingSetLocalAliasIRSelection>,
     val branchGuaranteedPhiSelections: Map<IrSimpleFunction, ArcBranchGuaranteedPhiKotlinIRSelection>,
+    val stringBuilderBackingArrayProjectionPlans: Map<IrSimpleFunction, ArcStringBuilderBackingArrayProjectionPlan>,
 ) {
     val scopedArcReferenceLoadBoundaries: Set<IrExpression> =
         Collections.newSetFromMap(IdentityHashMap<IrExpression, Boolean>()).apply {
@@ -208,6 +209,7 @@ internal data class ArcCodegenOwnershipPlan(
             coroutineGuaranteedPhiSelections = emptyMap(),
             matchingSetLocalAliases = emptyMap(),
             branchGuaranteedPhiSelections = emptyMap(),
+            stringBuilderBackingArrayProjectionPlans = emptyMap(),
         )
     }
 }
@@ -735,6 +737,8 @@ internal fun runArcOwnershipPlanning(
     val coroutineGuaranteedPhiSelections = IdentityHashMap<IrSimpleFunction, ArcCoroutineGuaranteedPhiIRSelection>()
     val matchingSetLocalAliases = IdentityHashMap<IrVariable, ArcMatchingSetLocalAliasIRSelection>()
     val branchGuaranteedPhiSelections = IdentityHashMap<IrSimpleFunction, ArcBranchGuaranteedPhiKotlinIRSelection>()
+    val stringBuilderBackingArrayProjectionPlans =
+        IdentityHashMap<IrSimpleFunction, ArcStringBuilderBackingArrayProjectionPlan>()
     val canonicalLockedReadPlans = resolveCanonicalLockedReadPlans(generationState, input.module)
     canonicalLockedReadPlans.forEach { plan ->
         lockedReadResultSlotForwardingCalls[plan.tailCall] = plan
@@ -760,6 +764,17 @@ internal fun runArcOwnershipPlanning(
             }
 
             override fun visitSimpleFunction(declaration: IrSimpleFunction) {
+                selectVerifiedStringBuilderBackingArrayProjection(generationState, declaration)?.let { plan ->
+                    check(stringBuilderBackingArrayProjectionPlans.put(declaration, plan) == null) {
+                        "duplicate StringBuilder backing-array projection: ${declaration.fqNameForIrSerialization}"
+                    }
+                    borrowedStrongCallFieldLoads += plan.backingFieldLoad
+                    generationState.context.log {
+                        "ARC StringBuilder backing-array projection " +
+                                "${declaration.fqNameForIrSerialization.asString()} -> " +
+                                plan.consumer.symbol.owner.fqNameForIrSerialization.asString()
+                    }
+                }
                 selectVerifiedBranchGuaranteedPhiWeb(generationState, declaration)?.let { selection ->
                     check(branchGuaranteedPhiSelections.put(declaration, selection) == null) {
                         "duplicate branch guaranteed-phi selection: ${declaration.fqNameForIrSerialization}"
@@ -964,6 +979,7 @@ internal fun runArcOwnershipPlanning(
             coroutineGuaranteedPhiSelections,
             matchingSetLocalAliases,
             branchGuaranteedPhiSelections,
+            stringBuilderBackingArrayProjectionPlans,
         ),
     )
 }

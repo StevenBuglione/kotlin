@@ -1,0 +1,10 @@
+real_ir_mode=linux_x64,opt,arc,no_debug,no_diagnostics,no_sanitizer,no_coverage
+selected_count=3
+ARC StringBuilder backing-array projection kotlin.text.StringBuilder.append(kotlin.Int) -> kotlin.text.insertInt
+ARC StringBuilder backing-array projection kotlin.text.StringBuilder.append(kotlin.String?) -> kotlin.text.insertString
+ARC StringBuilder backing-array projection kotlin.text.StringBuilder.toString() -> kotlin.text.unsafeStringFromCharArray
+insertString_wrapper=nonexternal,final,nonsuspend,3_parameters,3_arguments
+insertString_wrapper_body=one_exact_5_arg_GCUnsafe_call,one_String_length_call,one_array_read,no_other_calls,no_nested_function
+shared_backing_field=array,private,nonstatic,strong,CharArray,same_IrField_identity_for_all_three
+dependency_static_cache_unbound_consumer=conservative_fallback,kotlinx_cli_cache_passed
+production_stdlib_cache=forced_rebuild_passed

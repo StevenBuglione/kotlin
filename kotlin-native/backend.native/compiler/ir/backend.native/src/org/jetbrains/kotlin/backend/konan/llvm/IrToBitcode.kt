@@ -29,6 +29,8 @@ import org.jetbrains.kotlin.backend.konan.arc.ArcBranchGuaranteedPhiExactBinding
 import org.jetbrains.kotlin.backend.konan.arc.ArcBranchGuaranteedPhiKotlinIRSelection
 import org.jetbrains.kotlin.backend.konan.arc.ArcSemanticEmissionActionId
 import org.jetbrains.kotlin.backend.konan.arc.ArcSemanticPhiEmissionLedger
+import org.jetbrains.kotlin.backend.konan.arc.ArcStringBuilderBackingArrayProjectionConsumptionLedger
+import org.jetbrains.kotlin.backend.konan.arc.ArcStringBuilderBackingArrayProjectionPlan
 import org.jetbrains.kotlin.backend.konan.arc.hasExactCoroutinePhysicalBackedge
 import org.jetbrains.kotlin.backend.konan.arc.unwrapExactArcCoroutineSpillRead
 import org.jetbrains.kotlin.backend.konan.optimizations.ARC_SELECTIVE_INLINE_METADATA
@@ -257,6 +259,43 @@ internal class CodeGeneratorVisitor(
     private var currentMatchingSetLocalAliasEmission: MatchingSetLocalAliasEmission? = null
     private var currentSafeContinuationResumeBorrowEmission: SafeContinuationResumeBorrowEmission? = null
     private var currentBranchGuaranteedPhiEmission: BranchGuaranteedPhiEmission? = null
+    private var currentStringBuilderBackingArrayProjectionEmission:
+            StringBuilderBackingArrayProjectionEmission? = null
+
+    /** Consumes one exact StringBuilder backing-field projection inside its authenticated call. */
+    private inner class StringBuilderBackingArrayProjectionEmission(
+        val plan: ArcStringBuilderBackingArrayProjectionPlan,
+    ) {
+        private val ledger = ArcStringBuilderBackingArrayProjectionConsumptionLedger(plan)
+        private var activeConsumer: IrCall? = null
+
+        fun beginConsumer(call: IrCall) {
+            check(call === plan.consumer && activeConsumer == null) {
+                "StringBuilder backing-array consumer identity drift: ${ir2string(call)}"
+            }
+            activeConsumer = call
+        }
+
+        fun markLoad(load: IrGetField) {
+            val consumer = activeConsumer
+            check(load === plan.backingFieldLoad && consumer === plan.consumer) {
+                "StringBuilder backing-array load escaped its authenticated consumer: ${ir2string(load)}"
+            }
+            ledger.consume(load, requireNotNull(consumer))
+        }
+
+        fun endConsumer(call: IrCall) {
+            check(call === plan.consumer && activeConsumer === call) {
+                "StringBuilder backing-array consumer boundary drift: ${ir2string(call)}"
+            }
+            activeConsumer = null
+        }
+
+        fun verifyConsumed() {
+            check(activeConsumer == null) { "unterminated StringBuilder backing-array consumer" }
+            ledger.verifyComplete()
+        }
+    }
 
     /** Consumes one exact non-suspend SemanticARC diamond as a promotable non-owning local. */
     private inner class BranchGuaranteedPhiEmission(
@@ -1157,6 +1196,8 @@ internal class CodeGeneratorVisitor(
         val previousMatchingSetLocalAliasEmission = currentMatchingSetLocalAliasEmission
         val previousSafeContinuationResumeBorrowEmission = currentSafeContinuationResumeBorrowEmission
         val previousBranchGuaranteedPhiEmission = currentBranchGuaranteedPhiEmission
+        val previousStringBuilderBackingArrayProjectionEmission =
+                currentStringBuilderBackingArrayProjectionEmission
         currentDiscardedReturnedReceiverSeedSlots = IdentityHashMap()
         currentCoroutineGuaranteedPhiEmission = (declaration as? IrSimpleFunction)?.let {
             arcOwnership.coroutineGuaranteedPhiSelections[it]
@@ -1170,6 +1211,9 @@ internal class CodeGeneratorVisitor(
         currentBranchGuaranteedPhiEmission = (declaration as? IrSimpleFunction)?.let {
             arcOwnership.branchGuaranteedPhiSelections[it]
         }?.let(::BranchGuaranteedPhiEmission)
+        currentStringBuilderBackingArrayProjectionEmission = (declaration as? IrSimpleFunction)?.let {
+            arcOwnership.stringBuilderBackingArrayProjectionPlans[it]
+        }?.let(::StringBuilderBackingArrayProjectionEmission)
         currentArcOwnedResultForwarding = if (!context.shouldContainDebugInfo()) {
             (declaration as? IrSimpleFunction)?.let { arcOwnership.ownedResultForwarding[it] }
         } else {
@@ -1212,6 +1256,7 @@ internal class CodeGeneratorVisitor(
                                 currentMatchingSetLocalAliasEmission?.verifyConsumed()
                                 currentSafeContinuationResumeBorrowEmission?.verifyConsumed()
                                 currentBranchGuaranteedPhiEmission?.verifyConsumed()
+                                currentStringBuilderBackingArrayProjectionEmission?.verifyConsumed()
                             }
                         }
                     }
@@ -1224,6 +1269,8 @@ internal class CodeGeneratorVisitor(
             currentMatchingSetLocalAliasEmission = previousMatchingSetLocalAliasEmission
             currentSafeContinuationResumeBorrowEmission = previousSafeContinuationResumeBorrowEmission
             currentBranchGuaranteedPhiEmission = previousBranchGuaranteedPhiEmission
+            currentStringBuilderBackingArrayProjectionEmission =
+                    previousStringBuilderBackingArrayProjectionEmission
         }
 
 
@@ -2377,6 +2424,18 @@ internal class CodeGeneratorVisitor(
             value in arcOwnership.borrowedStrongCallFieldLoads ||
             value in arcOwnership.rootedProjectionFieldLoads
         ) {
+            currentStringBuilderBackingArrayProjectionEmission?.let { emission ->
+                if (value === emission.plan.backingFieldLoad) {
+                    require(context.memoryModel == MemoryModel.ARC &&
+                            context.config.target == KonanTarget.LINUX_X64 &&
+                            context.config.optimizationsEnabled && !context.shouldContainAnyDebugInfo() &&
+                            !context.config.arcDiagnosticsEnabled && context.config.sanitizer == null &&
+                            !context.config.undefinedBehaviorSanitizer && !generationState.coverage.enabled) {
+                        "StringBuilder backing-array projection escaped its exact compilation mode"
+                    }
+                    emission.markLoad(value)
+                }
+            }
             currentSafeContinuationResumeBorrowEmission?.let { emission ->
                 if (value in emission.plan.borrowedResultRefLoads) emission.markLoad(value)
             }
@@ -2906,6 +2965,19 @@ internal class CodeGeneratorVisitor(
 
     //-------------------------------------------------------------------------//
     private fun evaluateCall(value: IrFunctionAccessExpression, resultSlot: LLVMValueRef?): LLVMValueRef {
+        val call = value as? IrCall ?: return evaluateCallBody(value, resultSlot)
+        val projection = currentStringBuilderBackingArrayProjectionEmission?.takeIf {
+            call === it.plan.consumer
+        } ?: return evaluateCallBody(value, resultSlot)
+        projection.beginConsumer(call)
+        return try {
+            evaluateCallBody(value, resultSlot)
+        } finally {
+            projection.endConsumer(call)
+        }
+    }
+
+    private fun evaluateCallBody(value: IrFunctionAccessExpression, resultSlot: LLVMValueRef?): LLVMValueRef {
         context.log{"evaluateCall                   : ${ir2string(value)}"}
         if (value is IrCall) currentCoroutineGuaranteedPhiEmission?.markCall(value)
 
