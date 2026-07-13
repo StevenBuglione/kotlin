@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "symbol": "kfun:$coroutinesWork$lambda$1$FUNCTION_REFERENCE$1.invoke#internal",
+  "operation": "UpdateReturnRefRelaxed",
+  "method": "Locate the exact objdump -d -C symbol, stop at the next top-level symbol, and count direct call instructions whose target is UpdateReturnRefRelaxed.",
+  "before": {
+    "wave": "wave-15-rooted-enum",
+    "host": "olfa@10.10.10.8",
+    "candidateCommit": "de6d755bfa72ea2b289a14cb2a0d858d9c9c7572",
+    "candidateTree": "dfdac4d3cb90ee55ae08f6762c1c808a4d50d874",
+    "binarySha256": "bd091b58771de25607aa005203b982ac82a650c744be8f53c26cf6f338dede18",
+    "disassemblySha256": "7f3bfceca65f354ea8d9759b1d22215f9fa9a444e95fe1b0c20a70a6235918b2",
+    "callCount": 4
+  },
+  "after": {
+    "wave": "wave-18-result-companion-immortal",
+    "host": "olfa@10.10.10.8",
+    "baseCommit": "158ed39dbe741f182e2faf2185b8f23c3761106e",
+    "candidateCommit": "4d235dc344e509955ed614e66d5fe1fb342ae0c8",
+    "candidateTree": "220158ee4361a206ab709fb9886fdfbf60913fb3",
+    "binarySha256": "05d8790da903ec85edd0fd5040d88700434f40b5209c6c411c2a9c584e075520",
+    "disassemblySha256": "e25a7bec4a240d2516eeb5df6847b0c2a8563e2202cece938a5c1b7583de01dd",
+    "symbolAddress": "0x42b100",
+    "callCount": 3,
+    "calls": [
+      { "address": "0x42b1d1", "target": "0x42eb10" },
+      { "address": "0x42b5db", "target": "0x42eb10" },
+      { "address": "0x42b693", "target": "0x42eb10" }
+    ]
+  },
+  "reduction": {
+    "absoluteCalls": 1,
+    "percent": 25.0,
+    "verified": true
+  }
+}

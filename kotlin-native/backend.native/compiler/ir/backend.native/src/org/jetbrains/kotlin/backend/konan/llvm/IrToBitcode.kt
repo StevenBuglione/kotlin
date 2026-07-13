@@ -18,6 +18,7 @@ import org.jetbrains.kotlin.backend.konan.arc.ArcReturnedReceiverSlotReuseEligib
 import org.jetbrains.kotlin.backend.konan.arc.ArcLockedReadCanonicalPlan
 import org.jetbrains.kotlin.backend.konan.arc.ArcDiscardedReturnedReceiverGroup
 import org.jetbrains.kotlin.backend.konan.arc.ArcRootedGlobalProjectionPlan
+import org.jetbrains.kotlin.backend.konan.arc.ArcResultCompanionImmortalLoadPlan
 import org.jetbrains.kotlin.backend.konan.arc.unwrapExactArcCoroutineSpillRead
 import org.jetbrains.kotlin.backend.konan.cexport.CAdapterCodegen
 import org.jetbrains.kotlin.backend.konan.cexport.CAdapterExportedElements
@@ -666,6 +667,14 @@ internal class CodeGeneratorVisitor(
             }
             if (variable in arcOwnership.borrowedGuaranteedAliases) {
                 require(value != null) { "Borrowed guaranteed alias must have an initializer: ${ir2string(variable)}" }
+                return functionGenerationContext.vars.createImmutable(variable, value)
+            }
+            if (variable in arcOwnership.resultCompanionImmortalVariables) {
+                require(context.memoryModel == MemoryModel.ARC && context.config.optimizationsEnabled &&
+                        !context.shouldContainDebugInfo() && !context.config.arcDiagnosticsEnabled &&
+                        value != null && !variable.isVar) {
+                    "Result.Companion immortal temporary escaped its verified declaration boundary: ${ir2string(variable)}"
+                }
                 return functionGenerationContext.vars.createImmutable(variable, value)
             }
             return functionGenerationContext.vars.createVariable(variable, value, variableLocation)
@@ -2454,6 +2463,13 @@ internal class CodeGeneratorVisitor(
     private fun evaluateCall(value: IrFunctionAccessExpression, resultSlot: LLVMValueRef?): LLVMValueRef {
         context.log{"evaluateCall                   : ${ir2string(value)}"}
 
+        if (value is IrCall) {
+            arcOwnership.resultCompanionImmortalLoadsByCall[value]?.let { plan ->
+                require(resultSlot == null) { "Result.Companion immortal load cannot initialize an owning result slot" }
+                return evaluateResultCompanionImmortalLoad(value, plan)
+            }
+        }
+
         if (value is IrCall && resultSlot == null) {
             arcOwnership.rootedGlobalProjections[value]?.let { plan ->
                 return evaluateRootedGlobalProjection(value, plan)
@@ -2600,6 +2616,38 @@ internal class CodeGeneratorVisitor(
             listOf(rootValue, llvm.int32(plan.getterId)),
             exceptionHandler = currentCodeContext.exceptionHandler,
             verbatim = true,
+        )
+    }
+
+    /** Emit the +0 value of the exact permanent stdlib Result.Companion static root. */
+    private fun evaluateResultCompanionImmortalLoad(
+        value: IrCall,
+        plan: ArcResultCompanionImmortalLoadPlan,
+    ): LLVMValueRef {
+        require(context.memoryModel == MemoryModel.ARC && context.config.optimizationsEnabled &&
+                !context.shouldContainDebugInfo() && !context.config.arcDiagnosticsEnabled &&
+                value === plan.call && value.symbol.owner === plan.getter &&
+                plan.getter.konanLibrary === plan.stdlibLibrary &&
+                value.dispatchReceiver == null && value.extensionReceiver == null &&
+                value.valueArgumentsCount == 0 && value.typeArgumentsCount == 0) {
+            "Result.Companion immortal load escaped its verified call identity"
+        }
+        val root = plan.rootField
+        require(root.isStatic && root.isFinal && root.type.classOrNull?.owner === plan.companionClass &&
+                root.konanLibrary === plan.stdlibLibrary &&
+                plan.companionClass.konanLibrary === plan.stdlibLibrary &&
+                plan.resultClass.konanLibrary === plan.stdlibLibrary &&
+                plan.companionClass.parent === plan.resultClass) {
+            "Result.Companion immortal root lost its exact declaration shape"
+        }
+        if (context.config.threadsAreAllowed && root.isGlobalNonPrimitive(context)) {
+            functionGenerationContext.checkGlobalsAccessible(currentCodeContext.exceptionHandler)
+        }
+        return functionGenerationContext.loadSlot(
+            staticFieldPtr(root, functionGenerationContext),
+            false,
+            null,
+            alignment = generationState.llvmDeclarations.forStaticField(root).alignment,
         )
     }
 
@@ -2891,7 +2939,6 @@ internal class CodeGeneratorVisitor(
                                      verifiedReturnedReceiverBorrow: Boolean = false): LLVMValueRef {
         val function = callee.symbol.owner
         require(!function.isSuspend) { "Suspend functions should be lowered out at this point"}
-
         return when {
             function.isTypedIntrinsic -> intrinsicGenerator.evaluateCall(callee, args, resultSlot)
             function.isBuiltInOperator -> evaluateOperatorCall(callee, args)

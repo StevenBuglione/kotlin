@@ -14,6 +14,33 @@ import org.junit.Test
 
 class ArcOwnershipIRAdapterTest {
     @Test
+    fun resultCompanionImmortalLoadFailsClosedForEveryRequiredFact() {
+        val accepted = ArcResultCompanionImmortalLoadEligibility(
+            arcEnabled = true,
+            optimizationsEnabled = true,
+            debugInfoDisabled = true,
+            diagnosticsDisabled = true,
+            suspendLikeFunction = true,
+            exactInlineTemporary = true,
+            immutableReferenceTemporary = true,
+            exactGetterCall = true,
+            zeroReads = true,
+            zeroWrites = true,
+        )
+        assertTrue(accepted.isAuthorized())
+        assertFalse(accepted.copy(arcEnabled = false).isAuthorized())
+        assertFalse(accepted.copy(optimizationsEnabled = false).isAuthorized())
+        assertFalse(accepted.copy(debugInfoDisabled = false).isAuthorized())
+        assertFalse(accepted.copy(diagnosticsDisabled = false).isAuthorized())
+        assertFalse(accepted.copy(suspendLikeFunction = false).isAuthorized())
+        assertFalse(accepted.copy(exactInlineTemporary = false).isAuthorized())
+        assertFalse(accepted.copy(immutableReferenceTemporary = false).isAuthorized())
+        assertFalse(accepted.copy(exactGetterCall = false).isAuthorized())
+        assertFalse(accepted.copy(zeroReads = false).isAuthorized())
+        assertFalse(accepted.copy(zeroWrites = false).isAuthorized())
+    }
+
+    @Test
     fun stringConcatenationRCIdentityRequiresAWebAndKeepsExceptionalBarriers() {
         assertFalse(proveLinearStringBuilderRCIdentity(0))
         assertFalse(proveLinearStringBuilderRCIdentity(1))

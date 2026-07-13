@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "verified": true,
+  "host": "olfa@10.10.10.8",
+  "worktree": "/home/olfa/codex-kotlin-arc-primary-bench",
+  "baseCommit": "158ed39dbe741f182e2faf2185b8f23c3761106e",
+  "candidateCommit": "4d235dc344e509955ed614e66d5fe1fb342ae0c8",
+  "candidateTree": "220158ee4361a206ab709fb9886fdfbf60913fb3",
+  "focusedMatrix": {
+    "exitCode": 0,
+    "logPath": "/tmp/w18-result-final.log",
+    "logSha256": "16f8829df1d441b6278612cbcd5025f9887393fd318738f4eea756e013f94823",
+    "tasks": [
+      ":kotlin-native:backend.native:tests:test",
+      ":kotlin-native:backend.native:tests:arc_result_companion_immortal_load",
+      ":kotlin-native:backend.native:tests:filecheck_arc_result_companion_immortal_load",
+      ":kotlin-native:backend.native:tests:filecheck_arc_result_companion_immortal_load_debug",
+      ":kotlin-native:backend.native:tests:filecheck_arc_result_companion_immortal_load_noopt",
+      ":kotlin-native:backend.native:tests:filecheck_arc_result_companion_immortal_load_diagnostics",
+      ":kotlin-native:backend.native:tests:filecheck_arc_result_companion_immortal_load_strict"
+    ]
+  },
+  "benchmark": {
+    "fixture": "tools/arc/fixtures/benchmark.kt",
+    "fixtureSha256": "e69a89cda9684c695a7dedd90808ab20375fe32c1e589fbe1d2ebf028142e35b",
+    "fixtureHashMatchesInputs": true,
+    "scenario": "coroutines",
+    "warmupsPerModel": 1,
+    "runtimeRepetitionsPerModel": 9,
+    "compileRepetitionsPerModel": 3,
+    "runtimeRows": 18,
+    "compileRows": 6,
+    "expectedOutput": "ARC_BENCH_OK scenario=coroutines checksum=45000150000 operations=300000 allocations=900000",
+    "allRuntimeOutputLogsMatched": true,
+    "runtimeOutputLogSha256": "700a67f8ff942f3d25192cfdd37e3158a57719c3a63bf4b9e3ea6447b5db7105",
+    "candidateMedianSeconds": 0.136541118,
+    "baselineMedianSeconds": 0.108128968,
+    "throughputRatioPercent": 79.192,
+    "candidatePeakRssKiB": 2684,
+    "gatePassed": false,
+    "gateFailureIsExpectedRemainingCoroutineRegression": true
+  },
+  "artifactSha256": {
+    "baseline-provenance.json": "59f1d3e7d7515e081436f896384e8baca079aacc4b665c5f654abdec70df4fb1",
+    "candidate-provenance.json": "498d904c969b5beda0b92824d52104dfc68a6ac94fc8f82fd3112493ed4ba5ad",
+    "comparison.md": "fa4ce9bd65a8ea2565fa17919e70e4046cda880888f234eca852fac554e98018",
+    "compile-raw.tsv": "737c9e5f17e1851af72262624b13300471aa451bfe413a06e3719ceb49f90d15",
+    "hardware.json": "ecd52b3450dc8f50c29458779319b747379b4b94a05fe890adc483c795edf530",
+    "inputs.json": "45271c551bf4458442300c30ce044b86805c53167f40c7090c0b4ff78c6b5978",
+    "raw.json": "dcba9c44763b6c3957f54b7bb425e0f0f23c8385b9c88a2f3f88494a0f0d89cf",
+    "raw.tsv": "695b42a25e97edff8a785a065faf3e5d9ccfadaf078c9787e8dd05201b0d1517",
+    "static.tsv": "1dbd3cde17f92413699298eedd9cd697465a5633d2c688bfa2c7a8df8e5897a4",
+    "summary.json": "6d586e291f86071c2dfc7a612d88e3d8496ce471d5c27893887bf35ad7ebbef8",
+    "summary.tsv": "473a8e683787678a653b974f18922965d737b32ecbb2e23c87eb66e5a2a2ad11"
+  }
+}

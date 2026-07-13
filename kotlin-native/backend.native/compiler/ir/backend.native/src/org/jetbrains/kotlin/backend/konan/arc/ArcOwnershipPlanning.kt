@@ -145,6 +145,8 @@ internal data class ArcCodegenOwnershipPlan(
     val mutableConstructorInitializers: Set<IrVariable>,
     val scopedArcReferenceLoads: Map<IrCall, IrExpression>,
     val rootedGlobalProjections: Map<IrCall, ArcRootedGlobalProjectionPlan>,
+    val resultCompanionImmortalLoadsByCall: Map<IrCall, ArcResultCompanionImmortalLoadPlan>,
+    val resultCompanionImmortalVariables: Set<IrVariable>,
 ) {
     val scopedArcReferenceLoadBoundaries: Set<IrExpression> =
         Collections.newSetFromMap(IdentityHashMap<IrExpression, Boolean>()).apply {
@@ -178,6 +180,8 @@ internal data class ArcCodegenOwnershipPlan(
             mutableConstructorInitializers = emptySet(),
             scopedArcReferenceLoads = emptyMap(),
             rootedGlobalProjections = emptyMap(),
+            resultCompanionImmortalLoadsByCall = emptyMap(),
+            resultCompanionImmortalVariables = emptySet(),
         )
     }
 }
@@ -591,6 +595,15 @@ internal fun runArcOwnershipPlanning(
     val mutableConstructorInitializers = linkedSetOf<IrVariable>()
     val scopedArcReferenceLoads = linkedMapOf<IrCall, IrExpression>()
     val rootedGlobalProjections = selectVerifiedRootedGlobalProjections(generationState, input.module)
+    val resultCompanionImmortalLoads = selectVerifiedResultCompanionImmortalLoads(generationState, input.module)
+    val resultCompanionImmortalLoadsByCall = Collections.synchronizedMap(
+        IdentityHashMap<IrCall, ArcResultCompanionImmortalLoadPlan>()
+    )
+    val resultCompanionImmortalVariables = Collections.newSetFromMap(IdentityHashMap<IrVariable, Boolean>())
+    resultCompanionImmortalLoads.forEach { plan ->
+        resultCompanionImmortalLoadsByCall[plan.call] = plan
+        resultCompanionImmortalVariables += plan.variable
+    }
     // ArcReferencesLowering removes the source annotation and may remove the property/accessor
     // association before this planner runs. Discover exact rewritten function symbols first so
     // call-site selection neither depends on declaration order nor guesses from lowered names.
@@ -763,6 +776,8 @@ internal fun runArcOwnershipPlanning(
             mutableConstructorInitializers,
             scopedArcReferenceLoads,
             rootedGlobalProjections,
+            resultCompanionImmortalLoadsByCall,
+            resultCompanionImmortalVariables,
         ),
     )
 }

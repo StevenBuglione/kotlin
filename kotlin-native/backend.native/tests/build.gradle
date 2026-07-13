@@ -3387,6 +3387,13 @@ standaloneTest("arc_joined_reference_slot") {
     source = "codegen/arc/joinedReferenceSlot.kt"
 }
 
+standaloneTest("arc_result_companion_immortal_load") {
+    enabled = project.target.name == "linux_x64" && isArcMM
+    flags = ["-opt"]
+    useGoldenData = true
+    source = "codegen/arc/resultCompanionImmortalLoad.kt"
+}
+
 standaloneTest("arc_returned_receiver_borrow") {
     enabled = project.target.name == "linux_x64" && isArcMM
     flags = ["-opt"]
@@ -6840,6 +6847,45 @@ fileCheckTest("filecheck_arc_safe_continuation_get_or_throw_diagnostics") {
 fileCheckTest("filecheck_arc_safe_continuation_get_or_throw_strict") {
     enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
     annotatedSource = project.file('codegen/arc/safeContinuationGetOrThrow.kt')
+    checkPrefix = "STRICT"
+    extraOpts = ["-opt", "-memory-model", "strict"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_result_companion_immortal_load") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('codegen/arc/resultCompanionImmortalLoad.kt')
+    checkPrefix = "OPT"
+    extraOpts = ["-opt"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_result_companion_immortal_load_debug") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('codegen/arc/resultCompanionImmortalLoad.kt')
+    checkPrefix = "DEBUG"
+    extraOpts = ["-opt", "-g"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_result_companion_immortal_load_noopt") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('codegen/arc/resultCompanionImmortalLoad.kt')
+    checkPrefix = "NOOPT"
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_result_companion_immortal_load_diagnostics") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('codegen/arc/resultCompanionImmortalLoad.kt')
+    checkPrefix = "DIAGNOSTICS"
+    extraOpts = ["-opt", "-Xbinary=arcLeakCheck=report"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_result_companion_immortal_load_strict") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('codegen/arc/resultCompanionImmortalLoad.kt')
     checkPrefix = "STRICT"
     extraOpts = ["-opt", "-memory-model", "strict"]
     phaseToCheck = "Codegen"
