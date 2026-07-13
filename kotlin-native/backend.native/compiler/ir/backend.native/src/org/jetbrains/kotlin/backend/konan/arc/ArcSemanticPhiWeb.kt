@@ -234,6 +234,7 @@ internal object ArcSemanticPhiWebAnalysis {
                         inferOwnership(seed.guaranteedSource, definitions, mutableSetOf()) != ArcOwnership.Guaranteed ||
                         seed.anchorDependencies.isEmpty() || seed.anchorDependencies.any { it !in definitions } ||
                         actualDependencies == null || claimedDependencies != actualDependencies ||
+                        actualDependencies.any { it in members } ||
                         !seedScopeDominatesCopy(seed, input.cfg, definitions)
             }
             if (invalidSeed != null) {
@@ -764,4 +765,20 @@ private fun ArcSSAOperation.unsupportedSlotTransferValue(): ArcSSAValue? = when 
     is ArcSSAOperation.JoinSlot -> value
     is ArcSSAOperation.MoveOwned -> value
     else -> null
+}
+
+private fun ArcSSAOperation.semanticOperationName(): String = when (this) {
+    is ArcSSAOperation.Introduce -> "Introduce"
+    is ArcSSAOperation.Forward -> "Forward"
+    is ArcSSAOperation.Reborrow -> "Reborrow"
+    is ArcSSAOperation.Join -> "Join"
+    is ArcSSAOperation.InitializeOwned -> "InitializeOwned"
+    is ArcSSAOperation.InitializeImmortal -> "InitializeImmortal"
+    is ArcSSAOperation.JoinSlot -> "JoinSlot"
+    is ArcSSAOperation.Borrow -> "Borrow"
+    is ArcSSAOperation.EndBorrow -> "EndBorrow"
+    is ArcSSAOperation.MoveOwned -> "MoveOwned"
+    is ArcSSAOperation.DestroyOwned -> "DestroyOwned"
+    is ArcSSAOperation.Use -> "Use"
+    is ArcSSAOperation.DeinitBarrier -> "DeinitBarrier"
 }

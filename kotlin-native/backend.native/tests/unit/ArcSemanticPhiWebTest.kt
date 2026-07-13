@@ -114,6 +114,36 @@ class ArcSemanticPhiWebTest {
     }
 
     @Test
+    fun loopProjectionCannotUseTransformedPhiAsItsOwnLifetimeAnchor() {
+        val result = ArcSemanticPhiWebAnalysis.analyze(selfAnchoredLoopFixture(indirectAnchor = false))
+
+        assertTrue(result.accepted.isEmpty())
+        assertEquals(
+            ArcSemanticARCRejectionReason.InvalidGuaranteedSeed,
+            result.rejected.single().reason,
+        )
+    }
+
+    @Test
+    fun forwardedLoopProjectionCannotHideTransformedSelfAnchor() {
+        val result = ArcSemanticPhiWebAnalysis.analyze(selfAnchoredLoopFixture(indirectAnchor = true))
+
+        assertTrue(result.accepted.isEmpty())
+        assertEquals(
+            ArcSemanticARCRejectionReason.InvalidGuaranteedSeed,
+            result.rejected.single().reason,
+        )
+    }
+
+    @Test
+    fun loopPhiWithExternalLifetimeAnchorRemainsValid() {
+        val result = ArcSemanticPhiWebAnalysis.analyze(loopFixture(ArcSSAUseKind.Borrow))
+
+        assertTrue(result.rejected.toString(), result.rejected.isEmpty())
+        assertEquals(setOf(ArcSSAValue("loopAnchor")), result.accepted.single().canonicalRCRoots)
+    }
+
+    @Test
     fun loopCarriedConsumeIsRejectedBecauseOneStaticConsumeCanExecuteRepeatedly() {
         val fixture = loopFixture(ArcSSAUseKind.Consume)
         val result = ArcSemanticPhiWebAnalysis.analyze(fixture)
@@ -421,6 +451,64 @@ class ArcSemanticPhiWebTest {
             exit to block(exit),
         ), setOf(ArcSSAEdge(entry, header), ArcSSAEdge(header, body), ArcSSAEdge(body, header), ArcSSAEdge(header, exit)))
         return ArcSemanticARCInput(cfg, setOf(ArcGuaranteedCopySeed(copy, source, setOf(anchor))))
+    }
+
+    /**
+     * Models `current = current.completion`: the projected value's guaranteed lifetime is rooted
+     * in the old loop phi. Converting the complete phi web to guaranteed would replace that root
+     * on the backedge and leave the projection dangling. A forwarded alias must not hide it.
+     */
+    private fun selfAnchoredLoopFixture(indirectAnchor: Boolean): ArcSemanticARCInput {
+        val externalAnchor = ArcSSAValue("externalAnchor")
+        val initialSource = ArcSSAValue("initialSource")
+        val initialCopy = ArcSSAValue("initialCopy")
+        val phi = ArcSSAValue("selfAnchoredPhi")
+        val forwardedAnchor = ArcSSAValue("forwardedSelfAnchor")
+        val projectedSource = ArcSSAValue("projectedSource")
+        val projectedCopy = ArcSSAValue("projectedCopy")
+        val header = ArcBlockId("selfAnchoredHeader")
+        val body = ArcBlockId("selfAnchoredBody")
+        val projectionAnchor = if (indirectAnchor) forwardedAnchor else phi
+        val bodyOperations = buildList {
+            if (indirectAnchor) add(ArcSSAOperation.Forward(phi, forwardedAnchor))
+            add(ArcSSAOperation.Introduce(
+                projectedSource,
+                ArcOwnership.Guaranteed,
+                setOf(projectionAnchor),
+            ))
+            add(ArcSSAOperation.Introduce(projectedCopy, ArcOwnership.Owned))
+        }
+        val cfg = ArcOwnershipSSAInput(
+            entry,
+            linkedMapOf(
+                entry to block(
+                    entry,
+                    ArcSSAOperation.Introduce(externalAnchor, ArcOwnership.Immortal),
+                    ArcSSAOperation.Introduce(initialSource, ArcOwnership.Guaranteed, setOf(externalAnchor)),
+                    ArcSSAOperation.Introduce(initialCopy, ArcOwnership.Owned),
+                ),
+                header to block(
+                    header,
+                    ArcSSAOperation.Join(phi, linkedMapOf(entry to initialCopy, body to projectedCopy)),
+                    ArcSSAOperation.Use(phi, ArcSSAUseKind.Borrow),
+                ),
+                body to ArcSSABlock(body, bodyOperations),
+                exit to block(exit),
+            ),
+            setOf(
+                ArcSSAEdge(entry, header),
+                ArcSSAEdge(header, body),
+                ArcSSAEdge(body, header),
+                ArcSSAEdge(header, exit),
+            ),
+        )
+        return ArcSemanticARCInput(
+            cfg,
+            setOf(
+                ArcGuaranteedCopySeed(initialCopy, initialSource, setOf(externalAnchor)),
+                ArcGuaranteedCopySeed(projectedCopy, projectedSource, setOf(projectionAnchor)),
+            ),
+        )
     }
 
     private fun block(id: ArcBlockId, vararg operations: ArcSSAOperation) = ArcSSABlock(id, operations.toList())
