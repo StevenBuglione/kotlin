@@ -261,6 +261,8 @@ std::vector<const char*> arcDeinitOrder;
 std::atomic<bool> arcDeinitFieldWasAlive = false;
 std::atomic<bool> arcDeinitResurrectionRejected = false;
 ObjHeader* arcDeinitException = nullptr;
+std::atomic<int> arcFieldDestroyThunkCalls = 0;
+std::atomic<int> forgedLegacyMarkCallbackCalls = 0;
 
 extern "C" OBJ_GETTER(Konan_WeakReferenceCounterLegacyMM_get, ObjHeader* counter);
 
@@ -327,6 +329,15 @@ void secondFrameArcDestroy(ObjHeader*) {
 void derivedArcDestroyWithField(ObjHeader* object) {
     derivedArcDestroy(object);
     arcDeinitFieldWasAlive.store(Node::FromObjHeader(object)->next != nullptr, std::memory_order_relaxed);
+}
+
+void generatedArcFieldDestroyThunk(void*, ObjHeader* object) {
+    arcFieldDestroyThunkCalls.fetch_add(1, std::memory_order_relaxed);
+    ZeroHeapRef(&Node::FromObjHeader(object)->next);
+}
+
+void forgedLegacyMarkCallback(void*, ObjHeader*) {
+    forgedLegacyMarkCallbackCalls.fetch_add(1, std::memory_order_relaxed);
 }
 
 void throwingArcDestroy(ObjHeader*) {
@@ -1131,6 +1142,80 @@ TEST(ArcDestructionTest, StrongCycleSurvivesUntilExplicitlyBroken) {
 
         UpdateHeapRef(nextSlot(firstObject), nullptr);
         EXPECT_EQ(finalizedNodes.load(std::memory_order_relaxed), 2);
+    });
+}
+
+TEST(ArcDestructionTest, FlaggedFieldDestroyThunkUsesCanonicalBarrierAndLegacyCallbackFallsBack) {
+    ScopedNodeFinalizerHook finalizers;
+    kotlin::RunInNewThread([] {
+        arcFieldDestroyThunkCalls.store(0, std::memory_order_relaxed);
+        forgedLegacyMarkCallbackCalls.store(0, std::memory_order_relaxed);
+
+        kotlin::test_support::TypeInfoHolder thunkType{
+                kotlin::test_support::TypeInfoHolder::ObjectBuilder<NodePayload>()
+                        .addFlag(TF_HAS_ARC_DESTROY_THUNK)};
+        thunkType.typeInfo()->processObjectInMark = generatedArcFieldDestroyThunk;
+        {
+            ObjHolder object;
+            ObjHolder child;
+            ObjHeader* allocated = AllocInstance(thunkType.typeInfo(), object.slot());
+            ObjHeader* allocatedChild = AllocInstance(nodeTypeInfo.typeInfo(), child.slot());
+            UpdateHeapRef(&Node::FromObjHeader(allocated)->next, allocatedChild);
+            child.clear();
+            object.clear();
+        }
+        EXPECT_EQ(arcFieldDestroyThunkCalls.load(std::memory_order_relaxed), 1);
+        EXPECT_EQ(finalizedNodes.load(std::memory_order_relaxed), 1);
+
+        // A class-specific callback from an old KLIB is not a destroy thunk without the new flag.
+        // The metadata fallback must release its field and must never invoke the forged callback.
+        kotlin::test_support::TypeInfoHolder legacyType{
+                kotlin::test_support::TypeInfoHolder::ObjectBuilder<NodePayload>()};
+        legacyType.typeInfo()->processObjectInMark = forgedLegacyMarkCallback;
+        {
+            ObjHolder object;
+            ObjHolder child;
+            ObjHeader* allocated = AllocInstance(legacyType.typeInfo(), object.slot());
+            ObjHeader* allocatedChild = AllocInstance(nodeTypeInfo.typeInfo(), child.slot());
+            UpdateHeapRef(&Node::FromObjHeader(allocated)->next, allocatedChild);
+            child.clear();
+            object.clear();
+        }
+        EXPECT_EQ(forgedLegacyMarkCallbackCalls.load(std::memory_order_relaxed), 0);
+        EXPECT_EQ(finalizedNodes.load(std::memory_order_relaxed), 2);
+    });
+}
+
+TEST(ArcDestructionTest, FieldDestroyThunkReleasesInitializedFieldsAfterConstructorFailure) {
+    ScopedNodeFinalizerHook finalizers;
+    kotlin::RunInNewThread([] {
+        arcDeinitOrder.clear();
+        arcFieldDestroyThunkCalls.store(0, std::memory_order_relaxed);
+
+        kotlin::test_support::TypeInfoHolder baseType{
+                kotlin::test_support::TypeInfoHolder::ObjectBuilder<Payload>().setArcDestroy(baseArcDestroy)};
+        kotlin::test_support::TypeInfoHolder derivedType{
+                kotlin::test_support::TypeInfoHolder::ObjectBuilder<NodePayload>()
+                        .addFlag(TF_HAS_ARC_DESTROY_THUNK)
+                        .setSuperType(baseType.typeInfo())
+                        .setArcDestroy(derivedArcDestroy)};
+        derivedType.typeInfo()->processObjectInMark = generatedArcFieldDestroyThunk;
+
+        ObjHolder object;
+        ObjHolder child;
+        ObjHeader* allocated = AllocInstance(derivedType.typeInfo(), object.slot());
+        ObjHeader* allocatedChild = AllocInstance(nodeTypeInfo.typeInfo(), child.slot());
+        UpdateHeapRef(&Node::FromObjHeader(allocated)->next, allocatedChild);
+        child.clear();
+
+        // Model a derived-constructor failure after successful base delegation and one field store.
+        Kotlin_ArcMarkDeinitInitialized(allocated, baseType.typeInfo());
+        object.clear();
+
+        ASSERT_EQ(arcDeinitOrder.size(), 1u);
+        EXPECT_STREQ(arcDeinitOrder[0], "base");
+        EXPECT_EQ(arcFieldDestroyThunkCalls.load(std::memory_order_relaxed), 1);
+        EXPECT_EQ(finalizedNodes.load(std::memory_order_relaxed), 1);
     });
 }
 

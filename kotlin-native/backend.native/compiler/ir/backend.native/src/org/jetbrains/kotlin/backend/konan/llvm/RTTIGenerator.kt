@@ -22,6 +22,8 @@ internal class RTTIGenerator(
         private val referencedFunctions: Set<IrFunction>?,
 ) : ContextUtils {
 
+    private val codegen by lazy { CodeGenerator(generationState) }
+
     private val acyclicCache = mutableMapOf<IrType, Boolean>()
     private val safeAcyclicFieldTypes = setOf(
             context.irBuiltIns.stringClass,
@@ -256,6 +258,11 @@ internal class RTTIGenerator(
         } else {
             null
         }
+        val arcFieldDestroyThunk = if (context.config.memoryModel == MemoryModel.ARC) {
+            genArcFieldDestroyThunk(irClass, bodyType)
+        } else {
+            null
+        }
         val typeInfo = TypeInfo(
                 irClass.typeInfoPtr,
                 makeExtendedInfo(irClass),
@@ -266,11 +273,12 @@ internal class RTTIGenerator(
                 interfaceTableSize, interfaceTablePtr,
                 reflectionInfo.packageName,
                 reflectionInfo.relativeName,
-                flagsFromClass(irClass) or reflectionInfo.reflectionFlags,
+                flagsFromClass(irClass) or reflectionInfo.reflectionFlags or
+                        (if (arcFieldDestroyThunk != null) TF_HAS_ARC_DESTROY_THUNK else 0),
                 context.getLayoutBuilder(irClass).classId,
                 llvmDeclarations.writableTypeInfoGlobal?.pointer,
                 associatedObjects = genAssociatedObjects(irClass),
-                processObjectInMark = if (context.config.memoryModel == MemoryModel.ARC) null else when {
+                processObjectInMark = if (context.config.memoryModel == MemoryModel.ARC) arcFieldDestroyThunk else when {
                     irClass.symbol == context.ir.symbols.array -> llvm.Kotlin_processArrayInMark.toConstPointer()
                     else -> genProcessObjectInMark(bodyType)
                 },
@@ -505,6 +513,48 @@ internal class RTTIGenerator(
         }
     }
 
+    /**
+     * Emits an ARC-only, per-concrete-layout field destroyer in the existing TypeInfo callback slot.
+     *
+     * The slot is ABI-compatible with this `void(void*, ObjHeader*)` function. The first parameter
+     * remains reserved for the tracing state and is deliberately ignored. Each physical reference
+     * slot is cleared through the authoritative runtime barrier, preserving retain/release,
+     * diagnostics, and the iterative zero-count worklist semantics. Array elements remain on the
+     * runtime metadata path because their count is dynamic.
+     */
+    private fun genArcFieldDestroyThunk(irClass: IrClass, bodyType: LLVMTypeRef): ConstPointer? {
+        if (getElementType(irClass) != null) return null
+
+        val indicesOfObjectFields = getIndicesOfObjectFields(bodyType)
+        if (indicesOfObjectFields.isEmpty()) return null
+
+        val className = irClass.fqNameForIrSerialization
+        val functionProto = LlvmFunctionSignature(
+                returnType = LlvmRetType(llvm.voidType),
+                parameterTypes = listOf(
+                        LlvmParamType(llvm.int8PtrType),
+                        LlvmParamType(llvm.kObjHeaderPtr),
+                ),
+                functionAttributes = listOf(LlvmFunctionAttribute.NoUnwind),
+        ).toProto(
+                name = "karcdestroyfields:$className#internal",
+                origin = null,
+                linkage = LLVMLinkage.LLVMPrivateLinkage,
+        )
+
+        return generateFunctionNoRuntime(codegen, functionProto) {
+            val objectBody = bitcast(pointerType(bodyType), param(1))
+            // Match objOffsets_ exactly. Apart from preserving fallback semantics, its base-prefix
+            // layout and the ARC worklist's LIFO drain provide deterministic derived-to-base child
+            // destruction without recursive native calls.
+            indicesOfObjectFields.forEach { fieldIndex ->
+                val field = structGep(objectBody, fieldIndex, "arc.destroy.field")
+                llvm.zeroHeapRefFunction.buildCall(builder, listOf(field))
+            }
+            ret(null)
+        }.toConstPointer()
+    }
+
     // TODO: extract more code common with generate().
     fun generateSyntheticInterfaceImpl(
             irClass: IrClass,
@@ -655,3 +705,4 @@ private const val TF_HAS_FINALIZER = 64
 private const val TF_HAS_FREEZE_HOOK = 128
 private const val TF_REFLECTION_SHOW_PKG_NAME = 256
 private const val TF_REFLECTION_SHOW_REL_NAME = 512
+private const val TF_HAS_ARC_DESTROY_THUNK = 1024
