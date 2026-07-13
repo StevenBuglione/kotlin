@@ -151,6 +151,7 @@ internal data class ArcCodegenOwnershipPlan(
     val selectiveInlineStringAppendCalls: Set<IrCall>,
     val coroutineGuaranteedPhiSelections: Map<IrSimpleFunction, ArcCoroutineGuaranteedPhiIRSelection>,
     val matchingSetLocalAliases: Map<IrVariable, ArcMatchingSetLocalAliasIRSelection>,
+    val branchGuaranteedPhiSelections: Map<IrSimpleFunction, ArcBranchGuaranteedPhiKotlinIRSelection>,
 ) {
     val scopedArcReferenceLoadBoundaries: Set<IrExpression> =
         Collections.newSetFromMap(IdentityHashMap<IrExpression, Boolean>()).apply {
@@ -206,6 +207,7 @@ internal data class ArcCodegenOwnershipPlan(
             selectiveInlineStringAppendCalls = emptySet(),
             coroutineGuaranteedPhiSelections = emptyMap(),
             matchingSetLocalAliases = emptyMap(),
+            branchGuaranteedPhiSelections = emptyMap(),
         )
     }
 }
@@ -732,6 +734,7 @@ internal fun runArcOwnershipPlanning(
     val selectiveInlineStringAppendCalls = linkedSetOf<IrCall>()
     val coroutineGuaranteedPhiSelections = IdentityHashMap<IrSimpleFunction, ArcCoroutineGuaranteedPhiIRSelection>()
     val matchingSetLocalAliases = IdentityHashMap<IrVariable, ArcMatchingSetLocalAliasIRSelection>()
+    val branchGuaranteedPhiSelections = IdentityHashMap<IrSimpleFunction, ArcBranchGuaranteedPhiKotlinIRSelection>()
     val canonicalLockedReadPlans = resolveCanonicalLockedReadPlans(generationState, input.module)
     canonicalLockedReadPlans.forEach { plan ->
         lockedReadResultSlotForwardingCalls[plan.tailCall] = plan
@@ -757,6 +760,17 @@ internal fun runArcOwnershipPlanning(
             }
 
             override fun visitSimpleFunction(declaration: IrSimpleFunction) {
+                selectVerifiedBranchGuaranteedPhiWeb(generationState, declaration)?.let { selection ->
+                    check(branchGuaranteedPhiSelections.put(declaration, selection) == null) {
+                        "duplicate branch guaranteed-phi selection: ${declaration.fqNameForIrSerialization}"
+                    }
+                    generationState.context.log {
+                        "ARC branch guaranteed-phi selection " +
+                                "${declaration.fqNameForIrSerialization.asString()}: " +
+                                "actions=${selection.semanticSelection.emission.actions.size}, " +
+                                "copiesRemoved=2, destroysRemoved=2, joins=1"
+                    }
+                }
                 val matchingSelections = selectVerifiedMatchingSetLocalAliases(generationState, declaration)
                 if (generationState.context.config.arcDiagnosticsEnabled) {
                     generationState.context.log {
@@ -949,6 +963,7 @@ internal fun runArcOwnershipPlanning(
             selectiveInlineStringAppendCalls,
             coroutineGuaranteedPhiSelections,
             matchingSetLocalAliases,
+            branchGuaranteedPhiSelections,
         ),
     )
 }

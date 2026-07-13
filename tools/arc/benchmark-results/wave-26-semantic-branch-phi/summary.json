@@ -1,0 +1,19 @@
+{
+  "base_commit": "933688524361fc7289c9d5f6dd08e2d686d61253",
+  "candidate_faster_percent": 43.541459847011375,
+  "candidate_median_ns": 488082339,
+  "candidate_sha256": "3eb2dec45122af2457b5487b8ec6c24dd1d4ea474d535e2d2d4df6c046f334ba",
+  "candidate_size_bytes": 395168,
+  "checksums_identical": true,
+  "cpu": 15,
+  "host": "olfa@10.10.10.12",
+  "iterations_per_sample": 50000000,
+  "oracle_median_ns": 862756551,
+  "oracle_sha256": "7a7811bd9024c462269e97d134b3583c3969d5cfdeb9ecf5ce3a03053552ef65",
+  "oracle_size_bytes": 399280,
+  "paired_geomean_candidate_over_oracle": 0.5645854015298862,
+  "paired_median_candidate_over_oracle": 0.5651594183592833,
+  "pairs": 25,
+  "size_delta_bytes": -4112,
+  "size_delta_percent": -1.0298537367261051
+}

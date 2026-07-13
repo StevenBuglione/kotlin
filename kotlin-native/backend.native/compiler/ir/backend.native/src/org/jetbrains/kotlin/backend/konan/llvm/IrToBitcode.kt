@@ -24,6 +24,11 @@ import org.jetbrains.kotlin.backend.konan.arc.ArcMatchingSetConsumptionLedger
 import org.jetbrains.kotlin.backend.konan.arc.ArcMatchingSetLocalAliasIRSelection
 import org.jetbrains.kotlin.backend.konan.arc.ArcSafeContinuationResumeBorrowConsumptionLedger
 import org.jetbrains.kotlin.backend.konan.arc.ArcSafeContinuationResumeBorrowPlan
+import org.jetbrains.kotlin.backend.konan.arc.ArcBranchGuaranteedPhiBindingRole
+import org.jetbrains.kotlin.backend.konan.arc.ArcBranchGuaranteedPhiExactBinding
+import org.jetbrains.kotlin.backend.konan.arc.ArcBranchGuaranteedPhiKotlinIRSelection
+import org.jetbrains.kotlin.backend.konan.arc.ArcSemanticEmissionActionId
+import org.jetbrains.kotlin.backend.konan.arc.ArcSemanticPhiEmissionLedger
 import org.jetbrains.kotlin.backend.konan.arc.hasExactCoroutinePhysicalBackedge
 import org.jetbrains.kotlin.backend.konan.arc.unwrapExactArcCoroutineSpillRead
 import org.jetbrains.kotlin.backend.konan.optimizations.ARC_SELECTIVE_INLINE_METADATA
@@ -251,6 +256,127 @@ internal class CodeGeneratorVisitor(
     private var currentCoroutineGuaranteedPhiEmission: CoroutineGuaranteedPhiEmission? = null
     private var currentMatchingSetLocalAliasEmission: MatchingSetLocalAliasEmission? = null
     private var currentSafeContinuationResumeBorrowEmission: SafeContinuationResumeBorrowEmission? = null
+    private var currentBranchGuaranteedPhiEmission: BranchGuaranteedPhiEmission? = null
+
+    /** Consumes one exact non-suspend SemanticARC diamond as a promotable non-owning local. */
+    private inner class BranchGuaranteedPhiEmission(
+        val selection: ArcBranchGuaranteedPhiKotlinIRSelection,
+    ) {
+        private val proof = selection.semanticSelection
+        private val exactBindings = proof.exactBindings
+        private val emission = proof.emission
+        private val ledger = ArcSemanticPhiEmissionLedger(
+            emission,
+            exactBindings.getValue(ArcBranchGuaranteedPhiBindingRole.EntryBlock),
+        )
+        private val declarations = Collections.newSetFromMap(IdentityHashMap<IrVariable, Boolean>())
+        private val reads = Collections.newSetFromMap(IdentityHashMap<IrGetValue, Boolean>())
+        private val stores = Collections.newSetFromMap(IdentityHashMap<IrSetValue, Boolean>())
+        private var conditionalEmissions = 0
+        private var terminalEqualityEmissions = 0
+
+        private fun consume(
+            matches: (ArcSemanticEmissionActionId) -> Boolean,
+            vararg roles: ArcBranchGuaranteedPhiBindingRole,
+        ) {
+            val bindings = roles.map(exactBindings::getValue)
+            val action = emission.actions.values.singleOrNull { candidate ->
+                matches(candidate.id) && candidate.bindingIdentities.size == bindings.size &&
+                        candidate.bindingIdentities.indices.all {
+                            candidate.bindingIdentities[it] === bindings[it]
+                        }
+            } ?: error("missing exact branch guaranteed-phi emission action for ${roles.toList()}")
+            ledger.consume(action.id, bindings)
+        }
+
+        fun markDeclaration(variable: IrVariable) {
+            check(variable === selection.selectedVariable && declarations.add(variable)) {
+                "duplicate or drifted branch guaranteed-phi declaration: ${ir2string(variable)}"
+            }
+        }
+
+        fun markOrdinaryRead(read: IrGetValue) {
+            if (read !== selection.conditionRead && read !== selection.thenSourceRead &&
+                read !== selection.elseSourceRead && read !== selection.comparisonRead
+            ) return
+            check(reads.add(read)) { "duplicate branch guaranteed-phi read: ${ir2string(read)}" }
+        }
+
+        @Suppress("UNUSED_PARAMETER")
+        fun loadJoinedValue(read: IrGetValue, resultSlot: LLVMValueRef?): LLVMValueRef? {
+            if (read !== selection.selectedRead) return null
+            require(context.memoryModel == MemoryModel.ARC && context.config.optimizationsEnabled &&
+                    !context.shouldContainDebugInfo() && !context.config.arcDiagnosticsEnabled &&
+                    read.symbol.owner === selection.selectedVariable) {
+                "branch guaranteed-phi read escaped its exact +0 boundary: ${ir2string(read)}"
+            }
+            check(reads.add(read)) { "duplicate branch guaranteed-phi joined read: ${ir2string(read)}" }
+            val index = currentCodeContext.getDeclaredValue(selection.selectedVariable)
+            require(index >= 0) { "branch guaranteed-phi has no non-owning local record" }
+            // The verifier proves both incoming parameters live through this sole non-throwing
+            // use. Ignore the call-argument result slot so no synthetic owner is introduced.
+            return functionGenerationContext.vars.loadRootedProjection(index)
+        }
+
+        fun markTerminalEquality(call: IrCall) {
+            if (call !== selection.identityEquality) return
+            check(terminalEqualityEmissions++ == 0) {
+                "duplicate branch guaranteed-phi terminal equality: ${ir2string(call)}"
+            }
+            consume(
+                { it is ArcSemanticEmissionActionId.EndAfterOperation },
+                ArcBranchGuaranteedPhiBindingRole.TerminalUse,
+            )
+        }
+
+        fun markStore(store: IrSetValue) {
+            val thenArm = store === selection.thenStore
+            val elseArm = store === selection.elseStore
+            if (!thenArm && !elseArm) return
+            check(stores.add(store)) { "duplicate branch guaranteed-phi store: ${ir2string(store)}" }
+            val copyRole = if (thenArm) ArcBranchGuaranteedPhiBindingRole.ThenOwnedCopy
+                    else ArcBranchGuaranteedPhiBindingRole.ElseOwnedCopy
+            val blockRole = if (thenArm) ArcBranchGuaranteedPhiBindingRole.ThenBlock
+                    else ArcBranchGuaranteedPhiBindingRole.ElseBlock
+            consume({ it is ArcSemanticEmissionActionId.EliminateCopy }, copyRole)
+            consume(
+                { it is ArcSemanticEmissionActionId.Reborrow },
+                blockRole,
+                ArcBranchGuaranteedPhiBindingRole.JoinedPhi,
+                ArcBranchGuaranteedPhiBindingRole.MergeBlock,
+            )
+        }
+
+        fun markConditional(expression: IrWhen) {
+            check(expression === selection.conditional && conditionalEmissions++ == 0) {
+                "duplicate or drifted branch guaranteed-phi conditional: ${ir2string(expression)}"
+            }
+            consume(
+                { it is ArcSemanticEmissionActionId.ConvertJoin },
+                ArcBranchGuaranteedPhiBindingRole.JoinedPhi,
+            )
+        }
+
+        fun verifyConsumed() {
+            val expectedReads = listOf(
+                selection.conditionRead,
+                selection.thenSourceRead,
+                selection.elseSourceRead,
+                selection.selectedRead,
+                selection.comparisonRead,
+            )
+            check(declarations.size == 1 && selection.selectedVariable in declarations &&
+                    stores.size == 2 && selection.thenStore in stores && selection.elseStore in stores &&
+                    reads.size == expectedReads.size && expectedReads.all { it in reads } &&
+                    conditionalEmissions == 1 && terminalEqualityEmissions == 1 &&
+                    functionGenerationContext.isAfterTerminator()) {
+                "selected branch guaranteed-phi shape drifted after planning: " +
+                        "decls=${declarations.size} reads=${reads.size} stores=${stores.size} " +
+                        "conditionals=$conditionalEmissions terminalEqualities=$terminalEqualityEmissions"
+            }
+            ledger.verifyComplete()
+        }
+    }
 
     /** Consumes the exact stdlib `SafeContinuation.resumeWith` projection web once. */
     private inner class SafeContinuationResumeBorrowEmission(
@@ -801,6 +927,18 @@ internal class CodeGeneratorVisitor(
     private inner class VariableScope : InnerScopeImpl() {
 
         override fun genDeclareVariable(variable: IrVariable, value: LLVMValueRef?, variableLocation: VariableDebugLocation?): Int {
+            currentBranchGuaranteedPhiEmission?.let { emission ->
+                if (variable === emission.selection.selectedVariable) {
+                    require(context.memoryModel == MemoryModel.ARC && context.config.optimizationsEnabled &&
+                            !context.shouldContainDebugInfo() && !context.config.arcDiagnosticsEnabled &&
+                            value != null && variable.isVar && variable.type.binaryTypeIsReference() &&
+                            (variable.initializer as? IrConst<*>)?.value == null) {
+                        "branch guaranteed-phi local escaped its exact declaration shape: ${ir2string(variable)}"
+                    }
+                    emission.markDeclaration(variable)
+                    return functionGenerationContext.vars.createNonOwningReference(variable, value)
+                }
+            }
             arcOwnership.matchingSetLocalAliases[variable]?.let { selection ->
                 val initializer = variable.initializer as? IrGetValue
                 require(context.memoryModel == MemoryModel.ARC && context.config.optimizationsEnabled &&
@@ -1018,6 +1156,7 @@ internal class CodeGeneratorVisitor(
         val previousCoroutineGuaranteedPhiEmission = currentCoroutineGuaranteedPhiEmission
         val previousMatchingSetLocalAliasEmission = currentMatchingSetLocalAliasEmission
         val previousSafeContinuationResumeBorrowEmission = currentSafeContinuationResumeBorrowEmission
+        val previousBranchGuaranteedPhiEmission = currentBranchGuaranteedPhiEmission
         currentDiscardedReturnedReceiverSeedSlots = IdentityHashMap()
         currentCoroutineGuaranteedPhiEmission = (declaration as? IrSimpleFunction)?.let {
             arcOwnership.coroutineGuaranteedPhiSelections[it]
@@ -1028,6 +1167,9 @@ internal class CodeGeneratorVisitor(
         currentSafeContinuationResumeBorrowEmission = (declaration as? IrSimpleFunction)?.let {
             arcOwnership.safeContinuationResumeBorrowPlans[it]
         }?.let(::SafeContinuationResumeBorrowEmission)
+        currentBranchGuaranteedPhiEmission = (declaration as? IrSimpleFunction)?.let {
+            arcOwnership.branchGuaranteedPhiSelections[it]
+        }?.let(::BranchGuaranteedPhiEmission)
         currentArcOwnedResultForwarding = if (!context.shouldContainDebugInfo()) {
             (declaration as? IrSimpleFunction)?.let { arcOwnership.ownedResultForwarding[it] }
         } else {
@@ -1069,6 +1211,7 @@ internal class CodeGeneratorVisitor(
                                 currentCoroutineGuaranteedPhiEmission?.verifyConsumed()
                                 currentMatchingSetLocalAliasEmission?.verifyConsumed()
                                 currentSafeContinuationResumeBorrowEmission?.verifyConsumed()
+                                currentBranchGuaranteedPhiEmission?.verifyConsumed()
                             }
                         }
                     }
@@ -1080,6 +1223,7 @@ internal class CodeGeneratorVisitor(
             currentCoroutineGuaranteedPhiEmission = previousCoroutineGuaranteedPhiEmission
             currentMatchingSetLocalAliasEmission = previousMatchingSetLocalAliasEmission
             currentSafeContinuationResumeBorrowEmission = previousSafeContinuationResumeBorrowEmission
+            currentBranchGuaranteedPhiEmission = previousBranchGuaranteedPhiEmission
         }
 
 
@@ -1540,12 +1684,16 @@ internal class CodeGeneratorVisitor(
             }
         }
 
-        return when {
+        val result = when {
             expression.type.isUnit() -> codegen.theUnitInstanceRef.llvm
             expression.type.isNothing() -> functionGenerationContext.kNothingFakeValue
             whenEmittingContext.resultPhi.isInitialized() -> whenEmittingContext.resultPhi.value
             else -> LLVMGetUndef(whenEmittingContext.llvmType)!!
         }
+        currentBranchGuaranteedPhiEmission?.let { emission ->
+            if (expression === emission.selection.conditional) emission.markConditional(expression)
+        }
+        return result
     }
 
     private fun generateDebugTrambolineIf(name: String, expression: IrExpression) {
@@ -1675,6 +1823,10 @@ internal class CodeGeneratorVisitor(
 
     private fun evaluateGetValue(value: IrGetValue, resultSlot: LLVMValueRef?): LLVMValueRef {
         context.log{"evaluateGetValue               : ${ir2string(value)}"}
+        currentBranchGuaranteedPhiEmission?.let { emission ->
+            emission.loadJoinedValue(value, resultSlot)?.let { return it }
+            emission.markOrdinaryRead(value)
+        }
         arcOwnership.matchingSetLocalAliasReads[value]?.let { selection ->
             require(resultSlot == null && value.symbol.owner === selection.variable &&
                     context.memoryModel == MemoryModel.ARC && context.config.optimizationsEnabled &&
@@ -1755,7 +1907,20 @@ internal class CodeGeneratorVisitor(
                 value.value,
                 if (safeContinuationOwnedReload) functionGenerationContext.vars.addressOf(variable) else null
         )
-        if (value in arcOwnership.rootedProjectionStores) {
+        val branchPhiEmission = currentBranchGuaranteedPhiEmission?.takeIf {
+            value === it.selection.thenStore || value === it.selection.elseStore
+        }
+        if (branchPhiEmission != null) {
+            require(context.memoryModel == MemoryModel.ARC && context.config.optimizationsEnabled &&
+                    !context.shouldContainDebugInfo() && !context.config.arcDiagnosticsEnabled &&
+                    value.symbol.owner === branchPhiEmission.selection.selectedVariable &&
+                    (value.value === branchPhiEmission.selection.thenSourceRead ||
+                            value.value === branchPhiEmission.selection.elseSourceRead)) {
+                "branch guaranteed-phi store escaped its exact +0 boundary: ${ir2string(value)}"
+            }
+            functionGenerationContext.vars.storeRootedProjection(result, variable)
+            branchPhiEmission.markStore(value)
+        } else if (value in arcOwnership.rootedProjectionStores) {
             val cursor = value.symbol.owner as? IrVariable
             val selectedProjection = value.value.selectedRootedProjectionField()
             require(context.memoryModel == MemoryModel.ARC && context.config.optimizationsEnabled &&
@@ -2784,6 +2949,7 @@ internal class CodeGeneratorVisitor(
 
         intrinsicGenerator.tryEvaluateSpecialCall(value, effectiveResultSlot)?.let {
             recordScopedPromotion()
+            (value as? IrCall)?.let { call -> currentBranchGuaranteedPhiEmission?.markTerminalEquality(call) }
             return it
         }
 
@@ -2853,6 +3019,7 @@ internal class CodeGeneratorVisitor(
             }
         }
         recordScopedPromotion()
+        (value as? IrCall)?.let { call -> currentBranchGuaranteedPhiEmission?.markTerminalEquality(call) }
         return result
     }
 
