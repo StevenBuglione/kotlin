@@ -1,0 +1,53 @@
+{
+  "wave": 25,
+  "candidateSnapshot": "092f7a774f5dcfedf3d6c4fc8fa2977f3c7e06a0",
+  "candidateTree": "b48aa35cb5f4db20373ed77a6e3f0f8714fd3235",
+  "oracleCommit": "bea5a8f7c926efebf40d2b10693515e2fc220a18",
+  "machine": "olfa@10.10.10.8",
+  "cpu": 16,
+  "dynamicCountsPerIntCoroutine": {
+    "oracle": { "updateStackRef": 3, "updateHeapRef": 12, "updateReturnRef": 12, "addHeapRef": 29 },
+    "candidate": { "updateStackRef": 1, "updateHeapRef": 12, "updateReturnRef": 12, "addHeapRef": 27 },
+    "selectedSafeContinuationStackUpdates": { "oracle": 2, "candidate": 0 }
+  },
+  "emittedSafeContinuationResumeWith": {
+    "oracleUpdateStackRefSites": 3,
+    "candidateUpdateStackRefSites": 0,
+    "candidateFinalUpdateStackRefRelaxedSites": 0,
+    "debugFallbackUpdateStackRefSites": 4,
+    "diagnosticFallbackUpdateStackRefSites": 3
+  },
+  "bea5Comparison": {
+    "pairs": 25,
+    "oracleMedianSeconds": 0.124021481,
+    "candidateMedianSeconds": 0.118011458,
+    "medianPairedThroughputRatio": 1.0511300798353682,
+    "geomeanPairedThroughputRatio": 1.0501832183721693,
+    "oracleBinaryBytes": 514400,
+    "candidateBinaryBytes": 514416
+  },
+  "strictComparison": {
+    "pairs": 25,
+    "strictMedianSeconds": 0.107980085,
+    "candidateMedianSeconds": 0.118336037,
+    "medianPairedThroughputRatio": 0.912557324232719,
+    "geomeanPairedThroughputRatio": 0.9114653810175078,
+    "strictBinaryBytes": 507184,
+    "candidateBinaryBytes": 514416
+  },
+  "strictByteIdentitySha256": "ebb39712bb1e77bab35b9c3071ae593130b7db07de2b6ebb199a733b3f30922c",
+  "verification": {
+    "dist": "pass",
+    "optFileCheck": "pass",
+    "debugFileCheck": "pass",
+    "diagnosticFileCheck": "pass",
+    "strictFileCheck": "pass",
+    "runtimeRaceFixture": "pass",
+    "negativeUnitTests": "7/7 pass",
+    "coroutineStress": "pass",
+    "asanStress": "pass",
+    "ubsanStress": "pass",
+    "noCollectorSymbols": "pass",
+    "strictByteIdentity": "pass"
+  }
+}

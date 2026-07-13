@@ -130,6 +130,7 @@ internal data class ArcCodegenOwnershipPlan(
     val safeContinuationOwnedResultVariables: Set<IrVariable>,
     val safeContinuationOwnedResultAssignments: Set<IrSetValue>,
     val safeContinuationMovedResultReads: Set<IrGetValue>,
+    val safeContinuationResumeBorrowPlans: Map<IrSimpleFunction, ArcSafeContinuationResumeBorrowPlan>,
     val joinedReferenceSlots: Map<IrVariable, ArcJoinedReferenceSlotPlan>,
     val borrowedGuaranteedAliases: Set<IrVariable>,
     val borrowedMutableReads: Set<IrGetValue>,
@@ -184,6 +185,7 @@ internal data class ArcCodegenOwnershipPlan(
             safeContinuationOwnedResultVariables = emptySet(),
             safeContinuationOwnedResultAssignments = emptySet(),
             safeContinuationMovedResultReads = emptySet(),
+            safeContinuationResumeBorrowPlans = emptyMap(),
             joinedReferenceSlots = emptyMap(),
             borrowedGuaranteedAliases = emptySet(),
             borrowedMutableReads = emptySet(),
@@ -281,6 +283,33 @@ private data class ArcSafeContinuationGetOrThrowPlan(
     val movedResultRead: IrGetValue,
     val borrowedResultRefLoads: Set<IrGetField>,
 )
+
+/** Exact stdlib identities authorized to emit `SafeContinuation.resumeWith` field projections +0. */
+internal data class ArcSafeContinuationResumeBorrowPlan(
+    val function: IrSimpleFunction,
+    val resultRefField: IrField,
+    val consumersByLoad: Map<IrGetField, IrCall>,
+) {
+    val borrowedResultRefLoads: Set<IrGetField> = consumersByLoad.keys
+}
+
+/** Codegen must consume every selected projection once; shape drift is a compiler error. */
+internal class ArcSafeContinuationResumeBorrowConsumptionLedger(expected: Set<IrGetField>) {
+    private val expected = Collections.newSetFromMap(IdentityHashMap<IrGetField, Boolean>()).apply { addAll(expected) }
+    private val consumed = Collections.newSetFromMap(IdentityHashMap<IrGetField, Boolean>())
+
+    fun consume(load: IrGetField) {
+        check(load in expected) { "unknown SafeContinuation.resumeWith borrowed projection" }
+        check(consumed.add(load)) { "duplicate SafeContinuation.resumeWith borrowed projection" }
+    }
+
+    fun verifyComplete() {
+        check(consumed.size == expected.size && expected.all { it in consumed }) {
+            "SafeContinuation.resumeWith borrowed projection consumption drifted: " +
+                    "expected=${expected.size}, consumed=${consumed.size}"
+        }
+    }
+}
 
 internal data class ArcSuspendLikeMarkers(
     val sourceSuspend: Boolean,
@@ -396,6 +425,31 @@ internal fun ArcBorrowedFieldReceiverEligibility.isAuthorized(): Boolean =
             exactDirectInstanceFieldReceiver && nonVolatileField && strongFieldStorage &&
             mutableLocalReferenceOwner && ownerNotCaptured && strongOwnerStorage &&
             immediateAddressAndLoadOnly && ownerLivesThroughLoad
+
+/** Fail-closed gate for the canonical `SafeContinuation.resumeWith` projection web. */
+internal data class ArcSafeContinuationResumeBorrowEligibility(
+    val arcEnabled: Boolean,
+    val optimizationsEnabled: Boolean,
+    val debugInfoDisabled: Boolean,
+    val diagnosticsDisabled: Boolean,
+    val exactStdlibDeclarationIdentities: Boolean,
+    val finalNonExternalNonSuspendFunction: Boolean,
+    val guaranteedDispatchReceiver: Boolean,
+    val privateStrongNonVolatileField: Boolean,
+    val exactlyThreeLoads: Boolean,
+    val exactlyOneGetterAndTwoDirectCompareAndSetConsumers: Boolean,
+    val exactlyOneConstructorWriteAndNoOtherWriter: Boolean,
+    val noNestedFunctionOrSuspensionBoundary: Boolean,
+    val verifierAcceptedEveryNormalAndExceptionalBorrow: Boolean,
+)
+
+internal fun ArcSafeContinuationResumeBorrowEligibility.isAuthorized(): Boolean =
+    arcEnabled && optimizationsEnabled && debugInfoDisabled && diagnosticsDisabled &&
+            exactStdlibDeclarationIdentities && finalNonExternalNonSuspendFunction &&
+            guaranteedDispatchReceiver && privateStrongNonVolatileField && exactlyThreeLoads &&
+            exactlyOneGetterAndTwoDirectCompareAndSetConsumers &&
+            exactlyOneConstructorWriteAndNoOtherWriter && noNestedFunctionOrSuspensionBoundary &&
+            verifierAcceptedEveryNormalAndExceptionalBorrow
 
 /** Authorization for borrowing a strong CharArray field through one exact safe library call. */
 internal data class ArcBorrowedStrongCallFieldEligibility(
@@ -637,6 +691,7 @@ internal fun runArcOwnershipPlanning(
     val safeContinuationOwnedResultVariables = Collections.newSetFromMap(IdentityHashMap<IrVariable, Boolean>())
     val safeContinuationOwnedResultAssignments = Collections.newSetFromMap(IdentityHashMap<IrSetValue, Boolean>())
     val safeContinuationMovedResultReads = Collections.newSetFromMap(IdentityHashMap<IrGetValue, Boolean>())
+    val safeContinuationResumeBorrowPlans = IdentityHashMap<IrSimpleFunction, ArcSafeContinuationResumeBorrowPlan>()
     val joinedReferenceSlots = linkedMapOf<IrVariable, ArcJoinedReferenceSlotPlan>()
     val borrowedGuaranteedAliases = linkedSetOf<IrVariable>()
     val borrowedMutableReads = linkedSetOf<IrGetValue>()
@@ -686,6 +741,10 @@ internal fun runArcOwnershipPlanning(
         safeContinuationOwnedResultAssignments += plan.resultAssignments
         safeContinuationMovedResultReads += plan.movedResultRead
         borrowedMutableReads += plan.borrowedResultReads.filterNot { it === plan.movedResultRead }
+        borrowedStrongFieldLoads += plan.borrowedResultRefLoads
+    }
+    selectCanonicalSafeContinuationResumeWith(generationState, input.module, canonicalLockedReadPlans)?.let { plan ->
+        safeContinuationResumeBorrowPlans[plan.function] = plan
         borrowedStrongFieldLoads += plan.borrowedResultRefLoads
     }
     // The historical curated-plan visitor below intentionally analyzes top-level functions only.
@@ -869,6 +928,7 @@ internal fun runArcOwnershipPlanning(
             safeContinuationOwnedResultVariables,
             safeContinuationOwnedResultAssignments,
             safeContinuationMovedResultReads,
+            safeContinuationResumeBorrowPlans,
             joinedReferenceSlots,
             borrowedGuaranteedAliases,
             borrowedMutableReads,
@@ -3629,6 +3689,181 @@ private fun selectCanonicalSafeContinuationGetOrThrow(
                 "borrowedResultRefLoads=${resultRefLoads.size}"
     }
     return ArcSafeContinuationGetOrThrowPlan(function, result, assignments, reads, movedResultRead, resultRefLoads)
+}
+
+/**
+ * Borrow the exact three `SafeContinuation.resumeWith` projections of its immutable `resultRef`
+ * identity. The guaranteed dispatch receiver owns that field across each bounded atomic call,
+ * including the exceptional edge, so an intermediate owning frame slot is redundant.
+ *
+ * This is intentionally tied to the Kotlin 1.9.10 stdlib declaration identities and complete
+ * one-get/two-CAS body shape. Any KLIB, visibility, writer, call, or lowering change falls back to
+ * ordinary strong loads.
+ */
+private fun selectCanonicalSafeContinuationResumeWith(
+    generationState: NativeGenerationState,
+    module: org.jetbrains.kotlin.ir.declarations.IrModuleFragment,
+    lockedReads: List<ArcLockedReadCanonicalPlan>,
+): ArcSafeContinuationResumeBorrowPlan? {
+    if (generationState.context.memoryModel != MemoryModel.ARC ||
+        !generationState.context.config.optimizationsEnabled ||
+        generationState.context.shouldContainDebugInfo() ||
+        generationState.context.config.arcDiagnosticsEnabled
+    ) return null
+    val stdlib = generationState.context.stdlibModule.konanLibrary ?: return null
+    val atomic = lockedReads.singleOrNull {
+        it.ownerClass.fqNameForIrSerialization.asString() ==
+                "kotlin.native.concurrent.FreezableAtomicReference" &&
+                it.ownerClass.konanLibrary === stdlib &&
+                !it.getter.isOverridable && !it.runtimeGetter.isOverridable
+    } ?: return null
+    val safeClass = buildList<IrClass> {
+        module.files.forEach { file ->
+            file.acceptChildrenVoid(object : IrElementVisitorVoid {
+                override fun visitElement(element: IrElement) = element.acceptChildrenVoid(this)
+                override fun visitClass(declaration: IrClass) {
+                    if (declaration.konanLibrary === stdlib &&
+                        declaration.fqNameForIrSerialization.asString() == "kotlin.coroutines.SafeContinuation"
+                    ) add(declaration)
+                    declaration.acceptChildrenVoid(this)
+                }
+            })
+        }
+    }.singleOrNull() ?: return null
+    if (safeClass.symbol.signature == null) return null
+    val function = safeClass.declarations.filterIsInstance<IrSimpleFunction>().singleOrNull {
+        it.konanLibrary === stdlib && it.name.asString() == "resumeWith" && it.isReal &&
+                !it.isExternal && !it.isOverridable && !it.isArcSuspendLike() &&
+                it.dispatchReceiverParameter != null && it.extensionReceiverParameter == null &&
+                it.visibility == DescriptorVisibilities.PUBLIC &&
+                it.valueParameters.singleOrNull()?.type?.binaryTypeIsReference() == true &&
+                it.returnType.isUnit() &&
+                (it.symbol.signature ?: it.symbol.privateSignature) != null
+    } ?: return null
+    val body = function.body as? IrBlockBody ?: return null
+    val resultRefLoads = Collections.newSetFromMap(IdentityHashMap<IrGetField, Boolean>())
+    val consumersByLoad = IdentityHashMap<IrGetField, IrCall>()
+    var unsupportedBoundary = false
+    var resultRefWrite = false
+    body.acceptVoid(object : IrElementVisitorVoid {
+        override fun visitElement(element: IrElement) = element.acceptChildrenVoid(this)
+        override fun visitFunction(declaration: IrFunction) { unsupportedBoundary = true }
+        override fun visitSuspendableExpression(expression: IrSuspendableExpression) { unsupportedBoundary = true }
+        override fun visitSuspensionPoint(expression: IrSuspensionPoint) { unsupportedBoundary = true }
+        override fun visitGetField(expression: IrGetField) {
+            if (expression.symbol.owner.name.asString() == "resultRef" &&
+                expression.symbol.owner.parent === safeClass
+            ) resultRefLoads += expression
+            expression.acceptChildrenVoid(this)
+        }
+        override fun visitSetField(expression: IrSetField) {
+            if (expression.symbol.owner.name.asString() == "resultRef" &&
+                expression.symbol.owner.parent === safeClass
+            ) resultRefWrite = true
+            expression.acceptChildrenVoid(this)
+        }
+        override fun visitCall(expression: IrCall) {
+            val load = expression.dispatchReceiver.unwrapExactSafeContinuationResultRefLoad()
+            if (load != null && load.symbol.owner.name.asString() == "resultRef" &&
+                load.symbol.owner.parent === safeClass
+            ) {
+                if (consumersByLoad.put(load, expression) != null) unsupportedBoundary = true
+            }
+            expression.acceptChildrenVoid(this)
+        }
+    })
+    if (unsupportedBoundary || resultRefWrite || resultRefLoads.size != 3 ||
+        consumersByLoad.size != resultRefLoads.size || resultRefLoads.any { it !in consumersByLoad }
+    ) return null
+    val resultRefField = resultRefLoads.first().symbol.owner
+    if (resultRefLoads.any { load ->
+            load.symbol.owner !== resultRefField || load.symbol.owner.isStatic ||
+                    load.symbol.owner.hasAnnotation(KonanFqNames.volatile) ||
+                    load.symbol.owner.hasAnnotation(KonanFqNames.arcWeak) ||
+                    load.symbol.owner.hasAnnotation(KonanFqNames.arcUnowned) ||
+                    load.symbol.owner.visibility != DescriptorVisibilities.PRIVATE ||
+                    (load.symbol.owner.symbol.signature ?: load.symbol.owner.symbol.privateSignature) == null ||
+                    !load.type.binaryTypeIsReference() ||
+                    (load.receiver as? IrGetValue)?.symbol != function.dispatchReceiverParameter?.symbol
+        }
+    ) return null
+
+    val getterCalls = consumersByLoad.values.filter { it.symbol == atomic.getter.symbol }
+    val compareAndSetCalls = consumersByLoad.values.filter { call ->
+        val callee = call.symbol.owner
+        callee.parent === atomic.ownerClass && callee.name.asString() == "compareAndSet" &&
+                callee.konanLibrary === stdlib && callee.isReal && !callee.isExternal &&
+                !callee.isOverridable && !callee.isArcSuspendLike() &&
+                callee.extensionReceiverParameter == null &&
+                (callee.symbol.signature ?: callee.symbol.privateSignature) != null &&
+                call.valueArgumentsCount == 2 && callee.returnType.isBoolean()
+    }
+    if (getterCalls.size != 1 || compareAndSetCalls.size != 2 ||
+        getterCalls.size + compareAndSetCalls.size != consumersByLoad.size
+    ) return null
+
+    var currentWriter: IrFunction? = null
+    var constructorWrites = 0
+    var invalidWriter = false
+    safeClass.acceptChildrenVoid(object : IrElementVisitorVoid {
+        override fun visitElement(element: IrElement) = element.acceptChildrenVoid(this)
+        override fun visitFunction(declaration: IrFunction) {
+            val previous = currentWriter
+            currentWriter = declaration
+            declaration.acceptChildrenVoid(this)
+            currentWriter = previous
+        }
+        override fun visitSetField(expression: IrSetField) {
+            if (expression.symbol.owner === resultRefField) {
+                val constructor = currentWriter as? IrConstructor
+                val receiver = expression.receiver as? IrGetValue
+                if (constructor == null || constructor.parent !== safeClass ||
+                    receiver?.symbol != safeClass.thisReceiver?.symbol
+                ) {
+                    invalidWriter = true
+                } else {
+                    constructorWrites++
+                }
+            }
+            expression.acceptChildrenVoid(this)
+        }
+    })
+    val verifierAccepted = consumersByLoad.none { (load, consumer) ->
+            !verifyBorrowedStrongCallFieldProof(
+                function, load.symbol.owner.name.asString(), consumer.symbol.owner.name.asString()
+            )
+        }
+    val eligibility = ArcSafeContinuationResumeBorrowEligibility(
+        arcEnabled = generationState.context.memoryModel == MemoryModel.ARC,
+        optimizationsEnabled = generationState.context.config.optimizationsEnabled,
+        debugInfoDisabled = !generationState.context.shouldContainDebugInfo(),
+        diagnosticsDisabled = !generationState.context.config.arcDiagnosticsEnabled,
+        exactStdlibDeclarationIdentities = safeClass.konanLibrary === stdlib &&
+                function.konanLibrary === stdlib && atomic.ownerClass.konanLibrary === stdlib,
+        finalNonExternalNonSuspendFunction = !function.isOverridable && !function.isExternal &&
+                !function.isArcSuspendLike(),
+        guaranteedDispatchReceiver = function.dispatchReceiverParameter?.type?.binaryTypeIsReference() == true,
+        privateStrongNonVolatileField = resultRefField.visibility == DescriptorVisibilities.PRIVATE &&
+                !resultRefField.isStatic && !resultRefField.hasAnnotation(KonanFqNames.volatile) &&
+                !resultRefField.hasAnnotation(KonanFqNames.arcWeak) &&
+                !resultRefField.hasAnnotation(KonanFqNames.arcUnowned),
+        exactlyThreeLoads = resultRefLoads.size == 3,
+        exactlyOneGetterAndTwoDirectCompareAndSetConsumers = getterCalls.size == 1 &&
+                compareAndSetCalls.size == 2 && consumersByLoad.size == 3,
+        exactlyOneConstructorWriteAndNoOtherWriter = !invalidWriter && constructorWrites == 1,
+        noNestedFunctionOrSuspensionBoundary = !unsupportedBoundary,
+        verifierAcceptedEveryNormalAndExceptionalBorrow = verifierAccepted,
+    )
+    if (!eligibility.isAuthorized()) return null
+    generationState.context.log {
+        "ARC SafeContinuation.resumeWith ownership web: borrowedResultRefLoads=${resultRefLoads.size}, " +
+                "getterCalls=${getterCalls.size}, compareAndSetCalls=${compareAndSetCalls.size}"
+    }
+    return ArcSafeContinuationResumeBorrowPlan(
+        function,
+        resultRefField,
+        Collections.unmodifiableMap(consumersByLoad),
+    )
 }
 
 private fun IrExpression.exactSafeContinuationWhenSuccessRead(result: IrVariable): IrGetValue? = when (this) {

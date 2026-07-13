@@ -91,6 +91,11 @@ private fun raceResultStress(): Long {
     return checksum
 }
 
+// OPT-LABEL: define void @"kfun:kotlin.coroutines.SafeContinuation#resumeWith
+// OPT-COUNT-1: {{call|invoke}} %struct.ObjHeader* @"kfun:kotlin.native.concurrent.FreezableAtomicReference#<get-value>
+// OPT-COUNT-2: {{call|invoke}} zeroext i1 @"kfun:kotlin.native.concurrent.FreezableAtomicReference#compareAndSet
+// OPT-NOT: call void @UpdateStackRef
+// OPT: ret void
 // OPT-LABEL: define %struct.ObjHeader* @"kfun:kotlin.coroutines.SafeContinuation#getOrThrow
 // OPT-SAME: %struct.ObjHeader** [[RETURN_SLOT:%[-a-zA-Z$._0-9]+]]
 // Both canonical atomic reads must initialize the same owning local. Reusing the
@@ -113,18 +118,26 @@ private fun raceResultStress(): Long {
 // OPT-NOT: call void @MoveReferenceIntoReturnSlotArc
 // OPT: ret %struct.ObjHeader*
 
+// DEBUG-LABEL: define void @"kfun:kotlin.coroutines.SafeContinuation#resumeWith
+// DEBUG-COUNT-4: call void @UpdateStackRef
+// DEBUG: ret void
 // DEBUG-LABEL: define %struct.ObjHeader* @"kfun:kotlin.coroutines.SafeContinuation#getOrThrow
 // DEBUG-NOT: @Kotlin_Array_get_borrowed
 // DEBUG-NOT: call void @MoveReferenceIntoReturnSlotArc
 // DEBUG: call void @UpdateReturnRef
 // DEBUG: ret %struct.ObjHeader*
 
+// DIAGNOSTIC-LABEL: define void @"kfun:kotlin.coroutines.SafeContinuation#resumeWith
+// DIAGNOSTIC-COUNT-3: call void @UpdateStackRef
+// DIAGNOSTIC: ret void
 // DIAGNOSTIC-LABEL: define %struct.ObjHeader* @"kfun:kotlin.coroutines.SafeContinuation#getOrThrow
 // DIAGNOSTIC-NOT: @Kotlin_Array_get_borrowed
 // DIAGNOSTIC-NOT: call void @MoveReferenceIntoReturnSlotArc
 // DIAGNOSTIC: call void @UpdateReturnRef
 // DIAGNOSTIC: ret %struct.ObjHeader*
 
+// STRICT-LABEL: define void @"kfun:kotlin.coroutines.SafeContinuation#resumeWith
+// STRICT: ret void
 // STRICT-LABEL: define %struct.ObjHeader* @"kfun:kotlin.coroutines.SafeContinuation#getOrThrow
 // STRICT-NOT: @Kotlin_Array_get_borrowed
 // STRICT-NOT: call void @MoveReferenceIntoReturnSlotArc

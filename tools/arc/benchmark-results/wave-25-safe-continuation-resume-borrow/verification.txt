@@ -1,0 +1,33 @@
+remote snapshot: 092f7a774f5dcfedf3d6c4fc8fa2977f3c7e06a0
+remote tree: b48aa35cb5f4db20373ed77a6e3f0f8714fd3235
+oracle: bea5a8f7c926efebf40d2b10693515e2fc220a18
+
+dist + opt/debug/diagnostic/strict FileChecks + runtime race fixture:
+BUILD SUCCESSFUL in 1m 16s; 557 actionable tasks: 32 executed, 525 up-to-date
+
+focused negative eligibility unit harness:
+JUnit version 4.13.2
+.......
+OK (7 tests)
+
+normal exception/finally stress:
+ARC_COROUTINE_STRESS_OK iterations=100000 checksum=12142792860 finally=100000
+
+ASAN exception/finally stress (detect_leaks=0, halt_on_error=1):
+ARC_COROUTINE_STRESS_OK iterations=25000 checksum=758883932 finally=25000
+ASAN instrumentation symbols: present
+
+UBSAN exception/finally stress (halt_on_error=1):
+ARC_COROUTINE_STRESS_OK iterations=25000 checksum=758883932 finally=25000
+UBSAN instrumentation symbols and call sites: present
+
+ordinary candidate no-collector audit:
+ARC_NO_COLLECTOR_SYMBOLS_OK
+
+strict binary identity:
+current ebb39712bb1e77bab35b9c3071ae593130b7db07de2b6ebb199a733b3f30922c
+bea5   ebb39712bb1e77bab35b9c3071ae593130b7db07de2b6ebb199a733b3f30922c
+cmp: byte-identical
+
+benchmark output for candidate, bea5 oracle and strict baseline:
+ARC_BENCH_OK scenario=coroutines checksum=45000150000 operations=300000 allocations=900000

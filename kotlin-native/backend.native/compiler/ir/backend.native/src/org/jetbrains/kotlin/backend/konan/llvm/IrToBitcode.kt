@@ -22,6 +22,8 @@ import org.jetbrains.kotlin.backend.konan.arc.ArcResultCompanionImmortalLoadPlan
 import org.jetbrains.kotlin.backend.konan.arc.ArcCoroutineGuaranteedPhiIRSelection
 import org.jetbrains.kotlin.backend.konan.arc.ArcMatchingSetConsumptionLedger
 import org.jetbrains.kotlin.backend.konan.arc.ArcMatchingSetLocalAliasIRSelection
+import org.jetbrains.kotlin.backend.konan.arc.ArcSafeContinuationResumeBorrowConsumptionLedger
+import org.jetbrains.kotlin.backend.konan.arc.ArcSafeContinuationResumeBorrowPlan
 import org.jetbrains.kotlin.backend.konan.arc.hasExactCoroutinePhysicalBackedge
 import org.jetbrains.kotlin.backend.konan.arc.unwrapExactArcCoroutineSpillRead
 import org.jetbrains.kotlin.backend.konan.optimizations.ARC_SELECTIVE_INLINE_METADATA
@@ -248,6 +250,26 @@ internal class CodeGeneratorVisitor(
             MutableMap<ArcDiscardedReturnedReceiverGroup, LLVMValueRef>? = null
     private var currentCoroutineGuaranteedPhiEmission: CoroutineGuaranteedPhiEmission? = null
     private var currentMatchingSetLocalAliasEmission: MatchingSetLocalAliasEmission? = null
+    private var currentSafeContinuationResumeBorrowEmission: SafeContinuationResumeBorrowEmission? = null
+
+    /** Consumes the exact stdlib `SafeContinuation.resumeWith` projection web once. */
+    private inner class SafeContinuationResumeBorrowEmission(
+        val plan: ArcSafeContinuationResumeBorrowPlan,
+    ) {
+        private val ledger = ArcSafeContinuationResumeBorrowConsumptionLedger(plan.borrowedResultRefLoads)
+
+        fun markLoad(load: IrGetField) {
+            requireNotNull(plan.consumersByLoad[load]) {
+                "SafeContinuation.resumeWith borrowed projection changed identity: ${ir2string(load)}"
+            }
+            require(load.symbol.owner === plan.resultRefField) {
+                "SafeContinuation.resumeWith borrowed projection changed field identity"
+            }
+            ledger.consume(load)
+        }
+
+        fun verifyConsumed() = ledger.verifyComplete()
+    }
 
     /** Consumes every identity-authenticated copy/destroy/use authorization exactly once. */
     private inner class MatchingSetLocalAliasEmission(
@@ -995,6 +1017,7 @@ internal class CodeGeneratorVisitor(
         val previousDiscardedReturnedReceiverSeedSlots = currentDiscardedReturnedReceiverSeedSlots
         val previousCoroutineGuaranteedPhiEmission = currentCoroutineGuaranteedPhiEmission
         val previousMatchingSetLocalAliasEmission = currentMatchingSetLocalAliasEmission
+        val previousSafeContinuationResumeBorrowEmission = currentSafeContinuationResumeBorrowEmission
         currentDiscardedReturnedReceiverSeedSlots = IdentityHashMap()
         currentCoroutineGuaranteedPhiEmission = (declaration as? IrSimpleFunction)?.let {
             arcOwnership.coroutineGuaranteedPhiSelections[it]
@@ -1002,6 +1025,9 @@ internal class CodeGeneratorVisitor(
         currentMatchingSetLocalAliasEmission = (declaration as? IrSimpleFunction)?.let {
             arcOwnership.matchingSetLocalAliasesByFunction[it]
         }?.takeIf { it.isNotEmpty() }?.let(::MatchingSetLocalAliasEmission)
+        currentSafeContinuationResumeBorrowEmission = (declaration as? IrSimpleFunction)?.let {
+            arcOwnership.safeContinuationResumeBorrowPlans[it]
+        }?.let(::SafeContinuationResumeBorrowEmission)
         currentArcOwnedResultForwarding = if (!context.shouldContainDebugInfo()) {
             (declaration as? IrSimpleFunction)?.let { arcOwnership.ownedResultForwarding[it] }
         } else {
@@ -1042,6 +1068,7 @@ internal class CodeGeneratorVisitor(
                                 }
                                 currentCoroutineGuaranteedPhiEmission?.verifyConsumed()
                                 currentMatchingSetLocalAliasEmission?.verifyConsumed()
+                                currentSafeContinuationResumeBorrowEmission?.verifyConsumed()
                             }
                         }
                     }
@@ -1052,6 +1079,7 @@ internal class CodeGeneratorVisitor(
             currentDiscardedReturnedReceiverSeedSlots = previousDiscardedReturnedReceiverSeedSlots
             currentCoroutineGuaranteedPhiEmission = previousCoroutineGuaranteedPhiEmission
             currentMatchingSetLocalAliasEmission = previousMatchingSetLocalAliasEmission
+            currentSafeContinuationResumeBorrowEmission = previousSafeContinuationResumeBorrowEmission
         }
 
 
@@ -2184,8 +2212,13 @@ internal class CodeGeneratorVisitor(
             value in arcOwnership.borrowedStrongCallFieldLoads ||
             value in arcOwnership.rootedProjectionFieldLoads
         ) {
+            currentSafeContinuationResumeBorrowEmission?.let { emission ->
+                if (value in emission.plan.borrowedResultRefLoads) emission.markLoad(value)
+            }
             require(context.memoryModel == MemoryModel.ARC && context.config.optimizationsEnabled &&
-                    !context.shouldContainDebugInfo()) {
+                    !context.shouldContainDebugInfo() &&
+                    (value !in (currentSafeContinuationResumeBorrowEmission?.plan?.borrowedResultRefLoads.orEmpty()) ||
+                            !context.config.arcDiagnosticsEnabled)) {
                 "ARC borrowed/rooted strong field load escaped its optimization boundary: ${ir2string(value)}"
             }
             require(!value.symbol.owner.isStatic && order == null &&
