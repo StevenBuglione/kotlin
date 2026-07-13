@@ -1,0 +1,21 @@
+allocation	candidate	median_ns=162871575	median_rss_kib=2944	min_ns=159518431	max_ns=174301520
+allocation	oracle	median_ns=178190175	median_rss_kib=2944	min_ns=171613971	max_ns=188390897
+allocation	strict	median_ns=275978085	median_rss_kib=3840	min_ns=271179933	max_ns=287214954
+allocation	candidate_over_oracle_paired_geomean_time=0.917419964	throughput=1.090013341	median_pair_ratio=0.920312444
+allocation	candidate_over_strict_paired_geomean_time=0.590797373	throughput=1.692627704	median_pair_ratio=0.589639500
+destruction	candidate	median_ns=134911539	median_rss_kib=72960	min_ns=130662105	max_ns=148620117
+destruction	oracle	median_ns=145244881	median_rss_kib=72960	min_ns=142749607	max_ns=153024937
+destruction	strict	median_ns=231065862	median_rss_kib=77384	min_ns=227196560	max_ns=238823136
+destruction	candidate_over_oracle_paired_geomean_time=0.929175386	throughput=1.076223085	median_pair_ratio=0.926194894
+destruction	candidate_over_strict_paired_geomean_time=0.585150633	throughput=1.708961664	median_pair_ratio=0.579118884
+closures	candidate	median_ns=181328966	median_rss_kib=2688	min_ns=165946365	max_ns=242127331
+closures	oracle	median_ns=177432436	median_rss_kib=2688	min_ns=161934639	max_ns=227503860
+closures	strict	median_ns=355534169	median_rss_kib=2816	min_ns=315014440	max_ns=458573443
+closures	candidate_over_oracle_paired_geomean_time=1.042439790	throughput=0.959288018	median_pair_ratio=1.026455681
+closures	candidate_over_strict_paired_geomean_time=0.525316833	throughput=1.903613089	median_pair_ratio=0.522204849
+coroutines	candidate	median_ns=170940411	median_rss_kib=2688	min_ns=164744229	max_ns=178758751
+coroutines	oracle	median_ns=182835654	median_rss_kib=2688	min_ns=178659843	max_ns=195485865
+coroutines	strict	median_ns=150118316	median_rss_kib=3712	min_ns=146219461	max_ns=156924094
+coroutines	candidate_over_oracle_paired_geomean_time=0.933423327	throughput=1.071325273	median_pair_ratio=0.930309585
+coroutines	candidate_over_strict_paired_geomean_time=1.135597889	throughput=0.880593395	median_pair_ratio=1.138271026
+/home/olfa/codex-kotlin-arc-atomic/.arc-runs/atomic-fastpath-bench/raw-25.tsv

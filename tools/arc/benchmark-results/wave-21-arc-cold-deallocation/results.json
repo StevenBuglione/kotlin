@@ -1,0 +1,24 @@
+{
+  "accepted": {
+    "name": "cas-with-out-of-line-cold-deallocation",
+    "baseCommit": "64f84b2afbd7095280ebb3196a54c2be1f3333c9",
+    "baseTree": "e3e76746951e953e515d82e183c3219f020a6d69",
+    "runtimePatchSha256": "1462f488c8e21c3f94f3ff893d382f2ca479a74fae280bac19f28a5933fb9ad1",
+    "samplesPerVariant": 25,
+    "benchmarks": {
+      "allocation": {"wave20ThroughputRatio": 1.069246245, "strictThroughputRatio": 1.658897378, "candidateMedianNs": 165613991, "wave20MedianNs": 178567295, "strictMedianNs": 276709146, "candidateMedianRssKiB": 2944, "wave20MedianRssKiB": 2944, "strictMedianRssKiB": 3840},
+      "destruction": {"wave20ThroughputRatio": 1.051926713, "strictThroughputRatio": 1.677822563, "candidateMedianNs": 138110292, "wave20MedianNs": 145300232, "strictMedianNs": 232940274, "candidateMedianRssKiB": 72960, "wave20MedianRssKiB": 72960, "strictMedianRssKiB": 77384},
+      "closures": {"wave20ThroughputRatio": 1.001728130, "strictThroughputRatio": 1.950322892, "candidateMedianNs": 165469751, "wave20MedianNs": 164812008, "strictMedianNs": 321925804, "candidateMedianRssKiB": 2688, "wave20MedianRssKiB": 2688, "strictMedianRssKiB": 2816},
+      "coroutines": {"wave20ThroughputRatio": 1.038151480, "strictThroughputRatio": 0.847552331, "candidateMedianNs": 178498675, "wave20MedianNs": 184539243, "strictMedianNs": 152092935, "candidateMedianRssKiB": 2688, "wave20MedianRssKiB": 2688, "strictMedianRssKiB": 3712},
+      "directNonFinalRc": {"wave20ThroughputRatio": 1.086608814, "strictThroughputRatio": 0.742250980, "candidateMedianNs": 378199012, "wave20MedianNs": 406550389, "strictMedianNs": 279834970, "candidateMedianRssKiB": 2432, "wave20MedianRssKiB": 2432, "strictMedianRssKiB": 2560}
+    },
+    "closureResample": {"pairs": 50, "wave20ThroughputRatio": 1.000145862, "candidateMedianNs": 162377810, "wave20MedianNs": 161819775, "candidateMedianRssKiB": 2688, "wave20MedianRssKiB": 2688},
+    "compile": {"candidateSeconds": 10.27, "candidateMaxRssKiB": 594412, "wave20Seconds": 9.95, "wave20MaxRssKiB": 648776, "strictSeconds": 10.96, "strictMaxRssKiB": 575668},
+    "binaryBytes": {"candidate": 513544, "wave20": 485640, "strict": 511528},
+    "verification": {"normalPassed": 1013, "asanPassed": 1013, "ubsanPassed": 1013, "expectedSkippedEach": 9, "tsan": "PASS"}
+  },
+  "rejected": {
+    "fetchRmwV1": {"reason": "allocation regression", "allocationWave20ThroughputRatio": 0.955463187},
+    "hybridFetchRmwV2": {"reason": "direct non-final retain/release regression of approximately 32 percent", "curatedCoroutineWave20ThroughputRatio": 1.071325273}
+  }
+}

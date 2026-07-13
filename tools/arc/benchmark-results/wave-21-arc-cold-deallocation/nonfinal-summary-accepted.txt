@@ -1,0 +1,6 @@
+candidate median_ns=378199012 median_rss_kib=2432
+oracle median_ns=406550389 median_rss_kib=2432
+strict median_ns=279834970 median_rss_kib=2560
+candidate_over_oracle_geomean_time=0.920294394 throughput=1.086608814 median_pair_ratio=0.927452055
+candidate_over_strict_geomean_time=1.347253189 throughput=0.742250980 median_pair_ratio=1.349091998
+/home/olfa/codex-kotlin-arc-atomic/.arc-runs/atomic-fastpath-bench/nonfinal/raw-25.tsv

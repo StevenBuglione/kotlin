@@ -1622,7 +1622,10 @@ inline void incrementRC(ContainerHeader* container) {
 
 THREAD_LOCAL_VARIABLE ContainerHeaderList* arcDestructionWorklist = nullptr;
 
-void drainArcDestructionWorklist(ContainerHeader* container) {
+// Keep zero-count destruction off the release fast path. This mirrors Swift's
+// out-of-line _swift_release_dealloc slow path and lets ordinary non-final
+// releases remain a small leaf around one atomic RMW.
+NO_INLINE RUNTIME_NOTHROW void drainArcDestructionWorklist(ContainerHeader* container) {
   if (arcDestructionWorklist != nullptr) {
     arcDestructionWorklist->push_back(container);
     return;

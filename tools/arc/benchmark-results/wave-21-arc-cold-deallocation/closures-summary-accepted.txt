@@ -1,0 +1,4 @@
+candidate median_ns=162377810 median_rss_kib=2688
+oracle median_ns=161819775 median_rss_kib=2688
+candidate_over_oracle_geomean_time=0.999854159 throughput=1.000145862 median_pair_ratio=0.998965222
+/home/olfa/codex-kotlin-arc-atomic/.arc-runs/atomic-fastpath-bench/closures-50.tsv
