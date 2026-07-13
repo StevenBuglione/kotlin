@@ -114,6 +114,28 @@ private fun raceResultStress(): Long {
 // OPT-NEXT: store %struct.ObjHeader* null, %struct.ObjHeader** [[RESULT_SLOT]]
 // OPT-NOT: call void @UpdateReturnRef{{.*}}[[RETURN_SLOT]]
 // OPT: ret %struct.ObjHeader*
+
+// The exact synchronous caller is scalarized. Its two anonymous frame slots own the intercepted
+// delegate and boxed Result payload; neither removed wrapper may reappear anywhere in the body.
+// OPT-LABEL: define internal %struct.ObjHeader* @"kfun:immediate#internal"
+// OPT-SAME: %struct.ObjHeader** [[IMMEDIATE_RETURN_SLOT:%[0-9]+]])
+// OPT-NOT: @"kfun:kotlin.coroutines.SafeContinuation
+// OPT-NOT: @"kclass:kotlin.coroutines.SafeContinuation
+// OPT-NOT: @"kclass:kotlin.native.concurrent.FreezableAtomicReference
+// OPT: invoke %struct.ObjHeader* @"kfun:kotlin.coroutines.intrinsics#intercepted{{.*}}"({{.*}}%struct.ObjHeader** [[DELEGATE_SLOT:%[0-9]+]])
+// OPT-NOT: @"kfun:kotlin.coroutines.SafeContinuation
+// OPT-NOT: @"kclass:kotlin.native.concurrent.FreezableAtomicReference
+// OPT: [[BOXED:%[0-9]+]] = invoke %struct.ObjHeader* @"kfun:kotlin#<Int-box>{{.*}}"({{.*}}%struct.ObjHeader** [[RESULT_SLOT:%[0-9]+]])
+// OPT-NOT: @"kfun:kotlin.coroutines.SafeContinuation
+// OPT-NOT: @"kclass:kotlin.native.concurrent.FreezableAtomicReference
+// OPT: [[MOVED:%[0-9]+]] = load %struct.ObjHeader*, %struct.ObjHeader** [[RESULT_SLOT]]
+// OPT-NEXT: call void @MoveReferenceIntoReturnSlotArc(%struct.ObjHeader** [[IMMEDIATE_RETURN_SLOT]], %struct.ObjHeader* [[MOVED]])
+// OPT-NEXT: store %struct.ObjHeader* null, %struct.ObjHeader** [[RESULT_SLOT]]
+// OPT-NEXT: call void @UpdateStackRef(%struct.ObjHeader** [[DELEGATE_SLOT]], %struct.ObjHeader* null)
+// OPT-NOT: @"kfun:kotlin.coroutines.SafeContinuation
+// OPT-NOT: @"kclass:kotlin.native.concurrent.FreezableAtomicReference
+// OPT: ret %struct.ObjHeader*
+
 // OPT-LABEL: define internal %struct.ObjHeader* @"kfun:GetOrThrowLookalike.getOrThrow#internal
 // OPT-NOT: call void @MoveReferenceIntoReturnSlotArc
 // OPT: ret %struct.ObjHeader*
@@ -126,6 +148,12 @@ private fun raceResultStress(): Long {
 // DEBUG-NOT: call void @MoveReferenceIntoReturnSlotArc
 // DEBUG: call void @UpdateReturnRef
 // DEBUG: ret %struct.ObjHeader*
+// DEBUG-LABEL: define internal %struct.ObjHeader* @"kfun:immediate#internal"
+// DEBUG: alloca %"kclassbody:kotlin.coroutines.SafeContinuation#internal"
+// DEBUG: @"kfun:kotlin.coroutines.SafeContinuation#<init>
+// DEBUG: @"kfun:kotlin.coroutines.SafeContinuation#resumeWith
+// DEBUG: @"kfun:kotlin.coroutines.SafeContinuation#getOrThrow
+// DEBUG: ret %struct.ObjHeader*
 
 // DIAGNOSTIC-LABEL: define void @"kfun:kotlin.coroutines.SafeContinuation#resumeWith
 // DIAGNOSTIC-COUNT-3: call void @UpdateStackRef
@@ -135,12 +163,24 @@ private fun raceResultStress(): Long {
 // DIAGNOSTIC-NOT: call void @MoveReferenceIntoReturnSlotArc
 // DIAGNOSTIC: call void @UpdateReturnRef
 // DIAGNOSTIC: ret %struct.ObjHeader*
+// DIAGNOSTIC-LABEL: define internal %struct.ObjHeader* @"kfun:immediate#internal"
+// DIAGNOSTIC: alloca %"kclassbody:kotlin.coroutines.SafeContinuation#internal"
+// DIAGNOSTIC: @"kfun:kotlin.coroutines.SafeContinuation#<init>
+// DIAGNOSTIC: @"kfun:kotlin.coroutines.SafeContinuation#resumeWith
+// DIAGNOSTIC: @"kfun:kotlin.coroutines.SafeContinuation#getOrThrow
+// DIAGNOSTIC: ret %struct.ObjHeader*
 
 // STRICT-LABEL: define void @"kfun:kotlin.coroutines.SafeContinuation#resumeWith
 // STRICT: ret void
 // STRICT-LABEL: define %struct.ObjHeader* @"kfun:kotlin.coroutines.SafeContinuation#getOrThrow
 // STRICT-NOT: @Kotlin_Array_get_borrowed
 // STRICT-NOT: call void @MoveReferenceIntoReturnSlotArc
+// STRICT: ret %struct.ObjHeader*
+// STRICT-LABEL: define internal %struct.ObjHeader* @"kfun:immediate#internal"
+// STRICT: alloca %"kclassbody:kotlin.coroutines.SafeContinuation#internal"
+// STRICT: @"kfun:kotlin.coroutines.SafeContinuation#<init>
+// STRICT: @"kfun:kotlin.coroutines.SafeContinuation#resumeWith
+// STRICT: @"kfun:kotlin.coroutines.SafeContinuation#getOrThrow
 // STRICT: ret %struct.ObjHeader*
 
 fun main() {

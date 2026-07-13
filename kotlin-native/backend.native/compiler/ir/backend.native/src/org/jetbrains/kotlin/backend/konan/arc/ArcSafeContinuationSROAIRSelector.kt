@@ -83,8 +83,10 @@ internal data class ArcSafeContinuationSROAIRBindings<T : Any>(
     val resultCompanionGetter: T,
     val resultBoxIntrinsic: T,
     val resultConstructor: T,
+    val resultValueField: T,
+    val resultValueRead: T,
     val structuralUnitCalls: List<T>,
-    /** Exact physical variables, reads, blocks, and Result.value projection consumed by emission. */
+    /** Exact physical variables, reads, and blocks consumed by emission. */
     val resumeDataflowBindings: List<T>,
     val getOrThrow: T,
     val getOrThrowCall: T,
@@ -97,8 +99,43 @@ internal fun <T : Any> ArcSafeContinuationSROAIRBindings<T>.exactIdentityInvento
     function, safeClass, local, allocation, constructor, interceptedReceiver, interceptedCall, delegateField,
     resultRefField, resumeWith, resumeCall, resumeReceiver, resumeResultArgument,
     resumeResultParameter, resumeValueProducer, resultCompanionGetter, resultBoxIntrinsic,
-    resultConstructor, getOrThrow, getOrThrowCall, getOrThrowReceiver,
+    resultConstructor, resultValueField, resultValueRead, getOrThrow, getOrThrowCall, getOrThrowReceiver,
 ) + structuralUnitCalls + resumeDataflowBindings + contractBindings
+
+/** Identities intentionally shared by every selected site in one lowered function. */
+internal fun <T : Any> ArcSafeContinuationSROAIRBindings<T>.sharedAuthenticationIdentityInventory(): List<T> = listOf(
+    function, safeClass, constructor, delegateField, resultRefField, resumeWith,
+    resumeResultParameter, resultValueField, getOrThrow,
+) + contractBindings
+
+/** Identities that one physical emitter must consume independently for each scalarized site. */
+internal fun <T : Any> ArcSafeContinuationSROAIRBindings<T>.emissionSiteIdentityInventory(): List<T> = listOf(
+    local, allocation, interceptedReceiver, interceptedCall, resumeCall, resumeReceiver,
+    resumeResultArgument, resumeValueProducer, resultCompanionGetter, resultBoxIntrinsic,
+    resultConstructor, resultValueRead, getOrThrowCall, getOrThrowReceiver,
+) + structuralUnitCalls + resumeDataflowBindings
+
+/**
+ * Validate multi-site identity topology without rejecting shared stdlib declarations/contracts.
+ * The private Result.value field is a named shared binding; its projection and every resume-dataflow
+ * token are site-local physical emission identities.
+ */
+internal fun <T : Any> verifySafeContinuationSROAMultiSiteIdentities(
+    sites: List<ArcSafeContinuationSROAIRBindings<T>>,
+) {
+    check(sites.isNotEmpty()) { "empty SafeContinuation SROA multi-site inventory" }
+    val shared = sites.first().sharedAuthenticationIdentityInventory()
+    val emitted = Collections.newSetFromMap(IdentityHashMap<T, Boolean>())
+    sites.forEach { site ->
+        val actualShared = site.sharedAuthenticationIdentityInventory()
+        check(actualShared.size == shared.size && actualShared.indices.all { index ->
+            actualShared[index] === shared[index]
+        }) { "SafeContinuation SROA shared declaration/contract identity drifted between sites" }
+        check(site.emissionSiteIdentityInventory().all(emitted::add)) {
+            "SafeContinuation SROA physical emission sites overlap by IR identity"
+        }
+    }
+}
 
 internal data class ArcSafeContinuationSROAIRShape(
     val exactStdlibDeclarations: Boolean,
@@ -279,6 +316,26 @@ internal data class ArcSafeContinuationSROAKotlinIRSelection(
     val function: IrFunction,
     val sites: List<ArcSafeContinuationSROAIRSelection<IrElement>>,
 )
+
+/** Immutable, identity-disjoint authorization consumed by exactly one function emitter. */
+internal class ArcSafeContinuationSROAKotlinIRCodegenPlan(
+    val function: IrFunction,
+    sites: List<ArcSafeContinuationSROAIRSelection<IrElement>>,
+) {
+    val sites: List<ArcSafeContinuationSROAIRSelection<IrElement>> =
+        Collections.unmodifiableList(sites.toList())
+
+    init {
+        check(this.sites.isNotEmpty()) { "empty SafeContinuation SROA codegen plan" }
+        verifySafeContinuationSROAMultiSiteIdentities(this.sites.map { it.bindings })
+        this.sites.forEach { site ->
+            check(site.bindings.function === function) { "SafeContinuation SROA function identity drifted" }
+            check(!site.semantic.reduction.emitted && site.semantic.reduction.measuredPhysical == null) {
+                "SafeContinuation SROA authorization already claimed physical emission"
+            }
+        }
+    }
+}
 
 /**
  * Find the deliberately narrow post-lowering shape:
@@ -555,7 +612,8 @@ private fun selectInFunction(
             resultRefField, resumeWith, resumeCall, resumeReceiver, resumeResult,
             resumeWith.valueParameters.single(), structuralCalls.resumeValueProducer,
             structuralCalls.resultCompanionGetter, structuralCalls.resultBoxIntrinsic,
-            structuralCalls.resultConstructor, structuralCalls.unitInstances,
+            structuralCalls.resultConstructor, structuralCalls.resultValueField,
+            structuralCalls.resultValueRead, structuralCalls.unitInstances,
             structuralCalls.resumeDataflowBindings,
             getOrThrow, getCall, getReceiver, contract.identityBindings + secondaryContract.identityBindings,
         )
@@ -1417,8 +1475,8 @@ private data class LinearSROARegion(
                 statements, resumeResult, producer, box, resultConstructor, ancestry, context,
             ) ?: return reject("resume argument dataflow drifted")
         return ExactSafeContinuationStructuralCalls(
-            producer, companion, box, resultConstructor, units,
-            listOf(resultValueField, resultValueRead) + resumeDataflow.identityBindings,
+            producer, companion, box, resultConstructor, resultValueField, resultValueRead,
+            units, resumeDataflow.identityBindings,
         )
     }
 }
@@ -1544,6 +1602,8 @@ private data class ExactSafeContinuationStructuralCalls(
     val resultCompanionGetter: IrCall,
     val resultBoxIntrinsic: IrCall,
     val resultConstructor: IrCall,
+    val resultValueField: IrField,
+    val resultValueRead: IrGetField,
     val unitInstances: List<IrCall>,
     val resumeDataflowBindings: List<IrElement>,
 )

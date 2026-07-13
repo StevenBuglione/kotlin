@@ -619,6 +619,110 @@ internal class ArcSafeContinuationSROAConsumptionLedger<T : Any>(
     }
 }
 
+/**
+ * Fail-closed bridge between the identity-authenticated SROA proof and physical code generation.
+ *
+ * The two physical tokens are explicit +1 frame slots. This ledger deliberately does not allow
+ * an emitter to claim success from the logical reduction alone: every structural call must have
+ * actually passed through code generation, the result must move to a distinct destination, and
+ * the delegate destroyed must be the exact slot initialized at the selected declaration.
+ */
+internal class ArcSafeContinuationSROAPhysicalEmissionLedger<T : Any, P : Any>(
+    private val selection: ArcSafeContinuationSROAIRSelection<T>,
+) {
+    private val semantic = ArcSafeContinuationSROAConsumptionLedger(selection.semantic)
+    private val expectedStructuralCalls = listOf(
+        selection.bindings.interceptedCall,
+        selection.bindings.resumeValueProducer,
+        selection.bindings.resultCompanionGetter,
+        selection.bindings.resultBoxIntrinsic,
+        selection.bindings.resultConstructor,
+    ) + selection.bindings.structuralUnitCalls
+    private val expectedStructuralSet = Collections.newSetFromMap(IdentityHashMap<T, Boolean>()).apply {
+        check(expectedStructuralCalls.all(::add)) { "SafeContinuation SROA structural call inventory is not unique" }
+    }
+    private val observedStructuralCalls = Collections.newSetFromMap(IdentityHashMap<T, Boolean>())
+    private var delegateSlot: P? = null
+    private var resultSlot: P? = null
+    private var destinationSlot: P? = null
+    private var allocationConsumed = false
+    private var resumeConsumed = false
+    private var getConsumed = false
+    private var sealed = false
+
+    /** Returns true only for an exact structural identity and records its real emission. */
+    fun observeStructuralCall(call: T): Boolean {
+        if (call !in expectedStructuralSet) return false
+        check(observedStructuralCalls.add(call)) { "SafeContinuation SROA structural call emitted twice" }
+        return true
+    }
+
+    fun consumeAllocation(local: T, allocation: T, constructor: T, physicalDelegateSlot: P) {
+        check(!allocationConsumed) { "SafeContinuation SROA allocation emitted twice" }
+        check(physicalDelegateSlot != resultSlot) { "SafeContinuation SROA delegate/result slots alias" }
+        semantic.consumeAllocation(allocation, local, constructor)
+        delegateSlot = physicalDelegateSlot
+        allocationConsumed = true
+    }
+
+    fun consumeResume(call: T, result: T, physicalResultSlot: P) {
+        check(allocationConsumed && !resumeConsumed) {
+            "SafeContinuation SROA resume emitted out of order or twice"
+        }
+        check(physicalResultSlot != delegateSlot) { "SafeContinuation SROA delegate/result slots alias" }
+        semantic.consumeResume(call, result)
+        resultSlot = physicalResultSlot
+        resumeConsumed = true
+    }
+
+    fun consumeGetOrThrow(
+        call: T,
+        physicalResultSlot: P,
+        physicalDestinationSlot: P,
+        physicalDelegateSlot: P,
+    ) {
+        check(resumeConsumed && !getConsumed) {
+            "SafeContinuation SROA getOrThrow emitted out of order or twice"
+        }
+        check(physicalResultSlot == resultSlot) { "SafeContinuation SROA result source slot drifted" }
+        check(physicalDelegateSlot == delegateSlot) { "SafeContinuation SROA delegate destroy slot drifted" }
+        check(physicalDestinationSlot != physicalResultSlot && physicalDestinationSlot != physicalDelegateSlot) {
+            "SafeContinuation SROA destination aliases scalar storage"
+        }
+        semantic.consumeGetOrThrow(call)
+        destinationSlot = physicalDestinationSlot
+        getConsumed = true
+    }
+
+    fun verifyComplete() {
+        check(!sealed) { "SafeContinuation SROA physical emission verified twice" }
+        check(observedStructuralCalls.size == expectedStructuralCalls.size &&
+                expectedStructuralCalls.all { it in observedStructuralCalls }
+        ) {
+            "SafeContinuation SROA structural emission incomplete: " +
+                    "expected=${expectedStructuralCalls.size}, actual=${observedStructuralCalls.size}"
+        }
+        check(allocationConsumed && resumeConsumed && getConsumed && delegateSlot != null &&
+                resultSlot != null && destinationSlot != null
+        ) {
+            "SafeContinuation SROA physical emission incomplete: allocation=$allocationConsumed, " +
+                    "resume=$resumeConsumed, getOrThrow=$getConsumed"
+        }
+        semantic.consumeStructuralCalls(
+            selection.bindings.interceptedCall,
+            selection.bindings.resumeValueProducer,
+            selection.bindings.resultCompanionGetter,
+            selection.bindings.resultBoxIntrinsic,
+            selection.bindings.resultConstructor,
+            selection.bindings.structuralUnitCalls,
+        )
+        semantic.consumeAuthenticatedInventory(selection.bindings.exactIdentityInventory())
+        semantic.consumeReductionSites(selection.semantic.reduction.sites)
+        semantic.verifyComplete()
+        sealed = true
+    }
+}
+
 private fun ArcSafeContinuationSROAMode.isProductionArcMode(): Boolean =
     arcEnabled && linuxX64 && finalBinary && optimizationsEnabled && debugInfoDisabled &&
             diagnosticsDisabled && sanitizerDisabled && coverageDisabled &&

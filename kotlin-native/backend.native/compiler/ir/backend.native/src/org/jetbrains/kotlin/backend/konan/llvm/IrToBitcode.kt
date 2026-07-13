@@ -24,6 +24,9 @@ import org.jetbrains.kotlin.backend.konan.arc.ArcMatchingSetConsumptionLedger
 import org.jetbrains.kotlin.backend.konan.arc.ArcMatchingSetLocalAliasIRSelection
 import org.jetbrains.kotlin.backend.konan.arc.ArcSafeContinuationResumeBorrowConsumptionLedger
 import org.jetbrains.kotlin.backend.konan.arc.ArcSafeContinuationResumeBorrowPlan
+import org.jetbrains.kotlin.backend.konan.arc.ArcSafeContinuationSROAKotlinIRCodegenPlan
+import org.jetbrains.kotlin.backend.konan.arc.ArcSafeContinuationSROAPhysicalEmissionLedger
+import org.jetbrains.kotlin.backend.konan.arc.ArcSafeContinuationSROAIRSelection
 import org.jetbrains.kotlin.backend.konan.arc.ArcOwnedToGuaranteedPhiIRActionId
 import org.jetbrains.kotlin.backend.konan.arc.ArcOwnedToGuaranteedPhiIRConsumptionLedger
 import org.jetbrains.kotlin.backend.konan.arc.ArcOwnedToGuaranteedPhiKotlinIRBindingRole
@@ -282,6 +285,7 @@ internal class CodeGeneratorVisitor(
     private var currentCoroutineGuaranteedPhiEmission: CoroutineGuaranteedPhiEmission? = null
     private var currentMatchingSetLocalAliasEmission: MatchingSetLocalAliasEmission? = null
     private var currentSafeContinuationResumeBorrowEmission: SafeContinuationResumeBorrowEmission? = null
+    private var currentSafeContinuationSROAEmission: SafeContinuationSROAEmission? = null
     private var currentBranchGuaranteedPhiEmission: BranchGuaranteedPhiEmission? = null
     private var currentStringBuilderBackingArrayProjectionEmission:
             StringBuilderBackingArrayProjectionEmission? = null
@@ -713,6 +717,190 @@ internal class CodeGeneratorVisitor(
                         "conditionals=$conditionalEmissions terminalEqualities=$terminalEqualityEmissions"
             }
             ledger.commit()
+        }
+    }
+
+    /** Consumes the exact stdlib `SafeContinuation.resumeWith` projection web once. */
+    private inner class SafeContinuationSROAEmission(
+        val plan: ArcSafeContinuationSROAKotlinIRCodegenPlan,
+    ) {
+        private inner class Site(
+            val selection: ArcSafeContinuationSROAIRSelection<IrElement>,
+        ) {
+            val ledger = ArcSafeContinuationSROAPhysicalEmissionLedger<IrElement, LLVMValueRef>(selection)
+            var delegateSlot: LLVMValueRef? = null
+            var resultSlot: LLVMValueRef? = null
+            var resultBoxBound = false
+        }
+
+        private val sites = plan.sites.map(::Site)
+        private val sitesByLocal = IdentityHashMap<IrVariable, Site>()
+        private val sitesBySelectedCall = IdentityHashMap<IrCall, Site>()
+        private val sitesByStructuralCall = IdentityHashMap<IrCall, Site>()
+        private var activeResumeSite: Site? = null
+
+        init {
+            sites.forEach { site ->
+                val bindings = site.selection.bindings
+                val local = bindings.local as? IrVariable
+                    ?: error("SafeContinuation SROA local binding changed kind")
+                check(sitesByLocal.put(local, site) == null) {
+                    "SafeContinuation SROA local belongs to two physical sites"
+                }
+                listOf(bindings.resumeCall, bindings.getOrThrowCall).forEach { binding ->
+                    val call = binding as? IrCall
+                        ?: error("SafeContinuation SROA selected call binding changed kind")
+                    check(sitesBySelectedCall.put(call, site) == null) {
+                        "SafeContinuation SROA call belongs to two physical sites"
+                    }
+                }
+                (listOf(
+                    bindings.interceptedCall,
+                    bindings.resumeValueProducer,
+                    bindings.resultCompanionGetter,
+                    bindings.resultBoxIntrinsic,
+                    bindings.resultConstructor,
+                ) + bindings.structuralUnitCalls).forEach { binding ->
+                    val call = binding as? IrCall
+                        ?: error("SafeContinuation SROA structural binding changed kind")
+                    check(sitesByStructuralCall.put(call, site) == null) {
+                        "SafeContinuation SROA structural call belongs to two physical sites"
+                    }
+                }
+            }
+        }
+
+        /** Observe ordinary calls before their normal emission; selected calls are handled below. */
+        fun observeStructuralCall(call: IrCall) {
+            sitesByStructuralCall[call]?.ledger?.observeStructuralCall(call)
+        }
+
+        fun emitAllocation(variable: IrVariable): Boolean {
+            val site = sitesByLocal[variable] ?: return false
+            val bindings = site.selection.bindings
+            val allocation = bindings.allocation as? IrConstructorCall
+                ?: error("SafeContinuation SROA allocation binding changed kind")
+            val constructor = bindings.constructor as? IrConstructor
+                ?: error("SafeContinuation SROA constructor binding changed kind")
+            val intercepted = bindings.interceptedCall as? IrCall
+                ?: error("SafeContinuation SROA intercepted binding changed kind")
+            require(variable.initializer === allocation && allocation.symbol.owner === constructor &&
+                    context.memoryModel == MemoryModel.ARC && context.config.optimizationsEnabled &&
+                    !context.shouldContainDebugInfo() && !context.config.arcDiagnosticsEnabled) {
+                "SafeContinuation SROA allocation escaped its authenticated emission boundary"
+            }
+
+            // Preserve the ordinary throwing intercepted() call and route its +1 result into the
+            // first explicitly authenticated scalar slot; only the wrapper allocations and their
+            // selected operations are suppressed.
+            val physicalSlot = functionGenerationContext.vars.createAnonymousSlot()
+            val delegate = evaluateExpression(intercepted, physicalSlot)
+            require(functionGenerationContext.arcResultIsAlreadyOwnedBySlot(delegate, physicalSlot)) {
+                "SafeContinuation SROA intercepted result did not initialize its exact scalar +1 slot"
+            }
+            site.ledger.consumeAllocation(variable, allocation, constructor, physicalSlot)
+            site.delegateSlot = physicalSlot
+            return true
+        }
+
+        fun isSelectedCall(call: IrCall): Boolean = call in sitesBySelectedCall
+
+        /** Route the authenticated Result payload box directly into the preallocated scalar slot. */
+        fun structuralResultSlot(call: IrCall): LLVMValueRef? {
+            val site = activeResumeSite ?: return null
+            if (call !== site.selection.bindings.resultBoxIntrinsic) return null
+            check(sitesByStructuralCall[call] === site) {
+                "SafeContinuation SROA Result box escaped its selected resume"
+            }
+            return requireNotNull(site.resultSlot) {
+                "SafeContinuation SROA Result box has no preallocated scalar slot"
+            }
+        }
+
+        /** Seal the exact stdlib box ABI's +1 write after its normal-success call edge. */
+        fun bindStructuralResult(call: IrCall, result: LLVMValueRef, physicalSlot: LLVMValueRef?) {
+            val site = activeResumeSite ?: return
+            if (call !== site.selection.bindings.resultBoxIntrinsic) return
+            val expectedSlot = requireNotNull(site.resultSlot)
+            require(physicalSlot == expectedSlot && result.type == codegen.kObjHeaderPtr) {
+                "SafeContinuation SROA Result box changed its explicit object-result ABI"
+            }
+            // The selector authenticates this exact compiler-owned stdlib box declaration and its
+            // ordinary-heap +1 convention. Generic callDirect intentionally cannot infer that fact
+            // for external/builtin producers, so publish it only at this identity-sealed boundary.
+            functionGenerationContext.markArcResultOwnedBySlot(result, expectedSlot)
+            require(functionGenerationContext.arcResultIsAlreadyOwnedBySlot(result, expectedSlot)) {
+                "SafeContinuation SROA Result box did not initialize its scalar +1 slot"
+            }
+            check(!site.resultBoxBound) { "SafeContinuation SROA Result box emitted twice" }
+            site.resultBoxBound = true
+        }
+
+        fun emitSelectedCall(call: IrCall, requestedResultSlot: LLVMValueRef?): LLVMValueRef {
+            val site = requireNotNull(sitesBySelectedCall[call]) {
+                "unknown SafeContinuation SROA selected call"
+            }
+            val bindings = site.selection.bindings
+            return when {
+                call === bindings.resumeCall -> {
+                    check(site.delegateSlot != null && site.resultSlot == null) {
+                        "SafeContinuation SROA resume reached before allocation or twice"
+                    }
+                    val argument = bindings.resumeResultArgument as? IrExpression
+                        ?: error("SafeContinuation SROA resume argument binding changed kind")
+                    val physicalSlot = functionGenerationContext.vars.createAnonymousSlot()
+                    site.resultSlot = physicalSlot
+                    check(activeResumeSite == null) { "nested SafeContinuation SROA resume emission" }
+                    try {
+                        activeResumeSite = site
+                        evaluateExpression(argument, null)
+                    } finally {
+                        activeResumeSite = null
+                    }
+                    require(site.resultBoxBound) {
+                        "SafeContinuation SROA resume result did not initialize its exact scalar +1 slot"
+                    }
+                    site.ledger.consumeResume(call, argument, physicalSlot)
+                    codegen.theUnitInstanceRef.llvm
+                }
+                call === bindings.getOrThrowCall -> {
+                    val sourceSlot = requireNotNull(site.resultSlot) {
+                        "SafeContinuation SROA getOrThrow reached before resume"
+                    }
+                    val delegateSlot = requireNotNull(site.delegateSlot) {
+                        "SafeContinuation SROA getOrThrow has no delegate slot"
+                    }
+                    val destinationSlot = requestedResultSlot ?: functionGenerationContext.vars.createAnonymousSlot()
+                    require(sourceSlot != destinationSlot && delegateSlot != destinationSlot) {
+                        "SafeContinuation SROA caller result slot aliases scalar storage"
+                    }
+                    val result = functionGenerationContext.loadSlot(sourceSlot, false, null)
+                    functionGenerationContext.moveArcOwnedReferenceIntoReturnSlot(
+                        result,
+                        sourceSlot,
+                        destinationSlot,
+                        verifiedPhysicalSlotOwnership = true,
+                    )
+                    // Publish the result before releasing the intercepted delegate, matching the
+                    // authenticated consuming-storage plan even if that release runs deinit code.
+                    functionGenerationContext.storeStackRef(codegen.kNullObjHeaderPtr, delegateSlot)
+                    site.ledger.consumeGetOrThrow(call, sourceSlot, destinationSlot, delegateSlot)
+                    result
+                }
+                else -> error("SafeContinuation SROA selected-call identity drifted")
+            }
+        }
+
+        fun verifyConsumed() {
+            check(activeResumeSite == null) { "unterminated SafeContinuation SROA resume emission" }
+            sites.forEach { site ->
+                site.ledger.verifyComplete()
+                val local = site.selection.bindings.local as IrVariable
+                context.log {
+                    "ARC synchronous SafeContinuation SROA emitted production site: " +
+                            plan.function.fqNameForIrSerialization.asString() + "/${local.name}; emitted=true"
+                }
+            }
         }
     }
 
@@ -1498,6 +1686,7 @@ internal class CodeGeneratorVisitor(
         val previousCoroutineGuaranteedPhiEmission = currentCoroutineGuaranteedPhiEmission
         val previousMatchingSetLocalAliasEmission = currentMatchingSetLocalAliasEmission
         val previousSafeContinuationResumeBorrowEmission = currentSafeContinuationResumeBorrowEmission
+        val previousSafeContinuationSROAEmission = currentSafeContinuationSROAEmission
         val previousBranchGuaranteedPhiEmission = currentBranchGuaranteedPhiEmission
         val previousStringBuilderBackingArrayProjectionEmission =
                 currentStringBuilderBackingArrayProjectionEmission
@@ -1517,6 +1706,8 @@ internal class CodeGeneratorVisitor(
         currentSafeContinuationResumeBorrowEmission = (declaration as? IrSimpleFunction)?.let {
             arcOwnership.safeContinuationResumeBorrowPlans[it]
         }?.let(::SafeContinuationResumeBorrowEmission)
+        currentSafeContinuationSROAEmission = arcOwnership.safeContinuationSROAPlans[declaration]
+            ?.let(::SafeContinuationSROAEmission)
         currentBranchGuaranteedPhiEmission = (declaration as? IrSimpleFunction)?.let {
             arcOwnership.branchGuaranteedPhiSelections[it]
         }?.let(::BranchGuaranteedPhiEmission)
@@ -1578,6 +1769,7 @@ internal class CodeGeneratorVisitor(
                                 currentCoroutineGuaranteedPhiEmission?.verifyConsumed()
                                 currentMatchingSetLocalAliasEmission?.verifyConsumed()
                                 currentSafeContinuationResumeBorrowEmission?.verifyConsumed()
+                                currentSafeContinuationSROAEmission?.verifyConsumed()
                                 currentBranchGuaranteedPhiEmission?.verifyConsumed()
                                 currentStringBuilderBackingArrayProjectionEmission?.verifyConsumed()
                                 currentOwnedResultHeapStoreEmission?.verifyConsumed()
@@ -1594,6 +1786,7 @@ internal class CodeGeneratorVisitor(
             currentCoroutineGuaranteedPhiEmission = previousCoroutineGuaranteedPhiEmission
             currentMatchingSetLocalAliasEmission = previousMatchingSetLocalAliasEmission
             currentSafeContinuationResumeBorrowEmission = previousSafeContinuationResumeBorrowEmission
+            currentSafeContinuationSROAEmission = previousSafeContinuationSROAEmission
             currentBranchGuaranteedPhiEmission = previousBranchGuaranteedPhiEmission
             currentStringBuilderBackingArrayProjectionEmission =
                     previousStringBuilderBackingArrayProjectionEmission
@@ -2412,6 +2605,7 @@ internal class CodeGeneratorVisitor(
 
     private fun generateVariable(variable: IrVariable) {
         context.log{"generateVariable               : ${ir2string(variable)}"}
+        if (currentSafeContinuationSROAEmission?.emitAllocation(variable) == true) return
         currentCoroutineGuaranteedPhiEmission?.let { emission ->
             val selection = emission.selection
             if (variable === selection.current || variable === selection.parameterState) {
@@ -3355,7 +3549,13 @@ internal class CodeGeneratorVisitor(
 
     private fun evaluateCallBody(value: IrFunctionAccessExpression, resultSlot: LLVMValueRef?): LLVMValueRef {
         context.log{"evaluateCall                   : ${ir2string(value)}"}
-        if (value is IrCall) currentCoroutineGuaranteedPhiEmission?.markCall(value)
+        if (value is IrCall) {
+            currentSafeContinuationSROAEmission?.let { emission ->
+                emission.observeStructuralCall(value)
+                if (emission.isSelectedCall(value)) return emission.emitSelectedCall(value, resultSlot)
+            }
+            currentCoroutineGuaranteedPhiEmission?.markCall(value)
+        }
 
         if (value is IrCall) {
             arcOwnership.coroutineSuspendedScopedBorrowsByCall[value]?.let { site ->
@@ -3386,6 +3586,12 @@ internal class CodeGeneratorVisitor(
             return evaluateBorrowedArrayElement(value)
         }
 
+        val safeContinuationScalarResultSlot = (value as? IrCall)?.let { call ->
+            currentSafeContinuationSROAEmission?.structuralResultSlot(call)
+        }
+        require(safeContinuationScalarResultSlot == null || resultSlot == null) {
+            "SafeContinuation SROA scalar Result box collided with a caller result slot"
+        }
         val requiredPromotionBoundary = (value as? IrCall)?.let { arcOwnership.scopedArcReferenceLoads[it] }
         val scopedPromotionSlot = if (resultSlot == null && requiredPromotionBoundary != null) {
             require(currentArcPromotionBoundary === requiredPromotionBoundary) {
@@ -3395,7 +3601,7 @@ internal class CodeGeneratorVisitor(
         } else {
             null
         }
-        val effectiveResultSlot = scopedPromotionSlot ?: resultSlot
+        val effectiveResultSlot = scopedPromotionSlot ?: safeContinuationScalarResultSlot ?: resultSlot
 
         fun recordScopedPromotion() {
             scopedPromotionSlot?.let {
@@ -3493,6 +3699,9 @@ internal class CodeGeneratorVisitor(
                 result,
                 ownedResultHeapStoreSlot,
             )
+        }
+        (value as? IrCall)?.let { call ->
+            currentSafeContinuationSROAEmission?.bindStructuralResult(call, result, callResultSlot)
         }
         recordScopedPromotion()
         (value as? IrCall)?.let { call -> currentBranchGuaranteedPhiEmission?.markTerminalEquality(call) }

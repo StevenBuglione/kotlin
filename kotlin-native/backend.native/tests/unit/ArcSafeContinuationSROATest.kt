@@ -323,6 +323,177 @@ class ArcSafeContinuationSROATest {
         expectFailure("consumed twice") { ledger.consumeReductionSites(selection.reduction.sites) }
     }
 
+    @Test
+    fun physicalEmissionLedgerRequiresExactCallsDistinctSlotsAndOneVerifiedMove() {
+        fun complete(ledger: ArcSafeContinuationSROAPhysicalEmissionLedger<Any, String>, fixture: PhysicalFixture) {
+            fixture.structuralCalls.forEach { assertTrue(ledger.observeStructuralCall(it)) }
+            assertFalse(ledger.observeStructuralCall(Any()))
+            ledger.consumeAllocation(
+                fixture.bindings.local,
+                fixture.bindings.allocation,
+                fixture.bindings.constructor,
+                "delegate.slot",
+            )
+            ledger.consumeResume(
+                fixture.bindings.resumeCall,
+                fixture.bindings.resumeResultArgument,
+                "result.slot",
+            )
+            ledger.consumeGetOrThrow(
+                fixture.bindings.getOrThrowCall,
+                "result.slot",
+                "destination.slot",
+                "delegate.slot",
+            )
+        }
+
+        val fixture = physicalFixture()
+        ArcSafeContinuationSROAPhysicalEmissionLedger<Any, String>(fixture.selection).also { ledger ->
+            complete(ledger, fixture)
+            ledger.verifyComplete()
+            expectFailure("verified twice") { ledger.verifyComplete() }
+        }
+        expectFailure("structural emission incomplete") {
+            ArcSafeContinuationSROAPhysicalEmissionLedger<Any, String>(fixture.selection).also { ledger ->
+                fixture.structuralCalls.dropLast(1).forEach(ledger::observeStructuralCall)
+                ledger.consumeAllocation(
+                    fixture.bindings.local, fixture.bindings.allocation,
+                    fixture.bindings.constructor, "delegate.slot",
+                )
+                ledger.consumeResume(
+                    fixture.bindings.resumeCall, fixture.bindings.resumeResultArgument, "result.slot",
+                )
+                ledger.consumeGetOrThrow(
+                    fixture.bindings.getOrThrowCall, "result.slot", "destination.slot", "delegate.slot",
+                )
+                ledger.verifyComplete()
+            }
+        }
+        expectFailure("emitted twice") {
+            ArcSafeContinuationSROAPhysicalEmissionLedger<Any, String>(fixture.selection).also { ledger ->
+                ledger.observeStructuralCall(fixture.structuralCalls.first())
+                ledger.observeStructuralCall(fixture.structuralCalls.first())
+            }
+        }
+        expectFailure("delegate/result slots alias") {
+            ArcSafeContinuationSROAPhysicalEmissionLedger<Any, String>(fixture.selection).also { ledger ->
+                ledger.consumeAllocation(
+                    fixture.bindings.local, fixture.bindings.allocation,
+                    fixture.bindings.constructor, "same.slot",
+                )
+                ledger.consumeResume(
+                    fixture.bindings.resumeCall, fixture.bindings.resumeResultArgument, "same.slot",
+                )
+            }
+        }
+        expectFailure("result source slot drifted") {
+            ArcSafeContinuationSROAPhysicalEmissionLedger<Any, String>(fixture.selection).also { ledger ->
+                ledger.consumeAllocation(
+                    fixture.bindings.local, fixture.bindings.allocation,
+                    fixture.bindings.constructor, "delegate.slot",
+                )
+                ledger.consumeResume(
+                    fixture.bindings.resumeCall, fixture.bindings.resumeResultArgument, "result.slot",
+                )
+                ledger.consumeGetOrThrow(
+                    fixture.bindings.getOrThrowCall, "alien.slot", "destination.slot", "delegate.slot",
+                )
+            }
+        }
+        expectFailure("destination aliases") {
+            ArcSafeContinuationSROAPhysicalEmissionLedger<Any, String>(fixture.selection).also { ledger ->
+                ledger.consumeAllocation(
+                    fixture.bindings.local, fixture.bindings.allocation,
+                    fixture.bindings.constructor, "delegate.slot",
+                )
+                ledger.consumeResume(
+                    fixture.bindings.resumeCall, fixture.bindings.resumeResultArgument, "result.slot",
+                )
+                ledger.consumeGetOrThrow(
+                    fixture.bindings.getOrThrowCall, "result.slot", "result.slot", "delegate.slot",
+                )
+            }
+        }
+    }
+
+    @Test
+    fun multiSitePlanSharesContractsButRequiresDisjointPhysicalEmissionIdentities() {
+        val first = physicalFixture().bindings
+        val independent = physicalFixture().bindings
+        val second = independent.copy(
+            function = first.function,
+            safeClass = first.safeClass,
+            constructor = first.constructor,
+            delegateField = first.delegateField,
+            resultRefField = first.resultRefField,
+            resumeWith = first.resumeWith,
+            resumeResultParameter = first.resumeResultParameter,
+            resultValueField = first.resultValueField,
+            getOrThrow = first.getOrThrow,
+            contractBindings = first.contractBindings,
+        )
+
+        verifySafeContinuationSROAMultiSiteIdentities(listOf(first, second))
+        expectFailure("physical emission sites overlap") {
+            verifySafeContinuationSROAMultiSiteIdentities(listOf(first, second.copy(local = first.local)))
+        }
+        expectFailure("shared declaration/contract identity drifted") {
+            verifySafeContinuationSROAMultiSiteIdentities(listOf(first, second.copy(safeClass = Any())))
+        }
+    }
+
+    private data class PhysicalFixture(
+        val bindings: ArcSafeContinuationSROAIRBindings<Any>,
+        val selection: ArcSafeContinuationSROAIRSelection<Any>,
+        val structuralCalls: List<Any>,
+    )
+
+    private fun physicalFixture(): PhysicalFixture {
+        fun token() = Any()
+        val bindings = ArcSafeContinuationSROAIRBindings(
+            function = token(), safeClass = token(), local = token(), allocation = token(),
+            constructor = token(), interceptedReceiver = token(), interceptedCall = token(),
+            delegateField = token(), resultRefField = token(), resumeWith = token(), resumeCall = token(),
+            resumeReceiver = token(), resumeResultArgument = token(), resumeResultParameter = token(),
+            resumeValueProducer = token(), resultCompanionGetter = token(), resultBoxIntrinsic = token(),
+            resultConstructor = token(), resultValueField = token(), resultValueRead = token(),
+            structuralUnitCalls = listOf(token(), token()),
+            resumeDataflowBindings = List(6) { token() }, getOrThrow = token(),
+            getOrThrowCall = token(), getOrThrowReceiver = token(), contractBindings = List(8) { token() },
+        )
+        val candidate = validCandidate().copy(
+            functionBinding = bindings.function,
+            allocationBinding = bindings.allocation,
+            localBinding = bindings.local,
+            constructorBinding = bindings.constructor,
+            delegateBinding = bindings.interceptedReceiver,
+            resumeBinding = bindings.resumeCall,
+            resumeResultBinding = bindings.resumeResultArgument,
+            getOrThrowBinding = bindings.getOrThrowCall,
+            scalarDelegateSlotBinding = bindings.delegateField,
+            scalarStateSlotBinding = bindings.resultRefField,
+            scalarResultSlotBinding = bindings.resumeResultParameter,
+            interceptedBinding = bindings.interceptedCall,
+            resumeValueProducerBinding = bindings.resumeValueProducer,
+            resultCompanionBinding = bindings.resultCompanionGetter,
+            resultBoxBinding = bindings.resultBoxIntrinsic,
+            resultConstructorBinding = bindings.resultConstructor,
+            unitInstanceBindings = bindings.structuralUnitCalls,
+            exactIdentityBindings = bindings.exactIdentityInventory(),
+        )
+        val semantic = ArcSafeContinuationSROAAnalysis.select(candidate).selection!!
+        val selection = ArcSafeContinuationSROAIRSelection(bindings, semantic)
+        return PhysicalFixture(
+            bindings,
+            selection,
+            listOf(
+                bindings.interceptedCall, bindings.resumeValueProducer,
+                bindings.resultCompanionGetter, bindings.resultBoxIntrinsic,
+                bindings.resultConstructor,
+            ) + bindings.structuralUnitCalls,
+        )
+    }
+
     private fun validCandidate(): ArcSafeContinuationSROACandidate<Any> =
         ArcSafeContinuationSROACandidate(
             functionBinding = Any(), allocationBinding = Any(), localBinding = Any(),

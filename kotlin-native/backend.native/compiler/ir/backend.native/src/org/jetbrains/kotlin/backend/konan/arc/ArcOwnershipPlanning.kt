@@ -334,6 +334,7 @@ internal data class ArcCodegenOwnershipPlan(
     val safeContinuationOwnedResultAssignments: Set<IrSetValue>,
     val safeContinuationMovedResultReads: Set<IrGetValue>,
     val safeContinuationResumeBorrowPlans: Map<IrSimpleFunction, ArcSafeContinuationResumeBorrowPlan>,
+    val safeContinuationSROAPlans: Map<IrFunction, ArcSafeContinuationSROAKotlinIRCodegenPlan>,
     val joinedReferenceSlots: Map<IrVariable, ArcJoinedReferenceSlotPlan>,
     val borrowedGuaranteedAliases: Set<IrVariable>,
     val borrowedMutableReads: Set<IrGetValue>,
@@ -401,6 +402,7 @@ internal data class ArcCodegenOwnershipPlan(
             safeContinuationOwnedResultAssignments = emptySet(),
             safeContinuationMovedResultReads = emptySet(),
             safeContinuationResumeBorrowPlans = emptyMap(),
+            safeContinuationSROAPlans = emptyMap(),
             joinedReferenceSlots = emptyMap(),
             borrowedGuaranteedAliases = emptySet(),
             borrowedMutableReads = emptySet(),
@@ -912,6 +914,16 @@ internal fun runArcOwnershipPlanning(
         "ARC synchronous SafeContinuation SROA production selections: " +
                 safeContinuationSROASelections.sumOf { it.sites.size } + "; emitted=false"
     }
+    val safeContinuationSROAPlans = Collections.unmodifiableMap(
+        IdentityHashMap<IrFunction, ArcSafeContinuationSROAKotlinIRCodegenPlan>().apply {
+            safeContinuationSROASelections.forEach { selection ->
+                check(put(
+                    selection.function,
+                    ArcSafeContinuationSROAKotlinIRCodegenPlan(selection.function, selection.sites),
+                ) == null) { "duplicate SafeContinuation SROA function authorization" }
+            }
+        },
+    )
 
     // Exercise the exact lowered BaseContinuationImpl.resumeWith completion/result proof on the
     // production IR path.  This count is deliberately diagnostic-only until the physical move
@@ -1265,6 +1277,7 @@ internal fun runArcOwnershipPlanning(
             safeContinuationOwnedResultAssignments,
             safeContinuationMovedResultReads,
             safeContinuationResumeBorrowPlans,
+            safeContinuationSROAPlans,
             joinedReferenceSlots,
             borrowedGuaranteedAliases,
             borrowedMutableReads,

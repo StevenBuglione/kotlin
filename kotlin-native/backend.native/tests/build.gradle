@@ -3417,11 +3417,12 @@ standaloneTest("arc_coroutine_locked_read_spill") {
 
 tasks.register("arc_safe_continuation_get_or_throw", KonanDriverTest) {
     enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
-    flags = ["-opt", "-Xverbose-phases=ArcOwnershipAnalysis"]
+    flags = ["-opt", "-Xverbose-phases=ArcOwnershipAnalysis,Codegen"]
     compilerMessages = true
     outputChecker = { output ->
         output.contains("ARC synchronous SafeContinuation SROA production selections: 1; emitted=false") &&
                 output.count("ARC synchronous SafeContinuation SROA selected production site: immediate/safe; emitted=false") == 1 &&
+                output.count("ARC synchronous SafeContinuation SROA emitted production site: immediate/safe; emitted=true") == 1 &&
                 !output.contains("selected production site: failing/") &&
                 !output.contains("selected production site: delayed/") &&
                 !output.contains("selected production site: raced/") &&
