@@ -5,6 +5,24 @@
 
 package org.jetbrains.kotlin.backend.konan.arc
 
+/** Complete authorization boundary for a future post-emission physical-slot rewrite. */
+internal data class ArcPhysicalSlotRewriteEligibility(
+    val arcEnabled: Boolean,
+    val optimizationsEnabled: Boolean,
+    val debugInfoDisabled: Boolean,
+    val diagnosticsDisabled: Boolean,
+    val exactOwnershipPlanIdentity: Boolean,
+    val completeUseChainVerified: Boolean,
+    val completeCfgCoverageVerified: Boolean,
+    val normalAndUnwindEdgesModeled: Boolean,
+    val deinitializationBarriersModeled: Boolean,
+)
+
+internal fun ArcPhysicalSlotRewriteEligibility.isAuthorized(): Boolean =
+    arcEnabled && optimizationsEnabled && debugInfoDisabled && diagnosticsDisabled &&
+            exactOwnershipPlanIdentity && completeUseChainVerified && completeCfgCoverageVerified &&
+            normalAndUnwindEdgesModeled && deinitializationBarriersModeled
+
 /**
  * Emission-independent model for auditing every use of one physical object-reference slot.
  *

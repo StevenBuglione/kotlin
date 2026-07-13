@@ -15,6 +15,31 @@ import org.junit.Test
 
 class ArcPhysicalSlotVerifierTest {
     @Test
+    fun rewriteAuthorizationRequiresReleaseModeAndEveryCompletedProof() {
+        val accepted = ArcPhysicalSlotRewriteEligibility(
+            arcEnabled = true,
+            optimizationsEnabled = true,
+            debugInfoDisabled = true,
+            diagnosticsDisabled = true,
+            exactOwnershipPlanIdentity = true,
+            completeUseChainVerified = true,
+            completeCfgCoverageVerified = true,
+            normalAndUnwindEdgesModeled = true,
+            deinitializationBarriersModeled = true,
+        )
+        assertTrue(accepted.isAuthorized())
+        assertFalse(accepted.copy(arcEnabled = false).isAuthorized())
+        assertFalse(accepted.copy(optimizationsEnabled = false).isAuthorized())
+        assertFalse(accepted.copy(debugInfoDisabled = false).isAuthorized())
+        assertFalse(accepted.copy(diagnosticsDisabled = false).isAuthorized())
+        assertFalse(accepted.copy(exactOwnershipPlanIdentity = false).isAuthorized())
+        assertFalse(accepted.copy(completeUseChainVerified = false).isAuthorized())
+        assertFalse(accepted.copy(completeCfgCoverageVerified = false).isAuthorized())
+        assertFalse(accepted.copy(normalAndUnwindEdgesModeled = false).isAuthorized())
+        assertFalse(accepted.copy(deinitializationBarriersModeled = false).isAuthorized())
+    }
+
+    @Test
     fun bitcastGepPhiAndSelectRemainMayAliasesOfThePhysicalRoot() {
         val verification = ArcPhysicalSlotUseChainVerifier.verify(
             ArcPhysicalSlotUseChain(
