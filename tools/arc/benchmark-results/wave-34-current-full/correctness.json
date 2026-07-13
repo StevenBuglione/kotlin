@@ -1,0 +1,181 @@
+{
+  "passed": true,
+  "policy": "all-shards-exact-output-before-warmup-or-timing",
+  "schemaVersion": 1,
+  "shards": {
+    "primary": {
+      "passed": true,
+      "policy": "exact-observable-output-before-warmup-or-timing",
+      "results": [
+        {
+          "model": "baseline-strict",
+          "output_sha256": "f991ea9c5da28bb47a4c7abe458493fcd8c00f8844bb9c080fb4ff3b358045f9",
+          "scenario": "allocation"
+        },
+        {
+          "model": "candidate-arc",
+          "output_sha256": "f991ea9c5da28bb47a4c7abe458493fcd8c00f8844bb9c080fb4ff3b358045f9",
+          "scenario": "allocation"
+        },
+        {
+          "model": "candidate-arc",
+          "output_sha256": "b2cd0bf2050138fa87e5b4dea357d97850401b39a3ce53684131f7eefa9fa962",
+          "scenario": "arrays"
+        },
+        {
+          "model": "baseline-strict",
+          "output_sha256": "b2cd0bf2050138fa87e5b4dea357d97850401b39a3ce53684131f7eefa9fa962",
+          "scenario": "arrays"
+        },
+        {
+          "model": "baseline-strict",
+          "output_sha256": "01188892cb31550c1984f9ed4695451d5e2d45bf96fbf47b2a491bbab8a87b34",
+          "scenario": "atomics"
+        },
+        {
+          "model": "candidate-arc",
+          "output_sha256": "01188892cb31550c1984f9ed4695451d5e2d45bf96fbf47b2a491bbab8a87b34",
+          "scenario": "atomics"
+        },
+        {
+          "model": "candidate-arc",
+          "output_sha256": "59dde7d0a02dc739690788ed8e1c819f726dc99ac3d15c6d92d7e10e9cee2dd9",
+          "scenario": "bounded-cycles"
+        },
+        {
+          "model": "baseline-strict",
+          "output_sha256": "59dde7d0a02dc739690788ed8e1c819f726dc99ac3d15c6d92d7e10e9cee2dd9",
+          "scenario": "bounded-cycles"
+        },
+        {
+          "model": "baseline-strict",
+          "output_sha256": "b781b57bccd91fb30f41c288cf97abd24529e80552c250ac0b58527631564062",
+          "scenario": "call-arguments"
+        },
+        {
+          "model": "candidate-arc",
+          "output_sha256": "b781b57bccd91fb30f41c288cf97abd24529e80552c250ac0b58527631564062",
+          "scenario": "call-arguments"
+        },
+        {
+          "model": "candidate-arc",
+          "output_sha256": "40b771096459a17033b84ee6dff993edd118119a0c5978ed4d2aca0a13566a3e",
+          "scenario": "closures"
+        },
+        {
+          "model": "baseline-strict",
+          "output_sha256": "40b771096459a17033b84ee6dff993edd118119a0c5978ed4d2aca0a13566a3e",
+          "scenario": "closures"
+        },
+        {
+          "model": "baseline-strict",
+          "output_sha256": "e07e18e0fdebd95ff68bd7bb71377edad3a313f470c1e2b77f901fc1751500f8",
+          "scenario": "coroutines"
+        },
+        {
+          "model": "candidate-arc",
+          "output_sha256": "e07e18e0fdebd95ff68bd7bb71377edad3a313f470c1e2b77f901fc1751500f8",
+          "scenario": "coroutines"
+        },
+        {
+          "model": "candidate-arc",
+          "output_sha256": "226db3a0fc51e64d24f14246a721b30ee4727ec435990e388b3d767e8b76ba14",
+          "scenario": "exceptions"
+        },
+        {
+          "model": "baseline-strict",
+          "output_sha256": "226db3a0fc51e64d24f14246a721b30ee4727ec435990e388b3d767e8b76ba14",
+          "scenario": "exceptions"
+        }
+      ],
+      "schemaVersion": 1
+    },
+    "secondary": {
+      "passed": true,
+      "policy": "exact-observable-output-before-warmup-or-timing",
+      "results": [
+        {
+          "model": "baseline-strict",
+          "output_sha256": "889bd0016a883e0504a401edbfbfe0a42a18359f8c006c944f108f582787b5e1",
+          "scenario": "destruction"
+        },
+        {
+          "model": "candidate-arc",
+          "output_sha256": "889bd0016a883e0504a401edbfbfe0a42a18359f8c006c944f108f582787b5e1",
+          "scenario": "destruction"
+        },
+        {
+          "model": "candidate-arc",
+          "output_sha256": "cec17b2856118608c2aa577eac22fed81eb38c1c85fb9c84a55cdf9387080d10",
+          "scenario": "fields"
+        },
+        {
+          "model": "baseline-strict",
+          "output_sha256": "cec17b2856118608c2aa577eac22fed81eb38c1c85fb9c84a55cdf9387080d10",
+          "scenario": "fields"
+        },
+        {
+          "model": "baseline-strict",
+          "output_sha256": "009e06b01d0f39ee108311511c896f23333bebccc0bd24dc54d51a9350d057f5",
+          "scenario": "platform-c-dynamic-cstring"
+        },
+        {
+          "model": "candidate-arc",
+          "output_sha256": "009e06b01d0f39ee108311511c896f23333bebccc0bd24dc54d51a9350d057f5",
+          "scenario": "platform-c-dynamic-cstring"
+        },
+        {
+          "model": "candidate-arc",
+          "output_sha256": "e08eeab2a13155e20f88b64acd6835a715f638933499afb0fc67256ac92ffcaf",
+          "scenario": "platform-c-interop"
+        },
+        {
+          "model": "baseline-strict",
+          "output_sha256": "e08eeab2a13155e20f88b64acd6835a715f638933499afb0fc67256ac92ffcaf",
+          "scenario": "platform-c-interop"
+        },
+        {
+          "model": "baseline-strict",
+          "output_sha256": "cd61397e2c41a0a3bbbb69d17a83d3399b0f1b620f058d7b2dcc00df73963726",
+          "scenario": "platform-c-leaf"
+        },
+        {
+          "model": "candidate-arc",
+          "output_sha256": "cd61397e2c41a0a3bbbb69d17a83d3399b0f1b620f058d7b2dcc00df73963726",
+          "scenario": "platform-c-leaf"
+        },
+        {
+          "model": "candidate-arc",
+          "output_sha256": "bf58191ef074e83ee6b4c92ae654d3e528295b09b44d7158e1b2b92be07a90e1",
+          "scenario": "strings"
+        },
+        {
+          "model": "baseline-strict",
+          "output_sha256": "bf58191ef074e83ee6b4c92ae654d3e528295b09b44d7158e1b2b92be07a90e1",
+          "scenario": "strings"
+        },
+        {
+          "model": "baseline-strict",
+          "output_sha256": "9c38ca17bbe894d4c174b07b6bd764ca09f090b74e060d63042a38828f44204d",
+          "scenario": "virtual-dispatch"
+        },
+        {
+          "model": "candidate-arc",
+          "output_sha256": "9c38ca17bbe894d4c174b07b6bd764ca09f090b74e060d63042a38828f44204d",
+          "scenario": "virtual-dispatch"
+        },
+        {
+          "model": "candidate-arc",
+          "output_sha256": "56f97ee77b17b84d0dfc1ea03660e4ffe270209718a5ad41c408690a482f4061",
+          "scenario": "workers"
+        },
+        {
+          "model": "baseline-strict",
+          "output_sha256": "56f97ee77b17b84d0dfc1ea03660e4ffe270209718a5ad41c408690a482f4061",
+          "scenario": "workers"
+        }
+      ],
+      "schemaVersion": 1
+    }
+  }
+}

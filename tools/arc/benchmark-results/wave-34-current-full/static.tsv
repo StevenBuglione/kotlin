@@ -1,0 +1,3 @@
+model	compile_seconds	compile_max_rss_kib	binary_bytes	retain_callsites	release_callsites	allocation_callsites	compiler_commit	memory_model	compiler
+baseline-strict	7.57	1015324	507200	12	0	269	3db61efe5e892bf27115f1ebcab957d903067ed4	strict	/home/olfa/codex-kotlin-arc-primary-bench-baseline-v1.9.10/kotlin-native/dist/bin/konanc
+candidate-arc	7.96	999096	521696	473	585	186	ded32721f42e2ade83039dfa29b62909e7cdbfb2	arc	/home/olfa/codex-kotlin-arc-git/.git/codex-arc-benchmark-cache-v2/candidate/03c4fab3eafccc3d8e249029b268d80668de2de83d0165942a152ef7ad5f0b1b/dist/bin/konanc
