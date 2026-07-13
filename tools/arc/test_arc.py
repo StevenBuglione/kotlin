@@ -5,6 +5,7 @@ import sys
 import tempfile
 from contextlib import redirect_stderr, redirect_stdout
 import io
+import json
 import unittest
 from unittest.mock import patch
 
@@ -473,15 +474,23 @@ class ArcProfileTest(unittest.TestCase):
                 "ARC_BENCH_BUILD_WORKERS": "6",
                 "ARC_BENCH_SCENARIOS": "strings",
                 "ARC_BENCH_QUICK": "1",
+                "ARC_BENCH_CANDIDATE_CACHE_MAX_ENTRIES": "5",
+                "ARC_BENCH_RESERVED_CODE_CACHE_SIZE": "384m",
+                "JAVA_OPTS": "-Xmx4g",
             },
             clear=True,
         ):
             candidate = arc.profile_command("arc-bench-candidate")
             baseline = arc.profile_command("arc-bench-baseline")
+            comparison = arc.profile_command("arc-bench")
         for command in (candidate, baseline):
             self.assertIn("ARC_BENCH_BUILD_WORKERS=6", command)
             self.assertNotIn("ARC_BENCH_SCENARIOS=strings", command)
             self.assertIn("ARC_BENCH_QUICK=1", command)
+            self.assertIn("JAVA_OPTS=-Xmx4g", command)
+        self.assertIn("ARC_BENCH_CANDIDATE_CACHE_MAX_ENTRIES=5", candidate)
+        self.assertIn("ARC_BENCH_RESERVED_CODE_CACHE_SIZE=384m", comparison)
+        self.assertIn("JAVA_OPTS=-Xmx4g", comparison)
 
     def test_named_benchmark_sets_are_stable_and_disjoint_lanes_are_wired(self):
         self.assertEqual("coroutines", arc.BENCHMARK_PRESETS["coroutines"])
@@ -589,7 +598,10 @@ class ArcProfileTest(unittest.TestCase):
                     local_changed = benchmark_cache.candidate_content_key("commit", "tree", source)
                 with patch.dict(
                     os.environ,
-                    {"CC": "/opt/clang -fuse-ld=lld", "CFLAGS": "-O3", "KONAN_DATA_DIR": "/konan"},
+                    {
+                        "CC": "/opt/clang -fuse-ld=lld", "CFLAGS": "-O3",
+                        "KONAN_DATA_DIR": "/konan", "JAVA_OPTS": "-Xmx4g",
+                    },
                     clear=True,
                 ):
                     environment_changed = benchmark_cache.candidate_content_key(
@@ -601,6 +613,17 @@ class ArcProfileTest(unittest.TestCase):
             self.assertEqual("/opt/clang -fuse-ld=lld", inputs["nativeTools"]["cc"]["command"])
             self.assertEqual("-O3", inputs["nativeEnvironment"]["CFLAGS"])
             self.assertEqual("/konan", inputs["nativeEnvironment"]["KONAN_DATA_DIR"])
+            self.assertEqual("-Xmx4g", inputs["javaOpts"])
+
+    def test_candidate_content_key_changes_with_java_opts(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            with patch.object(benchmark_cache, "_tool_identity", return_value="pinned-tool"):
+                with patch.dict(os.environ, {"JAVA_OPTS": "-Xmx3g"}, clear=True):
+                    first = benchmark_cache.candidate_content_key("commit", "tree", source)
+                with patch.dict(os.environ, {"JAVA_OPTS": "-Xmx4g"}, clear=True):
+                    second = benchmark_cache.candidate_content_key("commit", "tree", source)
+            self.assertNotEqual(first, second)
 
     def test_content_addressed_candidate_is_sealed_and_fully_fingerprinted(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -638,6 +661,186 @@ class ArcProfileTest(unittest.TestCase):
                     manifest, cached, "commit", "tree", source
                 ))
 
+    def test_candidate_cache_retention_is_owned_lru_leased_and_safe(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source"
+            source.mkdir()
+            dist = root / "dist"
+            (dist / "bin").mkdir(parents=True)
+            for launcher in ("konanc", "cinterop"):
+                (dist / "bin" / launcher).write_text("launcher", encoding="utf-8")
+            cache = root / "cache"
+            with patch.object(benchmark_cache, "compiler_build_inputs", return_value={"tool": "x"}):
+                keys = []
+                for index in range(3):
+                    cached = benchmark_cache.publish_content_candidate(
+                        cache, dist, f"commit-{index}", "tree", source
+                    )
+                    keys.append(cached.parent.name)
+                    benchmark_cache.mark_content_candidate_used(
+                        cache, cached.parent.name, now_ns=(index + 1) * 100
+                    )
+
+            lease_id = "f" * 64
+            removed = benchmark_cache.maintain_content_candidates(
+                cache, keys[0], 1, now_ns=1_000, lease_id=lease_id
+            )
+            self.assertEqual([keys[1], keys[2]], removed)
+            self.assertTrue((cache / "candidate" / keys[0]).is_dir())
+            self.assertTrue((cache / "candidate-leases" / f"{lease_id}.json").is_file())
+            self.assertFalse((cache / "candidate-last-used" / f"{keys[1]}.json").exists())
+            self.assertEqual([], list((cache / "candidate-trash").iterdir()))
+
+            # Zero disables pruning but still updates metadata.
+            self.assertEqual(
+                [], benchmark_cache.maintain_content_candidates(cache, keys[0], 0, now_ns=2_000)
+            )
+            access = json.loads(
+                (cache / "candidate-last-used" / f"{keys[0]}.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(2_000, access["lastUsedNs"])
+
+    def test_candidate_cache_refuses_foreign_root_and_preserves_sentinels(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            cache = Path(temporary) / "foreign"
+            key = "a" * 64
+            entry = cache / "candidate" / key
+            entry.mkdir(parents=True)
+            sentinel = entry / "sentinel"
+            sentinel.write_text("foreign", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "foreign candidate cache root"):
+                benchmark_cache.maintain_content_candidates(cache, key, 1)
+            self.assertEqual("foreign", sentinel.read_text(encoding="utf-8"))
+
+    def test_candidate_cache_leases_prevent_cross_worktree_pruning(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source"
+            source.mkdir()
+            dist = root / "dist"
+            (dist / "bin").mkdir(parents=True)
+            for launcher in ("konanc", "cinterop"):
+                (dist / "bin" / launcher).write_text("launcher", encoding="utf-8")
+            cache = root / "cache"
+            with patch.object(benchmark_cache, "compiler_build_inputs", return_value={"tool": "x"}):
+                first = benchmark_cache.publish_content_candidate(cache, dist, "first", "tree", source).parent.name
+            benchmark_cache.maintain_content_candidates(
+                cache, first, 1, now_ns=1_000, lease_id="1" * 64
+            )
+            with patch.object(benchmark_cache, "compiler_build_inputs", return_value={"tool": "x"}):
+                second = benchmark_cache.publish_content_candidate(cache, dist, "second", "tree", source).parent.name
+            removed = benchmark_cache.maintain_content_candidates(
+                cache, second, 1, now_ns=2_000, lease_id="2" * 64
+            )
+            self.assertEqual([], removed)
+            self.assertTrue((cache / "candidate" / first).is_dir())
+            self.assertTrue((cache / "candidate" / second).is_dir())
+
+    def test_candidate_cache_metadata_rejects_invalid_times(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            entry = root / "candidate" / ("a" * 64)
+            entry.mkdir(parents=True)
+            (entry / "manifest.json").write_text("{}", encoding="utf-8")
+            fallback = (entry / "manifest.json").stat().st_mtime_ns
+            path = root / "candidate-last-used" / f"{entry.name}.json"
+            path.parent.mkdir()
+            for value in (True, -1, 10**30):
+                path.write_text(json.dumps({"schema": 1, "cacheKey": entry.name, "lastUsedNs": value}))
+                self.assertEqual(
+                    fallback, benchmark_cache._candidate_last_used_ns(root, entry, 1_000)
+                )
+
+    def test_candidate_cache_rejects_symlinked_root_and_managed_directories(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            actual = root / "actual"
+            actual.mkdir()
+            (actual / "owner.json").write_text(json.dumps(benchmark_cache.CACHE_OWNER))
+            linked_root = root / "linked-root"
+            try:
+                linked_root.symlink_to(actual, target_is_directory=True)
+            except OSError as error:
+                self.skipTest(f"directory symlinks unavailable: {error}")
+            with self.assertRaisesRegex(ValueError, "root must be a real directory"):
+                benchmark_cache._ensure_cache_root_owned(linked_root)
+
+            for index, name in enumerate(benchmark_cache.MANAGED_CACHE_DIRECTORIES):
+                cache = root / f"cache-{index}"
+                cache.mkdir()
+                (cache / "owner.json").write_text(json.dumps(benchmark_cache.CACHE_OWNER))
+                target = root / f"target-{index}"
+                target.mkdir()
+                (cache / name).symlink_to(target, target_is_directory=True)
+                with self.subTest(name=name), self.assertRaisesRegex(
+                    ValueError, "managed path must be a real directory"
+                ):
+                    benchmark_cache._ensure_cache_root_owned(cache)
+
+    def test_candidate_cache_recovers_only_exact_marked_trash(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source"
+            source.mkdir()
+            dist = root / "dist"
+            (dist / "bin").mkdir(parents=True)
+            for launcher in ("konanc", "cinterop"):
+                (dist / "bin" / launcher).write_text("launcher", encoding="utf-8")
+            cache = root / "cache"
+            with patch.object(benchmark_cache, "compiler_build_inputs", return_value={"tool": "x"}):
+                current = benchmark_cache.publish_content_candidate(
+                    cache, dist, "current", "tree", source
+                ).parent.name
+                victim = benchmark_cache.publish_content_candidate(
+                    cache, dist, "victim", "tree", source
+                ).parent.name
+            benchmark_cache.mark_content_candidate_used(cache, victim, now_ns=100)
+
+            trash = cache / "candidate-trash"
+            retired_name = f"{victim}-{'1' * 32}"
+            tombstone = benchmark_cache._write_retirement_tombstone(
+                cache, victim, retired_name
+            )
+            retired = trash / retired_name
+            (cache / "candidate" / victim).replace(retired)
+
+            external = root / "external"
+            external.mkdir()
+            sentinel = external / "sentinel"
+            sentinel.write_text("preserved", encoding="utf-8")
+            try:
+                (retired / "external-link").symlink_to(external, target_is_directory=True)
+            except OSError as error:
+                self.skipTest(f"directory symlinks unavailable: {error}")
+            foreign = trash / "foreign-unmarked"
+            foreign.mkdir()
+            (foreign / "sentinel").write_text("foreign", encoding="utf-8")
+            invalid_tombstone = trash / "invalid.tombstone.json"
+            invalid_tombstone.write_text('{"schema":1,"cacheKey":"wrong"}', encoding="utf-8")
+
+            self.assertEqual(
+                [], benchmark_cache.maintain_content_candidates(cache, current, 0, now_ns=200)
+            )
+            self.assertFalse(retired.exists())
+            self.assertFalse(tombstone.exists())
+            self.assertFalse((cache / "candidate-last-used" / f"{victim}.json").exists())
+            self.assertEqual("preserved", sentinel.read_text(encoding="utf-8"))
+            self.assertEqual("foreign", (foreign / "sentinel").read_text(encoding="utf-8"))
+            self.assertTrue(invalid_tombstone.exists())
+
+            # Even an exact tombstone cannot authorize following a symlinked retired tree.
+            symlink_name = f"{victim}-{'2' * 32}"
+            symlink_tombstone = benchmark_cache._write_retirement_tombstone(
+                cache, victim, symlink_name
+            )
+            symlink_retired = trash / symlink_name
+            symlink_retired.symlink_to(external, target_is_directory=True)
+            benchmark_cache.maintain_content_candidates(cache, current, 0, now_ns=300)
+            self.assertTrue(symlink_retired.is_symlink())
+            self.assertTrue(symlink_tombstone.exists())
+            self.assertEqual("preserved", sentinel.read_text(encoding="utf-8"))
+
     def test_candidate_build_cache_is_exact_and_force_rebuild_is_explicit(self):
         script = (Path(__file__).parent / "benchmark_candidate.sh").read_text()
         self.assertIn("ARC_BENCH_REBUILD_CANDIDATE", script)
@@ -650,6 +853,17 @@ class ArcProfileTest(unittest.TestCase):
         compare = (Path(__file__).parent / "benchmark_compare.sh").read_text()
         self.assertIn("validate-content-candidate", compare)
         self.assertIn("candidate distribution fingerprint is missing, stale, or corrupt", compare)
+
+    def test_benchmark_compilers_share_recorded_non_overriding_java_options(self):
+        script = (Path(__file__).parent / "benchmark_compare.sh").read_text()
+        self.assertIn('reserved_code_cache_size=${ARC_BENCH_RESERVED_CODE_CACHE_SIZE:-256m}', script)
+        self.assertIn('if [[ ! "$benchmark_java_opts" =~ (^|[[:space:]])-XX:ReservedCodeCacheSize= ]]', script)
+        self.assertIn('benchmark_java_opts="${benchmark_java_opts:+$benchmark_java_opts }-XX:ReservedCodeCacheSize=$reserved_code_cache_size"', script)
+        self.assertEqual(2, script.count('"${benchmark_java_env[@]}"'))
+        self.assertIn('"benchmarkJavaOpts": benchmark_java_opts', script)
+        self.assertIn('payload["benchmarkJavaOpts"] = sys.argv[3]', script)
+        for key in ("benchmarkJavaOpts", "benchmarkJvmTools", "benchmarkJvmEnvironment"):
+            self.assertIn(key, benchmark_shards.COMPATIBLE_INPUT_KEYS)
 
     def test_full_evidence_requires_current_provenance_and_full_content_validation(self):
         candidate = (Path(__file__).parent / "benchmark_candidate.sh").read_text()

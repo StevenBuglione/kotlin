@@ -92,7 +92,8 @@ BENCHMARK_ENVIRONMENT = (
     "ARC_BENCH_RSS_LIMIT_PERCENT", "ARC_BENCH_SIZE_LIMIT_PERCENT", "ARC_BENCH_ENFORCE",
     "ARC_BENCH_OBJDUMP",
     "ARC_BENCH_BASELINE_SOURCE", "ARC_BENCH_BASELINE_DIST",
-    "ARC_BENCH_CANDIDATE_CACHE_ROOT",
+    "ARC_BENCH_CANDIDATE_CACHE_ROOT", "ARC_BENCH_CANDIDATE_CACHE_MAX_ENTRIES",
+    "ARC_BENCH_RESERVED_CODE_CACHE_SIZE", "JAVA_OPTS", "JAVA_TOOL_OPTIONS",
     "ARC_BENCH_SHARD_ID", "ARC_BENCH_SHARD_COUNT",
     "ARC_BENCH_MACHINE_PROFILE", "ARC_BENCH_EXPECTED_COMMIT", "ARC_BENCH_EXPECTED_TREE",
     "ARC_BENCH_EXPECTED_RUNTIME_TREE", "ARC_BENCH_EXPECTED_RUNTIME_PATCH_SHA256",
@@ -337,7 +338,11 @@ def profile_command(profile: str) -> list[str]:
         command = ["bash", "tools/arc/benchmark_candidate.sh"]
         values = [
             f"{name}={os.environ[name]}"
-            for name in ("ARC_BENCH_BUILD_WORKERS", "ARC_BENCH_REBUILD_CANDIDATE", "ARC_BENCH_QUICK")
+            for name in (
+                "ARC_BENCH_BUILD_WORKERS", "ARC_BENCH_REBUILD_CANDIDATE", "ARC_BENCH_QUICK",
+                "ARC_BENCH_CANDIDATE_CACHE_ROOT", "ARC_BENCH_CANDIDATE_CACHE_MAX_ENTRIES",
+                "JAVA_OPTS", "JAVA_TOOL_OPTIONS",
+            )
             if name in os.environ
         ]
         return ["env", *values, *command] if values else command
@@ -345,7 +350,7 @@ def profile_command(profile: str) -> list[str]:
         command = ["bash", "tools/arc/benchmark_baseline.sh"]
         values = [
             f"{name}={os.environ[name]}"
-            for name in ("ARC_BENCH_BUILD_WORKERS", "ARC_BENCH_QUICK")
+            for name in ("ARC_BENCH_BUILD_WORKERS", "ARC_BENCH_QUICK", "JAVA_OPTS", "JAVA_TOOL_OPTIONS")
             if name in os.environ
         ]
         if "ARC_BENCH_REBUILD_BASELINE" in os.environ:

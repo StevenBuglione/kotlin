@@ -43,11 +43,26 @@ Candidate distributions are also published atomically into a shared, read-only c
 remote repository's Git common directory. The cache key covers the exact commit and complete source
 tree (including compiler, runtime, and platform libraries), host architecture, JDK/CMake/Ninja
 and native compiler/linker identities, Gradle wrapper/properties, local build properties, native
-build flags/tool overrides, Kotlin/Native data-directory settings, and the fixed distribution tasks.
+build flags/tool overrides, `JAVA_OPTS`, Kotlin/Native data-directory settings, and the fixed
+distribution tasks.
 This lets isolated benchmark worktrees reuse the same compiler without copying it back into each
 checkout. Preparation performs a
 fast identity check; every evidence-producing comparison still validates current-run provenance and
 recomputes the complete distribution fingerprints before compiling or timing a fixture.
+
+Candidate-cache use records atomic last-used metadata beside, never inside, each sealed distribution.
+After a hit or publish, the oldest entries are retired by atomic rename and then deleted until at
+most eight unleased entries remain. Per-worktree 24-hour leases protect distributions selected by
+earlier benchmark profiles, and the current entry is never removed. A tool-owned tombstone is
+published before each retirement; later maintenance safely finishes interrupted deletions without
+touching foreign, invalid, or symlinked trash. Set
+`ARC_BENCH_CANDIDATE_CACHE_MAX_ENTRIES` to another nonnegative count; `0` disables pruning.
+
+Candidate and baseline `konanc` and `cinterop` processes receive identical effective `JAVA_OPTS`.
+When the user has not supplied `-XX:ReservedCodeCacheSize=...`, benchmarking appends a 256 MiB
+default to avoid the 48 MiB tier-1 JVM limit. Existing user `JAVA_OPTS` are preserved, including a
+user-selected code-cache size. `ARC_BENCH_RESERVED_CODE_CACHE_SIZE` changes only the appended default.
+The effective options are stored in `inputs.json` and both exported provenance files.
 
 For a focused, non-enforcing development sample, run:
 

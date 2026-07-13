@@ -10,6 +10,7 @@ quick=${ARC_BENCH_QUICK:-0}
 cache_tool="$root/tools/arc/benchmark_cache.py"
 common_dir=$(git -C "$root" rev-parse --path-format=absolute --git-common-dir)
 content_cache_root=${ARC_BENCH_CANDIDATE_CACHE_ROOT:-$common_dir/codex-arc-benchmark-cache-v2}
+content_cache_max_entries=${ARC_BENCH_CANDIDATE_CACHE_MAX_ENTRIES:-8}
 pointer_dir="$root/.arc-runs/benchmark-cache"
 
 [[ "$workers" =~ ^[0-9]+$ && $workers -ge 1 && $workers -le 28 ]] || {
@@ -22,6 +23,10 @@ pointer_dir="$root/.arc-runs/benchmark-cache"
 }
 [[ "$quick" == 0 || "$quick" == 1 ]] || {
     echo "ARC_BENCH_QUICK must be 0 or 1" >&2
+    exit 2
+}
+[[ "$content_cache_max_entries" =~ ^[0-9]+$ ]] || {
+    echo "ARC_BENCH_CANDIDATE_CACHE_MAX_ENTRIES must be a nonnegative integer (0 disables pruning)" >&2
     exit 2
 }
 [[ "$content_cache_root" = /* ]] || {
@@ -38,6 +43,7 @@ command -v python3 >/dev/null || { echo "python3 is required for candidate cache
 head=$(git -C "$root" rev-parse HEAD)
 tree=$(git -C "$root" rev-parse HEAD^{tree})
 content_key=$(python3 "$cache_tool" candidate-key "$head" "$tree" "$root")
+content_lease_id=$(printf '%s' "$root" | sha256sum | awk '{print $1}')
 content_dist="$content_cache_root/candidate/$content_key/dist"
 content_manifest="$content_cache_root/candidate/$content_key/manifest.json"
 provenance="$dist/.arc-benchmark-provenance.json"
@@ -48,11 +54,17 @@ cache_manifest="$dist/.arc-benchmark-candidate-cache.json"
 validation=validate-content-candidate-fast
 legacy_validation=validate-candidate-fast
 
+maintain_content_cache() {
+    python3 "$cache_tool" maintain-content-candidates \
+        "$content_cache_root" "$content_key" "$content_cache_max_entries" "$content_lease_id"
+}
+
 publish_run_identity() {
     local selected_dist=$1
     mkdir -p "$state/artifacts" "$pointer_dir"
-    printf '{"role":"candidate","commit":"%s","tree":"%s","source":"%s"}\n' \
-        "$head" "$tree" "$root" >"$pointer_dir/candidate-provenance.json.tmp"
+    printf '{"role":"candidate","commit":"%s","tree":"%s","source":"%s","cacheKey":"%s","cacheRoot":"%s","cacheLeaseId":"%s"}\n' \
+        "$head" "$tree" "$root" "$content_key" "$content_cache_root" "$content_lease_id" \
+        >"$pointer_dir/candidate-provenance.json.tmp"
     mv "$pointer_dir/candidate-provenance.json.tmp" "$pointer_dir/candidate-provenance.json"
     cp "$pointer_dir/candidate-provenance.json" "$state/artifacts/candidate-provenance.json"
     printf '%s\n' "$selected_dist" >"$pointer_dir/candidate-dist.tmp"
@@ -79,6 +91,7 @@ mkdir -p "$state/artifacts"
 if [[ "$rebuild" == 0 && -x "$content_dist/bin/konanc" && -x "$content_dist/bin/cinterop" ]] &&
         python3 "$cache_tool" "$validation" "$content_manifest" "$content_dist" \
             "$head" "$tree" "$root"; then
+    maintain_content_cache
     publish_run_identity "$content_dist"
     echo "ARC_BENCH_CANDIDATE_CONTENT_CACHE_HIT key=$content_key commit=$head tree=$tree dist=$content_dist"
     exit 0
@@ -90,6 +103,7 @@ if [[ "$rebuild" == 0 && -x "$dist/bin/konanc" && -x "$dist/bin/cinterop" ]] &&
             "$cache_manifest" "$dist" "$head" "$tree" "$root"; then
     cached_dist=$(python3 "$cache_tool" publish-content-candidate \
         "$content_cache_root" "$dist" "$head" "$tree" "$root")
+    maintain_content_cache
     publish_run_identity "$cached_dist"
     echo "ARC_BENCH_CANDIDATE_CACHE_HIT promotedKey=$content_key commit=$head tree=$tree dist=$cached_dist"
     exit 0
@@ -109,6 +123,7 @@ printf '{"role":"candidate","commit":"%s","tree":"%s","source":"%s"}\n' \
 python3 "$cache_tool" write-candidate "$cache_manifest" "$dist" "$head" "$tree" "$root"
 cached_dist=$(python3 "$cache_tool" publish-content-candidate \
     "$content_cache_root" "$dist" "$head" "$tree" "$root")
+maintain_content_cache
 selected_dist=$cached_dist
 [[ "$rebuild" == 1 ]] && selected_dist=$dist
 publish_run_identity "$selected_dist"

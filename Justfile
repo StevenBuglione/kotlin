@@ -153,14 +153,14 @@ ci2-log profile:
 # each bundle and merge them with tools/arc/benchmark_shards.py.
 primary-arc-bench-shard shard count scenarios:
     {{python}} tools/arc/arc.py --machine primary-bench remote-init
-    {{python}} tools/arc/arc.py --machine primary-bench remote-snapshot --paths Justfile tools/arc/arc.py tools/arc/benchmark_compare.sh tools/arc/benchmark_shards.py tools/arc/test_arc.py
+    {{python}} tools/arc/arc.py --machine primary-bench remote-snapshot --paths Justfile tools/arc/arc.py tools/arc/benchmark_candidate.sh tools/arc/benchmark_cache.py tools/arc/benchmark_compare.sh tools/arc/benchmark_shards.py tools/arc/test_arc.py
     {{python}} tools/arc/arc.py --machine primary-bench run arc-bench-candidate --shard-id "{{shard}}" --shard-count {{count}} --scenarios "{{scenarios}}"
     {{python}} tools/arc/arc.py --machine primary-bench run arc-bench-baseline --shard-id "{{shard}}" --shard-count {{count}} --scenarios "{{scenarios}}"
     status=0; {{python}} tools/arc/arc.py --machine primary-bench run arc-bench --shard-id "{{shard}}" --shard-count {{count}} --scenarios "{{scenarios}}" || status=$?; exit "$status"
 
 ci2-arc-bench-shard shard count scenarios:
     {{python}} tools/arc/arc.py --machine ci2-cstring remote-init
-    {{python}} tools/arc/arc.py --machine ci2-cstring remote-snapshot --paths Justfile tools/arc/arc.py tools/arc/benchmark_compare.sh tools/arc/benchmark_shards.py tools/arc/test_arc.py
+    {{python}} tools/arc/arc.py --machine ci2-cstring remote-snapshot --paths Justfile tools/arc/arc.py tools/arc/benchmark_candidate.sh tools/arc/benchmark_cache.py tools/arc/benchmark_compare.sh tools/arc/benchmark_shards.py tools/arc/test_arc.py
     {{python}} tools/arc/arc.py --machine ci2-cstring run arc-bench-candidate --shard-id "{{shard}}" --shard-count {{count}} --scenarios "{{scenarios}}"
     {{python}} tools/arc/arc.py --machine ci2-cstring run arc-bench-baseline --shard-id "{{shard}}" --shard-count {{count}} --scenarios "{{scenarios}}"
     status=0; {{python}} tools/arc/arc.py --machine ci2-cstring run arc-bench --shard-id "{{shard}}" --shard-count {{count}} --scenarios "{{scenarios}}" || status=$?; exit "$status"

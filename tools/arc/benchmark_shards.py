@@ -24,6 +24,7 @@ COMPATIBLE_INPUT_KEYS = (
     "interopDefinitionSha256", "interopHeader", "interopHeaderSha256", "repetitions",
     "warmups", "compileRepetitions", "quickDiagnostic", "logicalAllocationDefinition",
     "emittedCallsiteMethod", "optimizerEliminationGate", "thresholdEnvironment",
+    "benchmarkJavaOpts", "benchmarkJvmTools", "benchmarkJvmEnvironment",
 )
 
 

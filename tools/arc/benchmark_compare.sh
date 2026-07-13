@@ -60,6 +60,18 @@ minimum_compile_repetitions=3
 }
 command -v python3 >/dev/null || { echo "python3 is required" >&2; exit 1; }
 objdump=${ARC_BENCH_OBJDUMP:-objdump}
+reserved_code_cache_size=${ARC_BENCH_RESERVED_CODE_CACHE_SIZE:-256m}
+[[ "$reserved_code_cache_size" =~ ^[1-9][0-9]*[kKmMgG]?$ ]] || {
+    echo "ARC_BENCH_RESERVED_CODE_CACHE_SIZE must be a positive JVM memory size" >&2
+    exit 2
+}
+benchmark_java_opts=${JAVA_OPTS:-}
+if [[ ! "$benchmark_java_opts" =~ (^|[[:space:]])-XX:ReservedCodeCacheSize= ]]; then
+    benchmark_java_opts="${benchmark_java_opts:+$benchmark_java_opts }-XX:ReservedCodeCacheSize=$reserved_code_cache_size"
+fi
+benchmark_java_env=(env "JAVA_OPTS=$benchmark_java_opts")
+benchmark_java_tool_options=${JAVA_TOOL_OPTIONS:-}
+benchmark_java_home=${JAVA_HOME:-}
 command -v "$objdump" >/dev/null || { echo "$objdump is required for ownership callsite counts" >&2; exit 1; }
 
 candidate_compiler="$candidate_dist/bin/konanc"
@@ -195,7 +207,7 @@ prepare_interop() {
     local output="$artifacts/$label-benchmark-cinterop"
     local log="$artifacts/$label-cinterop.log"
     [[ -x "$cinterop" ]] || { echo "$label dist is missing cinterop" >&2; exit 1; }
-    if ! "$cinterop" -def "$interop_def" -target linux_x64 \
+    if ! "${benchmark_java_env[@]}" "$cinterop" -def "$interop_def" -target linux_x64 \
             -compiler-option "-I$interop_include" -o "$output" >"$log" 2>&1; then
         cat "$log" >&2
         echo "$label benchmark cinterop generation failed" >&2
@@ -210,7 +222,7 @@ compile_one() {
     local timing="$artifacts/$label-compile.time"
     local log="$artifacts/$label-compiler.log"
     if ! /usr/bin/time -f $'%e\t%M' -o "$timing" \
-            "$compiler" "$source" "${common_flags[@]}" -memory-model "$memory_model" \
+            "${benchmark_java_env[@]}" "$compiler" "$source" "${common_flags[@]}" -memory-model "$memory_model" \
             -library "$artifacts/$label-benchmark-cinterop.klib" -o "$output" >"$log" 2>&1; then
         cat "$log" >&2
         echo "$label benchmark compilation failed" >&2
@@ -328,7 +340,8 @@ done
 python3 - "$artifacts/inputs.json" "$artifacts/hardware.json" "$source" "$interop_def" \
     "$interop_include/benchmark_cinterop.h" "$candidate_head" "$baseline_head" \
     "$repetitions" "$warmups" "$compile_repetitions" "${run_prefix[*]}" "${common_flags[*]}" "${scenarios[*]}" \
-    "$candidate_tree" "$candidate_runtime_tree" "$candidate_runtime_patch_base" "$candidate_runtime_patch_sha256" <<'PY'
+    "$candidate_tree" "$candidate_runtime_tree" "$candidate_runtime_patch_base" "$candidate_runtime_patch_sha256" \
+    "$benchmark_java_opts" "$benchmark_java_tool_options" "$benchmark_java_home" <<'PY'
 import hashlib
 import json
 import os
@@ -336,7 +349,7 @@ from pathlib import Path
 import platform
 import sys
 
-inputs_path, hardware_path, source_path, interop_def_path, interop_header_path, candidate, baseline, repetitions, warmups, compile_repetitions, affinity, flags, scenarios, candidate_tree, runtime_tree, runtime_patch_base, runtime_patch_sha256 = sys.argv[1:]
+inputs_path, hardware_path, source_path, interop_def_path, interop_header_path, candidate, baseline, repetitions, warmups, compile_repetitions, affinity, flags, scenarios, candidate_tree, runtime_tree, runtime_patch_base, runtime_patch_sha256, benchmark_java_opts, benchmark_java_tool_options, benchmark_java_home = sys.argv[1:]
 source = Path(source_path)
 interop_def = Path(interop_def_path)
 interop_header = Path(interop_header_path)
@@ -352,6 +365,13 @@ inputs = {
     "candidateMemoryModel": "arc",
     "baselineMemoryModel": "strict",
     "commonCompilerFlags": flags.split(),
+    "benchmarkJavaOpts": benchmark_java_opts,
+    "benchmarkJvmTools": ["konanc", "cinterop"],
+    "benchmarkJvmEnvironment": {
+        "JAVA_OPTS": benchmark_java_opts,
+        "JAVA_TOOL_OPTIONS": benchmark_java_tool_options,
+        "JAVA_HOME": benchmark_java_home,
+    },
     "fixture": "tools/arc/fixtures/benchmark.kt",
     "fixtureSha256": hashlib.sha256(source.read_bytes()).hexdigest(),
     "interopDefinition": "tools/arc/fixtures/benchmark_cinterop.def",
@@ -452,5 +472,23 @@ cp "$artifacts"/inputs.json "$artifacts"/hardware.json "$artifacts"/raw.tsv "$ar
     "$artifacts"/shard.json "$wave/"
 cp "$candidate_provenance" "$wave/candidate-provenance.json"
 cp "$baseline_dist/.arc-benchmark-provenance.json" "$wave/baseline-provenance.json"
+python3 - "$wave/candidate-provenance.json" "$wave/baseline-provenance.json" \
+    "$benchmark_java_opts" "$benchmark_java_tool_options" "$benchmark_java_home" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+for name in sys.argv[1:3]:
+    path = Path(name)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["benchmarkJavaOpts"] = sys.argv[3]
+    payload["benchmarkJvmTools"] = ["konanc", "cinterop"]
+    payload["benchmarkJvmEnvironment"] = {
+        "JAVA_OPTS": sys.argv[3],
+        "JAVA_TOOL_OPTIONS": sys.argv[4],
+        "JAVA_HOME": sys.argv[5],
+    }
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
 echo "ARC_BENCH_WAVE_READY path=$wave status=$report_status"
 exit "$report_status"
