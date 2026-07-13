@@ -29,7 +29,6 @@ import org.jetbrains.kotlin.ir.expressions.IrReturn
 import org.jetbrains.kotlin.ir.expressions.IrSetField
 import org.jetbrains.kotlin.ir.types.classifierOrNull
 import org.jetbrains.kotlin.ir.types.IrSimpleType
-import org.jetbrains.kotlin.ir.types.isAny
 import org.jetbrains.kotlin.ir.types.isUnit
 import org.jetbrains.kotlin.ir.types.typeOrNull
 import org.jetbrains.kotlin.ir.util.fqNameForIrSerialization
@@ -194,6 +193,10 @@ internal fun <T : Any> adaptVerifiedOwnedResultHeapStoreIR(
                 frameCleanupPostDominatesStore = true,
             ),
             interveningEffects = listOf(
+                // Legacy lifetime validation is emitted between the producer and Ref.element
+                // projection. Its exceptional edge leaves the destination untouched and lets
+                // ordinary frame cleanup release the already-owned physical source slot.
+                ArcOwnedResultHeapStoreInterveningEffect.LifetimeConstraintCheck,
                 ArcOwnedResultHeapStoreInterveningEffect.DestinationAddressProjection,
             ),
         ),
@@ -283,12 +286,19 @@ internal fun selectVerifiedOwnedResultHeapStore(
         refClass.modality != Modality.FINAL
     ) return reject("owner/Continuation/Result/Ref declaration identity")
 
-    val continuationResumeWith = continuationClass.functions.singleOrNull {
-        it.name.asString() == "resumeWith" && it.parent === continuationClass && it.konanLibrary === stdlib &&
-                it.modality == Modality.ABSTRACT && it.dispatchReceiverParameter != null &&
-                it.extensionReceiverParameter == null && it.valueParameters.singleOrNull()?.type?.classifierOrNull == resultClass.symbol &&
-                it.typeParameters.isEmpty() && it.returnType.isUnit() && !it.isExternal && !it.isSuspend
-    } ?: return reject("Continuation.resumeWith declaration")
+    // Inline-class lowering may expose Continuation.resumeWith's Result<T> parameter as Any? in
+    // the linked declaration. Authenticate the exact overridden symbol instead of rediscovering
+    // that declaration through a post-lowering source-type comparison.
+    val continuationResumeWith = function.overriddenSymbols.singleOrNull()?.owner
+            ?: return reject("single Continuation.resumeWith override")
+    if (continuationResumeWith.name.asString() != "resumeWith" ||
+        continuationResumeWith.parent !== continuationClass || continuationResumeWith.konanLibrary !== stdlib ||
+        continuationResumeWith.modality != Modality.ABSTRACT || continuationResumeWith.dispatchReceiverParameter == null ||
+        continuationResumeWith.extensionReceiverParameter != null ||
+        continuationResumeWith.valueParameters.singleOrNull()?.type?.binaryTypeIsReference() != true ||
+        continuationResumeWith.typeParameters.isNotEmpty() || !continuationResumeWith.returnType.isUnit() ||
+        continuationResumeWith.isExternal || continuationResumeWith.isSuspend
+    ) return reject("Continuation.resumeWith declaration")
     if (function.overriddenSymbols.singleOrNull() != continuationResumeWith.symbol ||
         function.konanLibrary != null || function.modality != Modality.OPEN || function.returnType.isUnit().not() ||
         function.extensionReceiverParameter != null || function.typeParameters.isNotEmpty() ||
@@ -296,11 +306,19 @@ internal fun selectVerifiedOwnedResultHeapStore(
         !receiver.type.binaryTypeIsReference()
     ) return reject("source resumeWith override/signature")
 
-    val refElementField = refClass.declarations.filterIsInstance<IrField>().singleOrNull {
-        it.name.asString() == "element" && it.parent === refClass && it.konanLibrary === stdlib &&
-                !it.isStatic && !it.isFinal && it.visibility == DescriptorVisibilities.PRIVATE &&
-                it.type.binaryTypeIsReference() && !it.hasOwnedResultUnsupportedStorageAnnotation()
-    } ?: return reject("Ref.element declaration")
+    val body = function.body as? IrBlockBody ?: return reject("block body")
+    if (body.statements.size != 2) return reject("two-statement body")
+    val store = body.statements[0] as? IrSetField ?: return reject("direct Ref.element store")
+    val trailingReturn = body.statements[1] as? IrReturn ?: return reject("trailing Unit return")
+    // The post-lowering Ref declaration may no longer enumerate its backing field. Start from the
+    // exact field symbol used by statement zero, then authenticate that symbol back to the linked
+    // stdlib Ref class; no global or name-based field lookup is involved.
+    val refElementField = store.symbol.owner
+    if (refElementField.name.asString() != "element" || refElementField.parent !== refClass ||
+        refElementField.konanLibrary !== stdlib || refElementField.isStatic || refElementField.isFinal ||
+        refElementField.visibility != DescriptorVisibilities.PRIVATE ||
+        !refElementField.type.binaryTypeIsReference() || refElementField.hasOwnedResultUnsupportedStorageAnnotation()
+    ) return reject("Ref.element declaration")
     val capturedRefFields = owner.declarations.filterIsInstance<IrField>().filter {
         it.origin == LocalDeclarationsLowering.DECLARATION_ORIGIN_FIELD_FOR_CAPTURED_VALUE &&
                 it.parent === owner && !it.isStatic && it.isFinal &&
@@ -310,11 +328,7 @@ internal fun selectVerifiedOwnedResultHeapStore(
     }
     val capturedRefField = capturedRefFields.singleOrNull() ?: return reject("single captured Ref<Result?> field")
 
-    val body = function.body as? IrBlockBody ?: return reject("block body")
-    if (body.statements.size != 2) return reject("two-statement body")
-    val store = body.statements[0] as? IrSetField ?: return reject("direct Ref.element store")
-    val trailingReturn = body.statements[1] as? IrReturn ?: return reject("trailing Unit return")
-    if (store.symbol.owner !== refElementField || store.superQualifierSymbol != null) {
+    if (store.superQualifierSymbol != null) {
         return reject("Ref.element store identity")
     }
     val capturedRefRead = store.receiver as? IrGetField ?: return reject("direct captured Ref receiver")
@@ -330,8 +344,10 @@ internal fun selectVerifiedOwnedResultHeapStore(
         resultBoxFunction.fqNameForIrSerialization.asString() != "kotlin.<Result-box>" ||
         resultBoxFunction.parent !is org.jetbrains.kotlin.ir.declarations.IrFile ||
         resultBoxFunction.dispatchReceiverParameter != null || resultBoxFunction.extensionReceiverParameter != null ||
-        resultBoxFunction.valueParameters.singleOrNull()?.type?.classifierOrNull != resultClass.symbol ||
-        resultBoxFunction.typeParameters.size != 1 || !resultBoxFunction.returnType.isAny() ||
+        // Inline-class lowering is allowed to erase these source Result/Any types, but both sides
+        // must retain the object ABI authenticated by the exact stdlib synthetic declaration.
+        resultBoxFunction.valueParameters.singleOrNull()?.type?.binaryTypeIsReference() != true ||
+        resultBoxFunction.typeParameters.isNotEmpty() || !resultBoxFunction.returnType.binaryTypeIsReference() ||
         resultBoxFunction.isExternal || resultBoxFunction.isSuspend || resultBoxFunction.modality != Modality.FINAL ||
         producerCall.valueArgumentsCount != 1 || resultRead.symbol != resultParameter.symbol ||
         producerCall.type.binaryTypeIsReference()

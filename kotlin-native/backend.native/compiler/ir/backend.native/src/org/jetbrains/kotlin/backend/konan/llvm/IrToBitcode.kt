@@ -31,6 +31,9 @@ import org.jetbrains.kotlin.backend.konan.arc.ArcSemanticEmissionActionId
 import org.jetbrains.kotlin.backend.konan.arc.ArcSemanticPhiEmissionLedger
 import org.jetbrains.kotlin.backend.konan.arc.ArcStringBuilderBackingArrayProjectionConsumptionLedger
 import org.jetbrains.kotlin.backend.konan.arc.ArcStringBuilderBackingArrayProjectionPlan
+import org.jetbrains.kotlin.backend.konan.arc.ArcOwnedResultHeapStoreConsumptionLedger
+import org.jetbrains.kotlin.backend.konan.arc.ArcOwnedResultHeapStoreIRBindingRole
+import org.jetbrains.kotlin.backend.konan.arc.ArcOwnedResultHeapStoreKotlinIRSelection
 import org.jetbrains.kotlin.backend.konan.arc.hasExactCoroutinePhysicalBackedge
 import org.jetbrains.kotlin.backend.konan.arc.unwrapExactArcCoroutineSpillRead
 import org.jetbrains.kotlin.backend.konan.optimizations.ARC_SELECTIVE_INLINE_METADATA
@@ -261,6 +264,59 @@ internal class CodeGeneratorVisitor(
     private var currentBranchGuaranteedPhiEmission: BranchGuaranteedPhiEmission? = null
     private var currentStringBuilderBackingArrayProjectionEmission:
             StringBuilderBackingArrayProjectionEmission? = null
+    private var currentOwnedResultHeapStoreEmission: OwnedResultHeapStoreEmission? = null
+
+    /** Moves one exact owned Result-box call result from its physical result slot into Ref.element. */
+    private inner class OwnedResultHeapStoreEmission(
+        val selection: ArcOwnedResultHeapStoreKotlinIRSelection,
+    ) {
+        private val exactBindings = selection.selection.exactBindings
+        private val ledger = ArcOwnedResultHeapStoreConsumptionLedger(selection.selection.ownership)
+        private var producedValue: LLVMValueRef? = null
+        private var sourceSlot: LLVMValueRef? = null
+
+        fun isProducer(call: IrCall): Boolean = call === selection.producerCall
+
+        fun bindProducer(call: IrCall, value: LLVMValueRef, physicalSourceSlot: LLVMValueRef) {
+            check(call === selection.producerCall && producedValue == null && sourceSlot == null) {
+                "owned Result-box producer identity or physical-slot binding drifted: ${ir2string(call)}"
+            }
+            check(functionGenerationContext.arcResultIsAlreadyOwnedBySlot(value, physicalSourceSlot)) {
+                "owned Result-box producer did not initialize its exact physical result slot"
+            }
+            ledger.consumeProducer(
+                exactBindings.getValue(ArcOwnedResultHeapStoreIRBindingRole.Producer),
+                exactBindings.getValue(ArcOwnedResultHeapStoreIRBindingRole.SourceResultSlot),
+            )
+            producedValue = value
+            sourceSlot = physicalSourceSlot
+        }
+
+        fun moveIntoStore(store: IrSetField, value: LLVMValueRef, destination: LLVMValueRef) {
+            check(store === selection.store && value == producedValue) {
+                "owned Result-box heap-store identity or produced value drifted: ${ir2string(store)}"
+            }
+            val physicalSourceSlot = requireNotNull(sourceSlot) {
+                "owned Result-box heap store reached before its normal-edge source-slot binding"
+            }
+            ledger.consumeStore(
+                exactBindings.getValue(ArcOwnedResultHeapStoreIRBindingRole.Store),
+                exactBindings.getValue(ArcOwnedResultHeapStoreIRBindingRole.DestinationElementSlot),
+            )
+            functionGenerationContext.moveArcOwnedReferenceIntoHeapSlot(
+                value,
+                physicalSourceSlot,
+                destination,
+            )
+        }
+
+        fun verifyConsumed() {
+            ledger.verifyComplete()
+            check(producedValue != null && sourceSlot != null) {
+                "owned Result-box heap-store physical binding was incomplete"
+            }
+        }
+    }
 
     /** Consumes one exact StringBuilder backing-field projection inside its authenticated call. */
     private inner class StringBuilderBackingArrayProjectionEmission(
@@ -1198,6 +1254,7 @@ internal class CodeGeneratorVisitor(
         val previousBranchGuaranteedPhiEmission = currentBranchGuaranteedPhiEmission
         val previousStringBuilderBackingArrayProjectionEmission =
                 currentStringBuilderBackingArrayProjectionEmission
+        val previousOwnedResultHeapStoreEmission = currentOwnedResultHeapStoreEmission
         currentDiscardedReturnedReceiverSeedSlots = IdentityHashMap()
         currentCoroutineGuaranteedPhiEmission = (declaration as? IrSimpleFunction)?.let {
             arcOwnership.coroutineGuaranteedPhiSelections[it]
@@ -1214,6 +1271,9 @@ internal class CodeGeneratorVisitor(
         currentStringBuilderBackingArrayProjectionEmission = (declaration as? IrSimpleFunction)?.let {
             arcOwnership.stringBuilderBackingArrayProjectionPlans[it]
         }?.let(::StringBuilderBackingArrayProjectionEmission)
+        currentOwnedResultHeapStoreEmission = (declaration as? IrSimpleFunction)?.let {
+            arcOwnership.ownedResultHeapStoreSelections[it]
+        }?.let(::OwnedResultHeapStoreEmission)
         currentArcOwnedResultForwarding = if (!context.shouldContainDebugInfo()) {
             (declaration as? IrSimpleFunction)?.let { arcOwnership.ownedResultForwarding[it] }
         } else {
@@ -1257,6 +1317,7 @@ internal class CodeGeneratorVisitor(
                                 currentSafeContinuationResumeBorrowEmission?.verifyConsumed()
                                 currentBranchGuaranteedPhiEmission?.verifyConsumed()
                                 currentStringBuilderBackingArrayProjectionEmission?.verifyConsumed()
+                                currentOwnedResultHeapStoreEmission?.verifyConsumed()
                             }
                         }
                     }
@@ -1271,6 +1332,7 @@ internal class CodeGeneratorVisitor(
             currentBranchGuaranteedPhiEmission = previousBranchGuaranteedPhiEmission
             currentStringBuilderBackingArrayProjectionEmission =
                     previousStringBuilderBackingArrayProjectionEmission
+            currentOwnedResultHeapStoreEmission = previousOwnedResultHeapStoreEmission
         }
 
 
@@ -2543,11 +2605,24 @@ internal class CodeGeneratorVisitor(
             address = staticFieldPtr(value.symbol.owner, functionGenerationContext)
             alignment = generationState.llvmDeclarations.forStaticField(value.symbol.owner).alignment
         }
-        functionGenerationContext.storeAny(
-                valueToAssign, address, false,
-                isVolatile = value.symbol.owner.hasAnnotation(KonanFqNames.volatile),
-                alignment = alignment,
-        )
+        val ownedResultHeapStore = currentOwnedResultHeapStoreEmission?.takeIf {
+            value === it.selection.store
+        }
+        if (ownedResultHeapStore != null) {
+            require(context.memoryModel == MemoryModel.ARC && context.config.optimizationsEnabled &&
+                    !context.shouldContainDebugInfo() && !context.config.arcDiagnosticsEnabled &&
+                    thisPtr != null && value.symbol.owner === ownedResultHeapStore.selection.refElementField &&
+                    !value.symbol.owner.hasAnnotation(KonanFqNames.volatile)) {
+                "owned Result-box move escaped its exact Ref.element production boundary"
+            }
+            ownedResultHeapStore.moveIntoStore(value, valueToAssign, address)
+        } else {
+            functionGenerationContext.storeAny(
+                    valueToAssign, address, false,
+                    isVolatile = value.symbol.owner.hasAnnotation(KonanFqNames.volatile),
+                    alignment = alignment,
+            )
+        }
 
         assert (value.type.isUnit())
         return codegen.theUnitInstanceRef.llvm
@@ -3067,8 +3142,18 @@ internal class CodeGeneratorVisitor(
                 returnedReceiverSlot == null) {
             functionGenerationContext.vars.createAnonymousSlot()
         } else null
+        val ownedResultHeapStoreSlot = (value as? IrCall)?.let { call ->
+            currentOwnedResultHeapStoreEmission?.takeIf { it.isProducer(call) }
+        }?.let {
+            require(resultSlot == null && scopedPromotionSlot == null && effectiveResultSlot == null &&
+                    discardedReturnedReceiverSeedSlot == null && returnedReceiverSlot == null &&
+                    returnedReceiverSeedSlot == null) {
+                "owned Result-box producer collided with another result-slot ownership plan"
+            }
+            functionGenerationContext.vars.createAnonymousSlot()
+        }
         val callResultSlot = discardedReturnedReceiverSeedSlot ?: returnedReceiverSlot ?:
-                returnedReceiverSeedSlot ?: effectiveResultSlot
+                returnedReceiverSeedSlot ?: ownedResultHeapStoreSlot ?: effectiveResultSlot
 
         updateBuilderDebugLocation(value)
         val result = when (value) {
@@ -3089,6 +3174,13 @@ internal class CodeGeneratorVisitor(
             )) {
                 "ARC discarded returned-receiver seed did not own the exact normal result"
             }
+        }
+        if (ownedResultHeapStoreSlot != null) {
+            currentOwnedResultHeapStoreEmission?.bindProducer(
+                value,
+                result,
+                ownedResultHeapStoreSlot,
+            )
         }
         recordScopedPromotion()
         (value as? IrCall)?.let { call -> currentBranchGuaranteedPhiEmission?.markTerminalEquality(call) }

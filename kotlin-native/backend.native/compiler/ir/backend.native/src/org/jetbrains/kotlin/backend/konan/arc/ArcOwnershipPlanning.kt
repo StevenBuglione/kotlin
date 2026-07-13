@@ -153,6 +153,7 @@ internal data class ArcCodegenOwnershipPlan(
     val matchingSetLocalAliases: Map<IrVariable, ArcMatchingSetLocalAliasIRSelection>,
     val branchGuaranteedPhiSelections: Map<IrSimpleFunction, ArcBranchGuaranteedPhiKotlinIRSelection>,
     val stringBuilderBackingArrayProjectionPlans: Map<IrSimpleFunction, ArcStringBuilderBackingArrayProjectionPlan>,
+    val ownedResultHeapStoreSelections: Map<IrSimpleFunction, ArcOwnedResultHeapStoreKotlinIRSelection>,
 ) {
     val scopedArcReferenceLoadBoundaries: Set<IrExpression> =
         Collections.newSetFromMap(IdentityHashMap<IrExpression, Boolean>()).apply {
@@ -210,6 +211,7 @@ internal data class ArcCodegenOwnershipPlan(
             matchingSetLocalAliases = emptyMap(),
             branchGuaranteedPhiSelections = emptyMap(),
             stringBuilderBackingArrayProjectionPlans = emptyMap(),
+            ownedResultHeapStoreSelections = emptyMap(),
         )
     }
 }
@@ -739,6 +741,8 @@ internal fun runArcOwnershipPlanning(
     val branchGuaranteedPhiSelections = IdentityHashMap<IrSimpleFunction, ArcBranchGuaranteedPhiKotlinIRSelection>()
     val stringBuilderBackingArrayProjectionPlans =
         IdentityHashMap<IrSimpleFunction, ArcStringBuilderBackingArrayProjectionPlan>()
+    val ownedResultHeapStoreSelections =
+        IdentityHashMap<IrSimpleFunction, ArcOwnedResultHeapStoreKotlinIRSelection>()
     val canonicalLockedReadPlans = resolveCanonicalLockedReadPlans(generationState, input.module)
     canonicalLockedReadPlans.forEach { plan ->
         lockedReadResultSlotForwardingCalls[plan.tailCall] = plan
@@ -764,6 +768,15 @@ internal fun runArcOwnershipPlanning(
             }
 
             override fun visitSimpleFunction(declaration: IrSimpleFunction) {
+                selectVerifiedOwnedResultHeapStore(generationState, declaration)?.let { selection ->
+                    check(ownedResultHeapStoreSelections.put(declaration, selection) == null) {
+                        "duplicate owned Result-box heap-store selection: ${declaration.fqNameForIrSerialization}"
+                    }
+                    generationState.context.log {
+                        "ARC owned Result-box heap-store selection " +
+                                "${declaration.fqNameForIrSerialization.asString()}: selected=1"
+                    }
+                }
                 selectVerifiedStringBuilderBackingArrayProjection(generationState, declaration)?.let { plan ->
                     check(stringBuilderBackingArrayProjectionPlans.put(declaration, plan) == null) {
                         "duplicate StringBuilder backing-array projection: ${declaration.fqNameForIrSerialization}"
@@ -980,6 +993,7 @@ internal fun runArcOwnershipPlanning(
             matchingSetLocalAliases,
             branchGuaranteedPhiSelections,
             stringBuilderBackingArrayProjectionPlans,
+            ownedResultHeapStoreSelections,
         ),
     )
 }

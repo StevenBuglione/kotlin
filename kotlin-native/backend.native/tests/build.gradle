@@ -3456,6 +3456,13 @@ standaloneTest("arc_string_builder_backing_array_projection") {
     source = "codegen/arc/stringBuilderBackingArrayProjection.kt"
 }
 
+standaloneTest("arc_owned_result_heap_store") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    flags = ["-opt"]
+    outputChecker = { it.contains("ARC_OWNED_RESULT_HEAP_STORE_OK checksum=42\n") }
+    source = "codegen/arc/ownedResultHeapStore.kt"
+}
+
 standaloneTest("arc_rooted_loop_borrowing") {
     enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
     flags = ["-opt", "-Xverbose-phases=ArcOwnershipAnalysis"]
@@ -6864,6 +6871,38 @@ fileCheckTest("filecheck_arc_safe_continuation_get_or_throw") {
     annotatedSource = project.file('codegen/arc/safeContinuationGetOrThrow.kt')
     checkPrefix = "OPT"
     extraOpts = ["-opt"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_owned_result_heap_store") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('codegen/arc/ownedResultHeapStore.kt')
+    checkPrefix = "OPT"
+    extraOpts = ["-opt"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_owned_result_heap_store_debug") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('codegen/arc/ownedResultHeapStore.kt')
+    checkPrefix = "DEBUG"
+    extraOpts = ["-opt", "-g"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_owned_result_heap_store_diagnostics") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('codegen/arc/ownedResultHeapStore.kt')
+    checkPrefix = "DIAGNOSTIC"
+    extraOpts = ["-opt", "-Xbinary=arcLeakCheck=report"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_owned_result_heap_store_strict") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('codegen/arc/ownedResultHeapStore.kt')
+    checkPrefix = "STRICT"
+    extraOpts = ["-opt", "-memory-model", "strict"]
     phaseToCheck = "Codegen"
 }
 

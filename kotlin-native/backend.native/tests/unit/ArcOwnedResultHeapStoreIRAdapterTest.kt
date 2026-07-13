@@ -37,6 +37,13 @@ class ArcOwnedResultHeapStoreIRAdapterTest {
         ).irIdentity)
         assertEquals(ARC_OWNED_RESULT_HEAP_STORE_HELPER, selection.ownership.runtimeHelper)
         assertEquals(
+            listOf(
+                ArcOwnedResultHeapStoreInterveningEffect.LifetimeConstraintCheck,
+                ArcOwnedResultHeapStoreInterveningEffect.DestinationAddressProjection,
+            ),
+            selection.ownership.candidate.interveningEffects,
+        )
+        assertEquals(
             ArcOwnershipVerificationResult.Success,
             ArcOwnershipVerifier.verify(selection.ownership.ownershipProof),
         )
