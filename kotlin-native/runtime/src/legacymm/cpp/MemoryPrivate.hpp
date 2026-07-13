@@ -458,6 +458,7 @@ MODEL_VARIANTS(void, LeaveFrame, ObjHeader** start, int parameters, int count);
 MODEL_VARIANTS(void, SetCurrentFrame, ObjHeader** start);
 
 #if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+uint32_t ArcReferenceUpdateExpansionContractV1() RUNTIME_NOTHROW;
 void EnterFrameArc(ObjHeader** start, int parameters, int count) RUNTIME_NOTHROW;
 void LeaveFrameArc(ObjHeader** start, int parameters, int count) RUNTIME_NOTHROW;
 void SetCurrentFrameArc(ObjHeader** start) RUNTIME_NOTHROW;

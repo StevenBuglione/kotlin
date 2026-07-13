@@ -6946,6 +6946,54 @@ fileCheckTest("filecheck_arc_return_update_coalescing") {
     phaseToCheck = "CoalesceAdjacentArcReturnUpdates"
 }
 
+fileCheckTest("filecheck_arc_reference_update_expansion") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('filecheck/arc_reference_update_expansion.kt')
+    checkPrefix = "EXPAND"
+    extraOpts = ["-opt"]
+    phaseToCheck = "ExpandArcReferenceUpdates"
+}
+
+fileCheckTest("filecheck_arc_reference_update_expansion_final") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('filecheck/arc_reference_update_expansion.kt')
+    checkPrefix = "FINAL"
+    extraOpts = ["-opt"]
+    phaseToCheck = "LTOBitcodeOptimization"
+}
+
+fileCheckTest("filecheck_arc_reference_update_expansion_debug") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('filecheck/arc_reference_update_expansion.kt')
+    checkPrefix = "DEBUG"
+    extraOpts = ["-opt", "-g"]
+    phaseToCheck = "LinkBitcodeDependencies"
+}
+
+fileCheckTest("filecheck_arc_reference_update_expansion_asserts") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('filecheck/arc_reference_update_expansion.kt')
+    checkPrefix = "ASSERTS"
+    extraOpts = ["-opt", "-Xbinary=runtimeAssertionsMode=panic"]
+    phaseToCheck = "LinkBitcodeDependencies"
+}
+
+fileCheckTest("filecheck_arc_reference_update_expansion_strict") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('filecheck/arc_reference_update_expansion.kt')
+    checkPrefix = "STRICT"
+    extraOpts = ["-opt", "-memory-model", "strict"]
+    phaseToCheck = "LinkBitcodeDependencies"
+}
+
+fileCheckTest("filecheck_arc_reference_update_expansion_diagnostics") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('filecheck/arc_reference_update_expansion.kt')
+    checkPrefix = "DIAGNOSTICS"
+    extraOpts = ["-opt", "-Xbinary=arcLeakCheck=report"]
+    phaseToCheck = "LinkBitcodeDependencies"
+}
+
 fileCheckTest("filecheck_arc_selective_string_append_inlining_tagged") {
     enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
     annotatedSource = project.file('filecheck/arc_selective_string_append_inlining.kt')
