@@ -1,0 +1,69 @@
+{
+  "schemaVersion": 1,
+  "wave": "wave-32-immortal-completion-context-propagation",
+  "candidateBaseCommit": "1fff32ff28aa1afd7d440c68ba39ad030ea12534",
+  "candidateSourceState": "emitted integration working tree atop candidateBaseCommit; relevant file hashes are pinned in provenance.json",
+  "profileSelectorCount": 2,
+  "fullBenchmarkSelectorCount": 1,
+  "semanticGates": "PASS",
+  "runtimeChecksum": 42,
+  "codegenIrDelta": {
+    "profile": {
+      "updateHeapRef": -2,
+      "updateReturnRef": -2,
+      "moveReferenceIntoReturnSlotArc": 2,
+      "zeroHeapRef": -2,
+      "addHeapRef": 0
+    },
+    "fullCoroutines": {
+      "updateHeapRef": -1,
+      "updateReturnRef": -1,
+      "moveReferenceIntoReturnSlotArc": 1,
+      "zeroHeapRef": -1,
+      "addHeapRef": 0
+    }
+  },
+  "finalLinkedDelta": {
+    "profile": {
+      "updateHeapRef": -2,
+      "updateReturnRef": -2,
+      "moveReferenceIntoReturnSlotArc": 2,
+      "zeroHeapRefNamedCallsites": 0,
+      "addHeapRef": 0
+    },
+    "fullCoroutines": {
+      "updateHeapRef": -1,
+      "updateReturnRef": -1,
+      "moveReferenceIntoReturnSlotArc": 1,
+      "zeroHeapRefNamedCallsites": 0,
+      "addHeapRef": 0
+    }
+  },
+  "profileDynamicDeltaAt1000": {
+    "updateStackRefRelaxed": 0,
+    "updateHeapRefRelaxed": -2000,
+    "updateReturnRefRelaxed": -4000,
+    "addHeapRef": -6000
+  },
+  "pairedRuntime": {
+    "cpu": 16,
+    "warmupPairs": 5,
+    "measuredPairs": 21,
+    "baselineMedianSeconds": 0.115719156,
+    "candidateMedianSeconds": 0.114348457,
+    "medianPairedThroughputRatio": 1.012149319338443,
+    "geomeanPairedThroughputRatio": 1.0116972094132173
+  },
+  "binaryBytes": {
+    "baseline": 526640,
+    "candidate": 526640,
+    "delta": 0
+  },
+  "verdict": {
+    "semanticSlice": "PASS",
+    "performanceDirection": "IMPROVEMENT",
+    "medianPairedThroughputPercent": 1.2149319338443,
+    "geomeanPairedThroughputPercent": 1.16972094132173,
+    "sizeGrowthBytes": 0
+  }
+}

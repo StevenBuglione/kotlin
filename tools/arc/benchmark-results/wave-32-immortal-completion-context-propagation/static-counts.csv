@@ -1,0 +1,9 @@
+artifact,layer,model,selector_count,update_heap_ref,update_return_ref,move_reference_into_return_slot_arc,zero_heap_ref,add_heap_ref,binary_bytes
+profile,codegen_ir,baseline,0,554,415,2,455,0,447672
+profile,codegen_ir,candidate,2,552,413,4,453,0,447672
+profile,final_linked,baseline,0,221,276,2,0,8,447672
+profile,final_linked,candidate,2,219,274,4,0,8,447672
+full_coroutines,codegen_ir,baseline,0,566,416,2,459,0,526640
+full_coroutines,codegen_ir,candidate,1,565,415,3,458,0,526640
+full_coroutines,final_linked,baseline,0,260,334,2,0,15,526640
+full_coroutines,final_linked,candidate,1,259,333,3,0,15,526640

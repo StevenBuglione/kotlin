@@ -1,0 +1,4 @@
+model,profile_argument,update_stack_ref_relaxed,update_heap_ref_relaxed,update_return_ref_relaxed,add_heap_ref,checksum
+baseline,1000,2000,22016,19014,47029,500500:500500
+candidate,1000,2000,20016,15014,41029,500500:500500
+delta_candidate_minus_baseline,1000,0,-2000,-4000,-6000,identical

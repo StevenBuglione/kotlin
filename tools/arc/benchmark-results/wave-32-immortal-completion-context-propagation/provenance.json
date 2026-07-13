@@ -1,0 +1,119 @@
+{
+  "schemaVersion": 1,
+  "wave": "wave-32-immortal-completion-context-propagation",
+  "recordedAtUtc": "2026-07-13T12:49:43Z",
+  "source": {
+    "branch": "codex/kotlin-native-arc-1.9.10",
+    "candidateBaseCommit": "1fff32ff28aa1afd7d440c68ba39ad030ea12534",
+    "candidateBaseTree": "335937eb9d819b0a90d3bc35e350c7e40d355914",
+    "baselineCommit": "1fff32ff28aa1afd7d440c68ba39ad030ea12534",
+    "baselineTree": "335937eb9d819b0a90d3bc35e350c7e40d355914",
+    "candidateState": "local emitted-integration working tree synced onto candidateBaseCommit",
+    "baselineState": "detached clean baseline at the exact candidate base commit"
+  },
+  "host": {
+    "ssh": "olfa@10.10.10.8",
+    "hostname": "venus",
+    "kernel": "Linux 6.18.6-061806-generic x86_64",
+    "cpu": "AMD RYZEN AI MAX+ 395 w/ Radeon 8060S",
+    "logicalCpus": 32,
+    "benchmarkCpu": 16,
+    "jdk": "openjdk version 17.0.19 2026-04-21"
+  },
+  "worktrees": {
+    "candidate": "/home/olfa/codex-kotlin-arc-immortal-completion",
+    "baseline": "/home/olfa/codex-kotlin-arc-immortal-baseline"
+  },
+  "toolchainHashes": {
+    "candidateCompilerEmbeddableJarSha256": "ce706470b24c53e8a1d3720690a40394794aa4342fd0211d757f4b37138d583a",
+    "baselineCompilerEmbeddableJarSha256": "b4e18db3690fca6578e36473acd1baaf32b0746c6d5e31c7541f291e5d13456f",
+    "candidateArcMemoryManagerBcSha256": "f8d03cd5f9d709fd54f7e91de6051822e397d5fb444cc4c35ba446b9297d814a",
+    "baselineArcMemoryManagerBcSha256": "f8d03cd5f9d709fd54f7e91de6051822e397d5fb444cc4c35ba446b9297d814a",
+    "candidateStdlibManifestSha256": "77113c60a73d76feeb71c783fbccb5fbab5e0e9ee2f4422099342024aca2e1d0",
+    "baselineStdlibManifestSha256": "77113c60a73d76feeb71c783fbccb5fbab5e0e9ee2f4422099342024aca2e1d0",
+    "candidatePosixManifestSha256": "7b7da13f8e0fdc685e2389625f41bdc70cc51141a098258f51552092a97c8b80",
+    "baselinePosixManifestSha256": "7b7da13f8e0fdc685e2389625f41bdc70cc51141a098258f51552092a97c8b80"
+  },
+  "inputs": {
+    "benchmarkSource": "/home/olfa/codex-kotlin-arc-immortal-completion/tools/arc/fixtures/benchmark.kt",
+    "benchmarkSourceSha256": "e69a89cda9684c695a7dedd90808ab20375fe32c1e589fbe1d2ebf028142e35b",
+    "profileSource": "/tmp/coroutine-profile.kt",
+    "profileSourceSha256": "8ed04c22f7bca2a0965b1b6ee0b09fa6cc5a07f813886d9f96a0d9aed78b3fa2",
+    "cinteropKlib": "/tmp/coroutine-current-cinterop.klib",
+    "cinteropKlibSha256": "b23ae9f3c76342c1d5a08b80b1994493ad147bc064c710137c751a012acc5c00",
+    "pairRunner": "/tmp/benchmark-coroutine-pairs.py",
+    "pairRunnerSha256": "4a70a4897de6712c7a95f86cfd1094eb0f84f01a3aa924a1b8a0b617c47d1f3c",
+    "gdbCounterScript": "/tmp/count-coroutine.gdb",
+    "gdbCounterScriptSha256": "165387ecab90b2f16eb35e839b9f71858a0a0f4eecb69e20dec6b9b29c528288"
+  },
+  "commands": {
+    "candidateFullCompile": "/home/olfa/codex-kotlin-arc-immortal-completion/kotlin-native/dist/bin/konanc /home/olfa/codex-kotlin-arc-immortal-completion/tools/arc/fixtures/benchmark.kt -library /tmp/coroutine-current-cinterop.klib -opt -Xverbose-phases=ArcOwnershipAnalysis -o /tmp/immortal-candidate-bench",
+    "baselineFullCompile": "/home/olfa/codex-kotlin-arc-immortal-baseline/kotlin-native/dist/bin/konanc /home/olfa/codex-kotlin-arc-immortal-completion/tools/arc/fixtures/benchmark.kt -library /tmp/coroutine-current-cinterop.klib -opt -o /tmp/immortal-baseline-bench",
+    "candidateCodegenIr": "/home/olfa/codex-kotlin-arc-immortal-completion/kotlin-native/dist/bin/konanc <source> -opt -Xsave-llvm-ir-after=Codegen -Xsave-llvm-ir-directory=<candidate-ir-dir> [full benchmark: -library /tmp/coroutine-current-cinterop.klib] -o <candidate-ir-bin>",
+    "baselineCodegenIr": "/home/olfa/codex-kotlin-arc-immortal-baseline/kotlin-native/dist/bin/konanc <source> -opt -Xsave-llvm-ir-after=Codegen -Xsave-llvm-ir-directory=<baseline-ir-dir> [full benchmark: -library /tmp/coroutine-current-cinterop.klib] -o <baseline-ir-bin>",
+    "pairedRuntime": "python3 /tmp/benchmark-coroutine-pairs.py /tmp/immortal-candidate-bench.kexe /tmp/immortal-baseline-bench.kexe /tmp/immortal-completion-bench 21",
+    "pairInnerCommand": "taskset -c 16 <binary> coroutines",
+    "candidateDynamicCounters": "gdb -q -batch -x /tmp/count-coroutine.gdb --args /tmp/immortal-candidate-profile.kexe 1000",
+    "baselineDynamicCounters": "gdb -q -batch -x /tmp/count-coroutine.gdb --args /tmp/immortal-baseline-profile.kexe 1000",
+    "staticCount": "grep -c 'call void @<ARC helper>' <saved Codegen LLVM IR>",
+    "focusedUnit": "./gradlew :kotlin-native:backend.native:tests:test --tests org.jetbrains.kotlin.backend.konan.arc.ArcImmortalCompletionContextPropagationIRSelectorTest",
+    "focusedOptimizedRuntime": "./gradlew :kotlin-native:backend.native:tests:arc_immortal_completion_context_propagation",
+    "focusedOptimizedFileCheck": "./gradlew :kotlin-native:backend.native:tests:filecheck_arc_immortal_completion_context_propagation",
+    "fallbackMatrix": "./gradlew :kotlin-native:backend.native:tests:filecheck_arc_immortal_completion_context_propagation_debug :kotlin-native:backend.native:tests:filecheck_arc_immortal_completion_context_propagation_noopt :kotlin-native:backend.native:tests:filecheck_arc_immortal_completion_context_propagation_phase_disabled :kotlin-native:backend.native:tests:filecheck_arc_immortal_completion_context_propagation_diagnostics :kotlin-native:backend.native:tests:filecheck_arc_immortal_completion_context_propagation_asan :kotlin-native:backend.native:tests:filecheck_arc_immortal_completion_context_propagation_ubsan :kotlin-native:backend.native:tests:filecheck_arc_immortal_completion_context_propagation_strict :kotlin-native:backend.native:tests:arc_immortal_completion_context_propagation_phase_disabled"
+  },
+  "artifacts": {
+    "candidateFullBinary": {
+      "path": "/tmp/immortal-candidate-bench.kexe",
+      "sha256": "02847dc5038154eb861496ec1ab5a86dfd04a0b6ce8b31fad5498b28df43895c",
+      "bytes": 526640
+    },
+    "baselineFullBinary": {
+      "path": "/tmp/immortal-baseline-bench.kexe",
+      "sha256": "7672228ad3e6e0c83d10b2799daddba795080ac69d01cf8beaa251afc5be0502",
+      "bytes": 526640
+    },
+    "candidateProfileBinary": {
+      "path": "/tmp/immortal-candidate-profile.kexe",
+      "sha256": "a54506def14c12b362024428aeaef8a56118a5072d632a8f44f805d39ecb1e81",
+      "bytes": 447672
+    },
+    "baselineProfileBinary": {
+      "path": "/tmp/immortal-baseline-profile.kexe",
+      "sha256": "e7a04700c2b739bb69471a889a283c12bb7e7e4f63b6dccffc8055e725756ceb",
+      "bytes": 447672
+    },
+    "candidateFullCodegenIrSha256": "552b45fe6641aa097d24272e70e8ff1586a2375f626c7f659a30a3557200eae1",
+    "baselineFullCodegenIrSha256": "9c29f45a0dbfbaefc42569a4e7ce9697ee99e44dbad10768ec1118fc222711ca"
+  },
+  "candidateRelevantFilesSha256": {
+    "kotlin-native/backend.native/compiler/ir/backend.native/src/org/jetbrains/kotlin/backend/konan/arc/ArcImmortalCompletionContextPropagationIRSelector.kt": "23cb470cd903fc55c4adcf10d8c1b7058c0a7b40986d91041eaf124d75bfd479",
+    "kotlin-native/backend.native/compiler/ir/backend.native/src/org/jetbrains/kotlin/backend/konan/arc/ArcOwnershipPlanning.kt": "2f01f296b527b2ce5b4815baeb81e027023d2f2727665a51db2e05bb3846ba0a",
+    "kotlin-native/backend.native/compiler/ir/backend.native/src/org/jetbrains/kotlin/backend/konan/driver/phases/BitcodeGeneration.kt": "44fbd6c6cb7326bf98ce9f4694cefa703ead244d5d224b7a4311b6f06da69cd8",
+    "kotlin-native/backend.native/compiler/ir/backend.native/src/org/jetbrains/kotlin/backend/konan/driver/phases/TopLevelPhases.kt": "581314c2745aeba8a5798dda5ebe1f3b9d25bd08d8b01c9d9a01f065efdab34f",
+    "kotlin-native/backend.native/compiler/ir/backend.native/src/org/jetbrains/kotlin/backend/konan/llvm/IrToBitcode.kt": "91890e394d3f0b18d9389366e6b002ddb13b0b37dd58ba80b0c9c77cadfad0ea",
+    "kotlin-native/backend.native/compiler/ir/backend.native/src/org/jetbrains/kotlin/backend/konan/llvm/RTTIGenerator.kt": "2b726c9f365feed392130bf93d2e4c278c6c1918863ab7d0b7c1fa6e42d2598e",
+    "kotlin-native/backend.native/tests/codegen/arc/immortalCompletionContextPropagation.kt": "8868e64b47fcd927da4dea396ac5d87c0633a0fcc5bc8dd5a75289cb8a29a858",
+    "kotlin-native/backend.native/tests/codegen/arc/immortalCompletionContextPropagationStrict.kt": "827770ddadc0f426757fcc0c7a10c7c4ebcc3907ee4a4c60e2e621a462733bf6",
+    "kotlin-native/backend.native/tests/unit/ArcImmortalCompletionContextPropagationIRSelectorTest.kt": "baec4d361037888ec2694f68e10d14ac096dd791bfe3a8c9b0bf60427e400e36",
+    "kotlin-native/backend.native/tests/build.gradle": "84cb22a6b952653397ea9d12d61f449fa86ee6804710cc979d9671130a86ae2b"
+  },
+  "selectorCounts": {
+    "focusedProfile": 2,
+    "fullCoroutinesBenchmark": 1
+  },
+  "semanticGates": {
+    "focusedUnit": "PASS",
+    "optimizedRuntime": "PASS",
+    "optimizedFileCheck": "PASS",
+    "debugFallback": "PASS",
+    "noOptFallback": "PASS",
+    "phaseDisabledFallback": "PASS",
+    "diagnosticsFallback": "PASS",
+    "asanFallback": "PASS",
+    "ubsanFallback": "PASS",
+    "strictFallback": "PASS",
+    "phaseDisabledRuntime": "PASS",
+    "runtimeChecksum42": "PASS",
+    "diffCheck": "PASS"
+  }
+}
