@@ -92,7 +92,7 @@ private class LlvmFunctionAttributesCopier(private val externalFunction: LLVMVal
     }
 }
 
-private fun addCallSiteAttributesAtIndex(context: LLVMContextRef, callSite: LLVMValueRef, index: Int, attributes: List<LlvmAttribute>) {
+internal fun addCallSiteAttributesAtIndex(context: LLVMContextRef, callSite: LLVMValueRef, index: Int, attributes: List<LlvmAttribute>) {
     attributes.forEach { attribute ->
         val llvmAttributeRef = createLlvmEnumAttribute(context, attribute.asAttributeKindId())
         LLVMAddCallSiteAttribute(callSite, index, llvmAttributeRef)

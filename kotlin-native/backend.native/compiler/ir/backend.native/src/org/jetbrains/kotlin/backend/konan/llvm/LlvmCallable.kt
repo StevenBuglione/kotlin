@@ -8,6 +8,19 @@ package org.jetbrains.kotlin.backend.konan.llvm
 import kotlinx.cinterop.toCValues
 import llvm.*
 
+internal data class ArcReturnedReceiverCallSiteInlineEligibility(
+    val arcEnabled: Boolean,
+    val optimizationsEnabled: Boolean,
+    val debugInfoDisabled: Boolean,
+    val diagnosticsDisabled: Boolean,
+    val exactDiscardedGroupCall: Boolean,
+    val exactCanonicalFunction: Boolean,
+)
+
+internal fun ArcReturnedReceiverCallSiteInlineEligibility.isAuthorized(): Boolean =
+    arcEnabled && optimizationsEnabled && debugInfoDisabled && diagnosticsDisabled &&
+            exactDiscardedGroupCall && exactCanonicalFunction
+
 /**
  *  Wrapper around LLVM value of functional type.
  *
@@ -15,6 +28,24 @@ import llvm.*
  *        Some of it's methods make sense only for functions. Probably, LlvmFunction sub-class should be extracted.
  */
 class LlvmCallable(private val llvmValue: LLVMValueRef, private val attributeProvider: LlvmFunctionAttributeProvider) {
+    fun withCallSiteFunctionAttributes(attributes: List<LlvmFunctionAttribute>): LlvmCallable {
+        if (attributes.isEmpty()) return this
+        val delegate = attributeProvider
+        return LlvmCallable(llvmValue, object : LlvmFunctionAttributeProvider {
+            override fun addCallSiteAttributes(callSite: LLVMValueRef) {
+                delegate.addCallSiteAttributes(callSite)
+                val llvmContext = LLVMGetModuleContext(LLVMGetGlobalParent(LLVMGetBasicBlockParent(
+                    LLVMGetInstructionParent(callSite)
+                )))!!
+                addCallSiteAttributesAtIndex(llvmContext, callSite, LLVMAttributeFunctionIndex, attributes)
+            }
+
+            override fun addFunctionAttributes(function: LLVMValueRef) {
+                delegate.addFunctionAttributes(function)
+            }
+        })
+    }
+
     val returnType: LLVMTypeRef by lazy {
         LLVMGetReturnType(functionType)!!
     }
