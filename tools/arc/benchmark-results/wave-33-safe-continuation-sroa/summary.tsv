@@ -1,0 +1,3 @@
+scenario	baseline_median_seconds	candidate_median_seconds	latency_delta_percent	throughput_ratio_percent	baseline_peak_rss_kib	candidate_peak_rss_kib	rss_delta_percent	logical_allocations	passed
+coroutines	0.108607173	0.08334495	-23.116	130.067	3704	2640	-28.726	900000	True
+strings	0.153102831	0.105927339	-30.365	143.606	3456	2688	-22.222	1800000	True

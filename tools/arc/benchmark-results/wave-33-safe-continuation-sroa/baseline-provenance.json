@@ -1,0 +1,17 @@
+{
+  "benchmarkJavaOpts": "-XX:ReservedCodeCacheSize=256m",
+  "benchmarkJvmEnvironment": {
+    "JAVA_HOME": "/usr/lib/jvm/java-17-openjdk-amd64",
+    "JAVA_OPTS": "-XX:ReservedCodeCacheSize=256m",
+    "JAVA_TOOL_OPTIONS": ""
+  },
+  "benchmarkJvmTools": [
+    "konanc",
+    "cinterop"
+  ],
+  "commit": "3db61efe5e892bf27115f1ebcab957d903067ed4",
+  "role": "baseline-strict",
+  "source": "/home/olfa/codex-kotlin-arc-primary-bench-baseline-v1.9.10",
+  "tag": "v1.9.10",
+  "tree": "c1771ad840cc5e08506c522bf7ff8160d3537f39"
+}

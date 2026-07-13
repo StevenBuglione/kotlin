@@ -1,0 +1,57 @@
+{
+  "baselineCommit": "3db61efe5e892bf27115f1ebcab957d903067ed4",
+  "baselineTree": "c1771ad840cc5e08506c522bf7ff8160d3537f39",
+  "candidateCommit": "f7f3ffb8d589969103cf0123f369886d847360d9",
+  "candidateRuntimePatchBase": "aa5b7adca6dca2c1ab9bd7dadd5b78062207c27b",
+  "candidateRuntimePatchSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "candidateRuntimeTree": "57e7347375d61866e06a4b6446999974e923f501",
+  "candidateTree": "fa0e3da65484f33abd788efe3fc5ca6340d35c65",
+  "pairing": "same-host-scenario-balanced-deterministic-paired-ab-per-shard",
+  "scenarios": [
+    "coroutines",
+    "strings"
+  ],
+  "schemaVersion": 2,
+  "shardCount": 2,
+  "shardId": "merged",
+  "shards": [
+    {
+      "baselineCommit": "3db61efe5e892bf27115f1ebcab957d903067ed4",
+      "baselineTree": "c1771ad840cc5e08506c522bf7ff8160d3537f39",
+      "candidateCommit": "f7f3ffb8d589969103cf0123f369886d847360d9",
+      "candidateRuntimePatchBase": "aa5b7adca6dca2c1ab9bd7dadd5b78062207c27b",
+      "candidateRuntimePatchSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "candidateRuntimeTree": "57e7347375d61866e06a4b6446999974e923f501",
+      "candidateTree": "fa0e3da65484f33abd788efe3fc5ca6340d35c65",
+      "correctnessGate": "exact-output-before-warmup-or-timing",
+      "hostname": "venus",
+      "machineProfile": "primary-bench",
+      "pairing": "same-host-scenario-balanced-deterministic-paired-ab",
+      "scenarios": [
+        "coroutines"
+      ],
+      "schemaVersion": 2,
+      "shardCount": 2,
+      "shardId": "primary"
+    },
+    {
+      "baselineCommit": "3db61efe5e892bf27115f1ebcab957d903067ed4",
+      "baselineTree": "c1771ad840cc5e08506c522bf7ff8160d3537f39",
+      "candidateCommit": "f7f3ffb8d589969103cf0123f369886d847360d9",
+      "candidateRuntimePatchBase": "aa5b7adca6dca2c1ab9bd7dadd5b78062207c27b",
+      "candidateRuntimePatchSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "candidateRuntimeTree": "57e7347375d61866e06a4b6446999974e923f501",
+      "candidateTree": "fa0e3da65484f33abd788efe3fc5ca6340d35c65",
+      "correctnessGate": "exact-output-before-warmup-or-timing",
+      "hostname": "posidon",
+      "machineProfile": "ci2-bench",
+      "pairing": "same-host-scenario-balanced-deterministic-paired-ab",
+      "scenarios": [
+        "strings"
+      ],
+      "schemaVersion": 2,
+      "shardCount": 2,
+      "shardId": "secondary"
+    }
+  ]
+}
