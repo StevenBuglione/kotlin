@@ -117,10 +117,17 @@ def compiler_build_inputs(source: Path) -> dict[str, object]:
 
 
 def candidate_content_key(commit: str, tree: str, source: Path) -> str:
+    """Identify candidate artifacts by their build inputs, not snapshot provenance.
+
+    The remote runner creates a fresh synthetic commit for every snapshot. Two of
+    those commits may have the same tree and therefore produce identical compiler
+    artifacts. Keep accepting ``commit`` at this API boundary because callers also
+    record it as run provenance, but deliberately exclude it from cache identity.
+    """
+    del commit
     payload = {
         "schema": CONTENT_SCHEMA,
         "role": "candidate",
-        "commit": commit,
         "tree": tree,
         "compilerBuildInputs": compiler_build_inputs(source),
     }
@@ -234,7 +241,6 @@ def content_candidate_expected_fields(commit: str, tree: str, source: Path) -> d
     return {
         "schema": CONTENT_SCHEMA,
         "role": "candidate-content-cache",
-        "commit": commit,
         "tree": tree,
         "cacheKey": candidate_content_key(commit, tree, source),
         "compilerBuildInputs": compiler_build_inputs(source),
@@ -245,6 +251,10 @@ def write_content_candidate_manifest(
     path: Path, dist: Path, commit: str, tree: str, source: Path
 ) -> None:
     fields = content_candidate_expected_fields(commit, tree, source)
+    # These fields explain where an immutable artifact was first built. They are
+    # intentionally metadata rather than validation inputs: a later synthetic
+    # snapshot commit with the same tree must reuse this distribution.
+    fields["builtFromCommit"] = commit
     fields["builtFromSource"] = str(source)
     _write_manifest(path, dist, fields)
 

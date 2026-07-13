@@ -975,6 +975,9 @@ class ArcProfileTest(unittest.TestCase):
             ):
                 first = benchmark_cache.candidate_content_key("commit", "tree", source)
                 self.assertEqual(first, benchmark_cache.candidate_content_key("commit", "tree", source))
+                self.assertEqual(
+                    first, benchmark_cache.candidate_content_key("different-commit", "tree", source)
+                )
                 self.assertNotEqual(
                     first, benchmark_cache.candidate_content_key("commit", "other-tree", source)
                 )
@@ -1051,6 +1054,20 @@ class ArcProfileTest(unittest.TestCase):
                 self.assertTrue(benchmark_cache.validate_content_candidate_manifest(
                     manifest, cached, "commit", "tree", source, fast=True
                 ))
+                self.assertTrue(benchmark_cache.validate_content_candidate_manifest(
+                    manifest, cached, "different-snapshot-commit", "tree", source
+                ))
+                self.assertEqual(
+                    cached,
+                    benchmark_cache.publish_content_candidate(
+                        cache, dist, "different-snapshot-commit", "tree", source
+                    ),
+                )
+                manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
+                self.assertEqual("commit", manifest_payload["builtFromCommit"])
+                self.assertNotIn("commit", benchmark_cache.content_candidate_expected_fields(
+                    "different-snapshot-commit", "tree", source
+                ))
                 compiler = cached / "bin" / "konanc"
                 compiler.chmod(0o755)
                 compiler.write_text("mutated", encoding="utf-8")
@@ -1072,7 +1089,7 @@ class ArcProfileTest(unittest.TestCase):
                 keys = []
                 for index in range(3):
                     cached = benchmark_cache.publish_content_candidate(
-                        cache, dist, f"commit-{index}", "tree", source
+                        cache, dist, f"commit-{index}", f"tree-{index}", source
                     )
                     keys.append(cached.parent.name)
                     benchmark_cache.mark_content_candidate_used(
@@ -1121,12 +1138,16 @@ class ArcProfileTest(unittest.TestCase):
                 (dist / "bin" / launcher).write_text("launcher", encoding="utf-8")
             cache = root / "cache"
             with patch.object(benchmark_cache, "compiler_build_inputs", return_value={"tool": "x"}):
-                first = benchmark_cache.publish_content_candidate(cache, dist, "first", "tree", source).parent.name
+                first = benchmark_cache.publish_content_candidate(
+                    cache, dist, "first", "first-tree", source
+                ).parent.name
             benchmark_cache.maintain_content_candidates(
                 cache, first, 1, now_ns=1_000, lease_id="1" * 64
             )
             with patch.object(benchmark_cache, "compiler_build_inputs", return_value={"tool": "x"}):
-                second = benchmark_cache.publish_content_candidate(cache, dist, "second", "tree", source).parent.name
+                second = benchmark_cache.publish_content_candidate(
+                    cache, dist, "second", "second-tree", source
+                ).parent.name
             removed = benchmark_cache.maintain_content_candidates(
                 cache, second, 1, now_ns=2_000, lease_id="2" * 64
             )
@@ -1187,10 +1208,10 @@ class ArcProfileTest(unittest.TestCase):
             cache = root / "cache"
             with patch.object(benchmark_cache, "compiler_build_inputs", return_value={"tool": "x"}):
                 current = benchmark_cache.publish_content_candidate(
-                    cache, dist, "current", "tree", source
+                    cache, dist, "current", "current-tree", source
                 ).parent.name
                 victim = benchmark_cache.publish_content_candidate(
-                    cache, dist, "victim", "tree", source
+                    cache, dist, "victim", "victim-tree", source
                 ).parent.name
             benchmark_cache.mark_content_candidate_used(cache, victim, now_ns=100)
 
