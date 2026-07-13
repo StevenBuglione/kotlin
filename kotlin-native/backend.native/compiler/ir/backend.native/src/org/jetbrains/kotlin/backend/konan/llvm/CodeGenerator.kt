@@ -698,6 +698,37 @@ internal abstract class FunctionGenerationContext(
         markArcResultOwnedBySlot(value, resultSlot)
     }
 
+    /**
+     * Consumes one proven +1 produced-result slot into initialized strong heap storage.
+     *
+     * The runtime operation publishes [value], raw-clears [sourceSlot], and only then releases the
+     * old destination. Requiring the exact current-block slot/value ledger identity keeps this
+     * peephole confined to a producer's normal edge; an exceptional producer edge has no fact and
+     * therefore cannot enter this operation.
+     */
+    fun moveArcOwnedReferenceIntoHeapSlot(
+        value: LLVMValueRef,
+        sourceSlot: LLVMValueRef,
+        destination: LLVMValueRef,
+    ) {
+        require(context.memoryModel == MemoryModel.ARC && sourceSlot != destination &&
+                arcResultIsAlreadyOwnedBySlot(value, sourceSlot)) {
+            "ARC heap-slot move requires one exact current-block owning source-slot fact"
+        }
+        val mover = llvm.externalNativeRuntimeFunction(
+            "MoveReferenceIntoHeapSlotArc",
+            LlvmRetType(llvm.voidType),
+            listOf(
+                LlvmParamType(codegen.kObjHeaderPtrPtr),
+                LlvmParamType(codegen.kObjHeaderPtrPtr),
+                LlvmParamType(codegen.kObjHeaderPtr),
+            ),
+            functionAttributes = listOf(LlvmFunctionAttribute.NoUnwind),
+        )
+        call(mover, listOf(destination, sourceSlot, value))
+        invalidateArcOwnedResultSlot(sourceSlot)
+    }
+
     fun invalidateArcOwnedResultSlot(resultSlot: LLVMValueRef) {
         if (context.memoryModel == MemoryModel.ARC) {
             arcOwnedResultsByBlock[currentBlock]?.remove(resultSlot)

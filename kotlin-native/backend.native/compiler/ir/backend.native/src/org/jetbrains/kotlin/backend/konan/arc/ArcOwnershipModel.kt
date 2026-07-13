@@ -110,6 +110,11 @@ internal sealed class ArcOperation(open val location: ArcPlanLocation?) {
         override val location: ArcPlanLocation? = null,
     ) : ArcOperation(location)
 
+    /**
+     * Copies [value] into initialized strong storage. A consuming store is represented in the
+     * semantic proof by `StrongStore(storage, value)` immediately followed by `Destroy(value)`;
+     * codegen may fuse that verified pair into an owned slot-to-storage move.
+     */
     data class StrongStore(
         val storage: ArcStorage,
         val value: ArcValue,

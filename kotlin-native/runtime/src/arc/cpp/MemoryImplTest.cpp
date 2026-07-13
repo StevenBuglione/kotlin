@@ -540,6 +540,75 @@ TEST(ArcDestructionTest, NewAllocationMovesInitialOwnershipIntoResultSlot) {
     });
 }
 
+TEST(ArcDestructionTest, MovesOwnedSourceSlotIntoInitializedHeapSlotWithoutRetain) {
+    ScopedNodeFinalizerHook finalizers;
+    kotlin::RunInNewThread([] {
+        ObjHolder source;
+        ObjHolder destination;
+        ObjHeader* replacement = AllocInstance(nodeTypeInfo.typeInfo(), source.slot());
+        ObjHeader* previous = AllocInstance(nodeTypeInfo.typeInfo(), destination.slot());
+        ASSERT_NE(replacement, previous);
+
+        MoveReferenceIntoHeapSlotArc(destination.slot(), source.slot(), replacement);
+
+        EXPECT_EQ(source.obj(), nullptr);
+        EXPECT_EQ(destination.obj(), replacement);
+        EXPECT_EQ(finalizedNodes.load(std::memory_order_relaxed), 1);
+
+        destination.clear();
+        EXPECT_EQ(finalizedNodes.load(std::memory_order_relaxed), 2);
+    });
+}
+
+TEST(ArcDestructionTest, OwnedHeapMoveBalancesTwoOwnersWhenDestinationAlreadyContainsSource) {
+    ScopedNodeFinalizerHook finalizers;
+    kotlin::RunInNewThread([] {
+        ObjHolder source;
+        ObjHolder destination;
+        ObjHeader* object = AllocInstance(nodeTypeInfo.typeInfo(), source.slot());
+        UpdateHeapRef(destination.slot(), object);
+
+        MoveReferenceIntoHeapSlotArc(destination.slot(), source.slot(), object);
+
+        EXPECT_EQ(source.obj(), nullptr);
+        EXPECT_EQ(destination.obj(), object);
+        EXPECT_EQ(finalizedNodes.load(std::memory_order_relaxed), 0);
+
+        destination.clear();
+        EXPECT_EQ(finalizedNodes.load(std::memory_order_relaxed), 1);
+    });
+}
+
+TEST(ArcDestructionTest, OwnedHeapMoveTransfersNullableOwnershipAndReleasesOldDestination) {
+    ScopedNodeFinalizerHook finalizers;
+    kotlin::RunInNewThread([] {
+        ObjHolder source;
+        ObjHolder destination;
+        AllocInstance(nodeTypeInfo.typeInfo(), destination.slot());
+
+        MoveReferenceIntoHeapSlotArc(destination.slot(), source.slot(), nullptr);
+
+        EXPECT_EQ(source.obj(), nullptr);
+        EXPECT_EQ(destination.obj(), nullptr);
+        EXPECT_EQ(finalizedNodes.load(std::memory_order_relaxed), 1);
+    });
+}
+
+TEST(ArcDestructionTest, OwnedHeapMoveRejectsAValueNotOwnedByItsSourceSlot) {
+    EXPECT_DEATH(
+            kotlin::RunInNewThread([] {
+                ObjHolder source;
+                ObjHolder destination;
+                ObjHeader* replacement = AllocInstance(nodeTypeInfo.typeInfo(), source.slot());
+                AllocInstance(nodeTypeInfo.typeInfo(), destination.slot());
+                MoveReferenceIntoHeapSlotArc(destination.slot(), source.slot(), destination.obj());
+                // Keep the expected value visibly live so an optimizing test compiler cannot
+                // discard the allocation whose identity the runtime assertion checks.
+                EXPECT_NE(replacement, nullptr);
+            }),
+            "ARC owned reference transfer source slot does not own the object");
+}
+
 TEST(ArcReferenceCountOrderingTest, FinalDeinitAcquiresWritesFromEveryReleasingThread) {
     releaseVisibilityArcDeinitCount.store(0, std::memory_order_relaxed);
     releaseVisibilityObservedMask.store(0, std::memory_order_relaxed);

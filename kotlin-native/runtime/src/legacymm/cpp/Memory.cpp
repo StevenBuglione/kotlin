@@ -2802,6 +2802,22 @@ void moveArcOwnedReferenceIntoReturnSlot(ObjHeader* object, ObjHeader** returnSl
   if (old != nullptr) releaseHeapRef<false>(old);
 }
 
+void moveArcOwnedReferenceIntoHeapSlot(ObjHeader* object, ObjHeader** sourceSlot, ObjHeader** destination) {
+  RuntimeAssert(destination != nullptr, "ARC owned reference transfer requires a heap destination");
+  RuntimeAssert(sourceSlot != nullptr, "ARC owned reference transfer requires a source slot");
+  RuntimeAssert(sourceSlot != destination, "ARC owned reference transfer requires distinct source and destination slots");
+  RuntimeAssert(*sourceSlot == object, "ARC owned reference transfer source slot does not own the object");
+
+  // This is Swift's `store [assign]` ownership convention: the source's existing +1 is
+  // transferred into initialized strong storage. Publish and detach the source before releasing
+  // the old destination so arbitrary deinitialization cannot observe a missing new owner or make
+  // frame cleanup consume the transferred reference a second time.
+  ObjHeader* old = *destination;
+  *destination = object;
+  *sourceSlot = nullptr;
+  if (old != nullptr) releaseHeapRef<false>(old);
+}
+
 ObjHeader* moveArcAllocationToReturnSlot(ContainerHeader* container, ObjHeader* object, ObjHeader** returnSlot) {
   RuntimeAssert(returnSlot != nullptr, "ARC allocation requires a return slot");
   RuntimeAssert(container->refCount() == 0, "new ARC allocation must start with an unowned zero count");
@@ -4253,6 +4269,10 @@ RUNTIME_NOTHROW void SetCurrentFrameArc(ObjHeader** start) {
 
 RUNTIME_NOTHROW void MoveReferenceIntoReturnSlotArc(ObjHeader** returnSlot, ObjHeader* object) {
   moveArcOwnedReferenceIntoReturnSlot(object, returnSlot);
+}
+
+RUNTIME_NOTHROW void MoveReferenceIntoHeapSlotArc(ObjHeader** destination, ObjHeader** sourceSlot, ObjHeader* object) {
+  moveArcOwnedReferenceIntoHeapSlot(object, sourceSlot, destination);
 }
 #endif
 
