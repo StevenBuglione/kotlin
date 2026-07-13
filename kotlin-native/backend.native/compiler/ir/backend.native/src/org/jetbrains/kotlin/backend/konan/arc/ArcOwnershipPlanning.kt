@@ -16,6 +16,7 @@ import org.jetbrains.kotlin.backend.konan.ir.getAnnotationArgumentValue
 import org.jetbrains.kotlin.backend.konan.ir.konanLibrary
 import org.jetbrains.kotlin.backend.konan.lower.DECLARATION_ORIGIN_ENUM
 import org.jetbrains.kotlin.backend.konan.isObjCBridgeBased
+import org.jetbrains.kotlin.backend.konan.isFinalBinary
 import org.jetbrains.kotlin.backend.konan.llvm.Lifetime
 import org.jetbrains.kotlin.backend.konan.llvm.IntrinsicType
 import org.jetbrains.kotlin.backend.konan.llvm.tryGetIntrinsicType
@@ -82,11 +83,13 @@ import org.jetbrains.kotlin.ir.util.isOverridable
 import org.jetbrains.kotlin.ir.util.isReal
 import org.jetbrains.kotlin.descriptors.DescriptorVisibilities
 import org.jetbrains.kotlin.descriptors.ClassKind
+import org.jetbrains.kotlin.descriptors.Modality
 import org.jetbrains.kotlin.ir.visitors.IrElementVisitorVoid
 import org.jetbrains.kotlin.ir.visitors.acceptChildrenVoid
 import org.jetbrains.kotlin.ir.visitors.acceptVoid
 import org.jetbrains.kotlin.name.Name
 import org.jetbrains.kotlin.library.KotlinLibrary
+import org.jetbrains.kotlin.konan.target.KonanTarget
 import java.util.Collections
 import java.util.IdentityHashMap
 
@@ -360,6 +363,7 @@ internal data class ArcCodegenOwnershipPlan(
     val branchGuaranteedPhiSelections: Map<IrSimpleFunction, ArcOwnedToGuaranteedPhiKotlinIRSelection>,
     val stringBuilderBackingArrayProjectionPlans: Map<IrSimpleFunction, ArcStringBuilderBackingArrayProjectionPlan>,
     val ownedResultHeapStoreSelections: Map<IrSimpleFunction, ArcOwnedResultHeapStoreKotlinIRSelection>,
+    val freshOwnedFieldStorePlans: Map<IrSimpleFunction, List<ArcFreshOwnedFieldStorePlan>>,
     val coroutineEmptyContextImmortalReturns:
             Map<IrSimpleFunction, ArcCoroutineEmptyContextReturnKotlinIRSelection>,
     val coroutineSuspendedScopedBorrowsByCall:
@@ -428,6 +432,7 @@ internal data class ArcCodegenOwnershipPlan(
             branchGuaranteedPhiSelections = emptyMap(),
             stringBuilderBackingArrayProjectionPlans = emptyMap(),
             ownedResultHeapStoreSelections = emptyMap(),
+            freshOwnedFieldStorePlans = emptyMap(),
             coroutineEmptyContextImmortalReturns = emptyMap(),
             coroutineSuspendedScopedBorrowsByCall = emptyMap(),
             coroutineSuspendedScopedBorrowsByFunction = emptyMap(),
@@ -437,6 +442,20 @@ internal data class ArcCodegenOwnershipPlan(
         )
     }
 }
+
+/**
+ * Exact lowered-IR authorization for moving one fresh constructor result into initialized strong
+ * field storage. The producer and store identities never cross a compilation boundary.
+ */
+internal data class ArcFreshOwnedFieldStorePlan(
+    val function: IrSimpleFunction,
+    val receiverVariable: IrVariable,
+    val receiverRead: IrGetValue,
+    val field: IrField,
+    val store: IrSetField,
+    val producer: IrConstructorCall,
+    val ownershipProof: ArcFunctionPlan,
+)
 
 /** Exact IR-to-emission authorization produced only after [ArcMatchingSetClosure] succeeds. */
 internal data class ArcMatchingSetLocalAliasIRSelection(
@@ -578,6 +597,40 @@ internal data class ArcResultSlotForwardingEligibility(
 internal fun ArcResultSlotForwardingEligibility.isAuthorized(): Boolean =
     arcEnabled && debugInfoDisabled && explicitResultSlot && directKotlinCall && nonExternalCall &&
             nonSuspendCall && referenceResult && nonUnitResult && nonNothingResult
+
+/** Fail-closed authorization boundary for one fresh +1 constructor-result field transfer. */
+internal data class ArcFreshOwnedFieldStoreEligibility(
+    val arcEnabled: Boolean,
+    val linuxX64: Boolean,
+    val finalBinary: Boolean,
+    val optimizationsEnabled: Boolean,
+    val debugInfoDisabled: Boolean,
+    val diagnosticsDisabled: Boolean,
+    val sanitizerDisabled: Boolean,
+    val coverageDisabled: Boolean,
+    val nonSuspendFunction: Boolean,
+    val nonExternalFunction: Boolean,
+    val directConstructorStoreValue: Boolean,
+    val directImmutableLocalReceiver: Boolean,
+    val exactInitializedReceiverClass: Boolean,
+    val mutableReferenceField: Boolean,
+    val nonVolatileStrongField: Boolean,
+    val nonInitializerStore: Boolean,
+    val freshFinalLocalKotlinClass: Boolean,
+    val producerUsesOwningResultSlot: Boolean,
+    val producerHasExactlyOneDirectUse: Boolean,
+    val receiverEvaluatedBeforeProducer: Boolean,
+    val normalAndExceptionalOwnershipVerified: Boolean,
+)
+
+internal fun ArcFreshOwnedFieldStoreEligibility.isAuthorized(): Boolean =
+    arcEnabled && linuxX64 && finalBinary && optimizationsEnabled && debugInfoDisabled &&
+            diagnosticsDisabled && sanitizerDisabled && coverageDisabled && nonSuspendFunction &&
+            nonExternalFunction && directConstructorStoreValue && directImmutableLocalReceiver &&
+            exactInitializedReceiverClass && mutableReferenceField && nonVolatileStrongField &&
+            nonInitializerStore && freshFinalLocalKotlinClass && producerUsesOwningResultSlot &&
+            producerHasExactlyOneDirectUse && receiverEvaluatedBeforeProducer &&
+            normalAndExceptionalOwnershipVerified
 
 /** Authorization for one identity-selected lowered suspend adapter tail call. */
 internal data class ArcCoroutineResultSlotForwardingEligibility(
@@ -1003,6 +1056,8 @@ internal fun runArcOwnershipPlanning(
         IdentityHashMap<IrSimpleFunction, ArcStringBuilderBackingArrayProjectionPlan>()
     val ownedResultHeapStoreSelections =
         IdentityHashMap<IrSimpleFunction, ArcOwnedResultHeapStoreKotlinIRSelection>()
+    val freshOwnedFieldStorePlans =
+        IdentityHashMap<IrSimpleFunction, List<ArcFreshOwnedFieldStorePlan>>()
     val coroutineEmptyContextImmortalReturns =
         IdentityHashMap<IrSimpleFunction, ArcCoroutineEmptyContextReturnKotlinIRSelection>()
     selectVerifiedCoroutineEmptyContextImmortalReturn(generationState, input.module)?.let { selection ->
@@ -1083,6 +1138,19 @@ internal fun runArcOwnershipPlanning(
                                 "${declaration.fqNameForIrSerialization.asString()}: selected=1"
                     }
                 }
+                selectVerifiedFreshOwnedFieldStores(generationState, declaration, input.lifetimes)
+                    .takeIf { it.isNotEmpty() }
+                    ?.let { selections ->
+                        check(freshOwnedFieldStorePlans.put(declaration, selections) == null) {
+                            "duplicate fresh owned field-store function selection: " +
+                                    declaration.fqNameForIrSerialization.asString()
+                        }
+                        generationState.context.log {
+                            "ARC fresh owned field-store selection " +
+                                    "${declaration.fqNameForIrSerialization.asString()}: " +
+                                    "selected=${selections.size}"
+                        }
+                    }
                 selectVerifiedStringBuilderBackingArrayProjection(generationState, declaration)?.let { plan ->
                     check(stringBuilderBackingArrayProjectionPlans.put(declaration, plan) == null) {
                         "duplicate StringBuilder backing-array projection: ${declaration.fqNameForIrSerialization}"
@@ -1303,6 +1371,7 @@ internal fun runArcOwnershipPlanning(
             branchGuaranteedPhiSelections,
             stringBuilderBackingArrayProjectionPlans,
             ownedResultHeapStoreSelections,
+            freshOwnedFieldStorePlans,
             coroutineEmptyContextImmortalReturns,
             coroutineSuspendedScopedBorrowsByCall,
             coroutineSuspendedScopedBorrowsByFunction,
@@ -1548,6 +1617,155 @@ private fun verifyMutableConstructorInitializerProof(function: IrSimpleFunction,
         ),
     )
     return ArcOwnershipVerifier.verify(proof) === ArcOwnershipVerificationResult.Success
+}
+
+/**
+ * Select only `val owner = Owner(...); owner.strongField = Fresh(...)` after Native lowerings.
+ *
+ * The direct constructor expression is the store's sole use. Giving its allocation ABI an exact
+ * anonymous result slot therefore establishes one +1 only on the constructor's normal successor;
+ * ordinary frame unwinding owns the same slot if initialization throws. The initialized field then
+ * consumes that +1, raw-clears the source slot, and releases its previous value.
+ */
+private fun selectVerifiedFreshOwnedFieldStores(
+    generationState: NativeGenerationState,
+    function: IrSimpleFunction,
+    lifetimes: Map<IrElement, Lifetime>,
+): List<ArcFreshOwnedFieldStorePlan> {
+    val context = generationState.context
+    val config = context.config
+    if (context.memoryModel != MemoryModel.ARC || config.target != KonanTarget.LINUX_X64 ||
+        !config.isFinalBinary || !config.optimizationsEnabled || context.shouldContainAnyDebugInfo() ||
+        config.arcDiagnosticsEnabled || config.sanitizer != null || config.undefinedBehaviorSanitizer ||
+        generationState.coverage.enabled || function.isArcSuspendLike() || function.isExternal
+    ) return emptyList()
+    val body = function.body ?: return emptyList()
+    val selected = mutableListOf<ArcFreshOwnedFieldStorePlan>()
+
+    body.acceptVoid(object : IrElementVisitorVoid {
+        override fun visitElement(element: IrElement) {
+            element.acceptChildrenVoid(this)
+        }
+
+        override fun visitFunction(declaration: IrFunction) = Unit
+
+        override fun visitSetField(expression: IrSetField) {
+            val receiverRead = expression.receiver as? IrGetValue
+            val receiverVariable = receiverRead?.symbol?.owner as? IrVariable
+            val receiverInitializer = receiverVariable?.initializer?.unwrapDirectConstructor()
+            val field = expression.symbol.owner
+            val ownerClass = field.parent as? IrClass
+            val producer = expression.value as? IrConstructorCall
+            val producedClass = producer?.symbol?.owner?.constructedClass
+            val producerLifetime = producer?.let { lifetimes[it] }
+            val producerRequiresHeapForDeinit = producedClass != null &&
+                    generateSequence(producedClass) { it.getSuperClassNotAny() }.any { irClass ->
+                        irClass.declarations.any {
+                            it is IrSimpleFunction && it.annotations.hasAnnotation(KonanFqNames.arcDeinit)
+                        }
+                    }
+            val ownershipProof = if (receiverVariable != null &&
+                producer != null && ownerClass != null && producedClass != null
+            ) {
+                buildFreshOwnedFieldStoreOwnershipProof(function, receiverVariable, field)
+            } else {
+                null
+            }
+            val eligibility = ArcFreshOwnedFieldStoreEligibility(
+                arcEnabled = context.memoryModel == MemoryModel.ARC,
+                linuxX64 = config.target == KonanTarget.LINUX_X64,
+                finalBinary = config.isFinalBinary,
+                optimizationsEnabled = config.optimizationsEnabled,
+                debugInfoDisabled = !context.shouldContainAnyDebugInfo(),
+                diagnosticsDisabled = !config.arcDiagnosticsEnabled,
+                // The enclosing production-mode guard has already rejected every sanitizer.
+                sanitizerDisabled = true,
+                coverageDisabled = !generationState.coverage.enabled,
+                nonSuspendFunction = !function.isArcSuspendLike(),
+                nonExternalFunction = !function.isExternal,
+                directConstructorStoreValue = producer != null && expression.value === producer,
+                directImmutableLocalReceiver = expression.receiver === receiverRead &&
+                        receiverVariable != null && !receiverVariable.isVar && receiverVariable.parent === function &&
+                        receiverVariable.type.binaryTypeIsReference() &&
+                        !receiverVariable.hasAnnotation(KonanFqNames.arcWeak) &&
+                        !receiverVariable.hasAnnotation(KonanFqNames.arcUnowned) &&
+                        !receiverVariable.hasAnnotation(KonanFqNames.volatile),
+                exactInitializedReceiverClass = receiverInitializer != null && ownerClass != null &&
+                        receiverInitializer.symbol.owner.constructedClass === ownerClass &&
+                        receiverInitializer.isDirectKotlinCall(generationState) &&
+                        ownerClass.konanLibrary == null && ownerClass.kind == ClassKind.CLASS &&
+                        ownerClass.modality == Modality.FINAL && field.parent === ownerClass,
+                mutableReferenceField = !field.isStatic && !field.isFinal &&
+                        field.type.binaryTypeIsReference() && field.visibility == DescriptorVisibilities.PRIVATE,
+                nonVolatileStrongField = !field.hasAnnotation(KonanFqNames.volatile) &&
+                        !field.hasAnnotation(KonanFqNames.arcWeak) &&
+                        !field.hasAnnotation(KonanFqNames.arcUnowned),
+                nonInitializerStore = expression.origin != IrStatementOrigin.INITIALIZE_FIELD &&
+                        expression.superQualifierSymbol == null,
+                freshFinalLocalKotlinClass = producer != null && producedClass != null &&
+                        producer.isDirectKotlinCall(generationState) && producer.type.binaryTypeIsReference() &&
+                        producedClass.konanLibrary == null && producedClass.kind == ClassKind.CLASS &&
+                        producedClass.modality == Modality.FINAL,
+                producerUsesOwningResultSlot = producerLifetime != null &&
+                        (producerRequiresHeapForDeinit ||
+                                (producerLifetime !== Lifetime.STACK && producerLifetime !== Lifetime.LOCAL)),
+                producerHasExactlyOneDirectUse = producer != null && expression.value === producer,
+                // evaluateSetField materializes the direct receiver before evaluating its value.
+                receiverEvaluatedBeforeProducer = producer != null,
+                normalAndExceptionalOwnershipVerified = ownershipProof != null &&
+                        ArcOwnershipVerifier.verify(ownershipProof) === ArcOwnershipVerificationResult.Success,
+            )
+            if (eligibility.isAuthorized()) {
+                selected += ArcFreshOwnedFieldStorePlan(
+                    function,
+                    receiverVariable!!,
+                    receiverRead,
+                    field,
+                    expression,
+                    producer!!,
+                    ownershipProof!!,
+                )
+            }
+            expression.acceptChildrenVoid(this)
+        }
+    })
+    return selected
+}
+
+private fun buildFreshOwnedFieldStoreOwnershipProof(
+    function: IrSimpleFunction,
+    receiver: IrVariable,
+    field: IrField,
+): ArcFunctionPlan {
+    val entry = ArcBlockId("entry")
+    val normal = ArcBlockId("producer_normal")
+    val exceptional = ArcBlockId("producer_exceptional")
+    val owner = ArcValue("owner_${receiver.name}")
+    val produced = ArcValue("fresh_${field.name}")
+    val destination = ArcStorage("${(field.parent as IrClass).name}.${field.name}")
+    return ArcFunctionPlan(
+        functionName = "${function.fqNameForIrSerialization.asString()}#fresh-owned-field-store-${field.name}",
+        entry = entry,
+        entryValues = mapOf(owner to ArcOwnership.Guaranteed),
+        entryInitializedStorage = setOf(destination),
+        blocks = linkedMapOf(
+            entry to ArcBasicBlock(
+                entry,
+                listOf(ArcOperation.Use(owner, ArcPlanLocation("direct initialized owner receiver"))),
+                ArcTerminator.Branch(normal, exceptional),
+            ),
+            normal to ArcBasicBlock(
+                normal,
+                listOf(
+                    ArcOperation.Define(produced, ArcOwnership.Owned, ArcPlanLocation("fresh constructor +1")),
+                    ArcOperation.StrongStore(destination, produced, ArcPlanLocation("initialized strong field")),
+                    ArcOperation.Destroy(produced, ArcPlanLocation("source-slot ownership transfer")),
+                ),
+                ArcTerminator.Return(),
+            ),
+            exceptional to ArcBasicBlock(exceptional, emptyList(), ArcTerminator.Throw),
+        ),
+    )
 }
 
 private data class ArcGuaranteedAliasUseAnalysis(

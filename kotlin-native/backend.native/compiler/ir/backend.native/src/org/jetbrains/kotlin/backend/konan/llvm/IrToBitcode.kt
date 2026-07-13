@@ -36,6 +36,7 @@ import org.jetbrains.kotlin.backend.konan.arc.ArcStringBuilderBackingArrayProjec
 import org.jetbrains.kotlin.backend.konan.arc.ArcOwnedResultHeapStoreConsumptionLedger
 import org.jetbrains.kotlin.backend.konan.arc.ArcOwnedResultHeapStoreIRBindingRole
 import org.jetbrains.kotlin.backend.konan.arc.ArcOwnedResultHeapStoreKotlinIRSelection
+import org.jetbrains.kotlin.backend.konan.arc.ArcFreshOwnedFieldStorePlan
 import org.jetbrains.kotlin.backend.konan.arc.ArcCoroutineEmptyContextReturnConsumptionLedger
 import org.jetbrains.kotlin.backend.konan.arc.ArcCoroutineEmptyContextReturnKotlinIRSelection
 import org.jetbrains.kotlin.backend.konan.arc.ArcCoroutineSuspendedBorrowConsumptionLedger
@@ -290,6 +291,7 @@ internal class CodeGeneratorVisitor(
     private var currentStringBuilderBackingArrayProjectionEmission:
             StringBuilderBackingArrayProjectionEmission? = null
     private var currentOwnedResultHeapStoreEmission: OwnedResultHeapStoreEmission? = null
+    private var currentFreshOwnedFieldStoreEmission: FreshOwnedFieldStoreEmission? = null
     private var currentCoroutineEmptyContextImmortalReturnEmission:
             CoroutineEmptyContextImmortalReturnEmission? = null
     private var currentCoroutineSuspendedScopedBorrowEmission:
@@ -552,6 +554,84 @@ internal class CodeGeneratorVisitor(
             ledger.verifyComplete()
             check(producedValue != null && sourceSlot != null) {
                 "owned Result-box heap-store physical binding was incomplete"
+            }
+        }
+    }
+
+    /** Moves exact direct constructor +1 results into their initialized owning field stores. */
+    private inner class FreshOwnedFieldStoreEmission(
+        val plans: List<ArcFreshOwnedFieldStorePlan>,
+    ) {
+        private val byProducer = IdentityHashMap<IrConstructorCall, ArcFreshOwnedFieldStorePlan>()
+        private val byStore = IdentityHashMap<IrSetField, ArcFreshOwnedFieldStorePlan>()
+        private val producedValues = IdentityHashMap<ArcFreshOwnedFieldStorePlan, LLVMValueRef>()
+        private val sourceSlots = IdentityHashMap<ArcFreshOwnedFieldStorePlan, LLVMValueRef>()
+        private val consumedProducers = Collections.newSetFromMap(
+            IdentityHashMap<ArcFreshOwnedFieldStorePlan, Boolean>()
+        )
+        private val consumedStores = Collections.newSetFromMap(
+            IdentityHashMap<ArcFreshOwnedFieldStorePlan, Boolean>()
+        )
+
+        init {
+            require(plans.isNotEmpty()) { "empty fresh owned field-store emission" }
+            plans.forEach { plan ->
+                check(byProducer.put(plan.producer, plan) == null && byStore.put(plan.store, plan) == null) {
+                    "duplicate fresh owned field-store producer/store identity"
+                }
+                check(plan.store.value === plan.producer && plan.store.receiver === plan.receiverRead &&
+                        plan.receiverRead.symbol.owner === plan.receiverVariable &&
+                        plan.store.symbol.owner === plan.field) {
+                    "fresh owned field-store IR identity drifted before codegen"
+                }
+            }
+        }
+
+        fun isProducer(expression: IrFunctionAccessExpression): Boolean =
+            expression is IrConstructorCall && byProducer.containsKey(expression)
+
+        fun bindProducer(
+            producer: IrConstructorCall,
+            value: LLVMValueRef,
+            physicalSourceSlot: LLVMValueRef,
+        ) {
+            val plan = byProducer[producer]
+                ?: error("unknown fresh owned field-store producer: ${ir2string(producer)}")
+            check(consumedProducers.add(plan) && producedValues.put(plan, value) == null &&
+                    sourceSlots.put(plan, physicalSourceSlot) == null) {
+                "fresh owned field-store producer consumed twice"
+            }
+            check(functionGenerationContext.arcResultIsAlreadyOwnedBySlot(value, physicalSourceSlot)) {
+                "fresh field producer did not initialize its exact physical result slot"
+            }
+        }
+
+        fun planForStore(store: IrSetField): ArcFreshOwnedFieldStorePlan? = byStore[store]
+
+        fun moveIntoStore(store: IrSetField, value: LLVMValueRef, destination: LLVMValueRef) {
+            val plan = byStore[store]
+                ?: error("unknown fresh owned field store: ${ir2string(store)}")
+            val producedValue = producedValues[plan]
+                ?: error("fresh owned field store reached before its normal producer successor")
+            val physicalSourceSlot = sourceSlots[plan]
+                ?: error("fresh owned field store has no exact physical source slot")
+            check(consumedStores.add(plan) && value == producedValue && store.value === plan.producer &&
+                    store.receiver === plan.receiverRead && store.symbol.owner === plan.field) {
+                "fresh owned field-store identity/value drifted or store consumed twice"
+            }
+            functionGenerationContext.moveArcOwnedReferenceIntoHeapSlot(
+                value,
+                physicalSourceSlot,
+                destination,
+            )
+        }
+
+        fun verifyConsumed() {
+            val expected = plans.toSet()
+            check(consumedProducers == expected && consumedStores == expected &&
+                    producedValues.keys == expected && sourceSlots.keys == expected) {
+                "fresh owned field-store emission incomplete: producers=${consumedProducers.size}, " +
+                        "stores=${consumedStores.size}, expected=${plans.size}"
             }
         }
     }
@@ -1691,6 +1771,7 @@ internal class CodeGeneratorVisitor(
         val previousStringBuilderBackingArrayProjectionEmission =
                 currentStringBuilderBackingArrayProjectionEmission
         val previousOwnedResultHeapStoreEmission = currentOwnedResultHeapStoreEmission
+        val previousFreshOwnedFieldStoreEmission = currentFreshOwnedFieldStoreEmission
         val previousCoroutineEmptyContextImmortalReturnEmission =
             currentCoroutineEmptyContextImmortalReturnEmission
         val previousCoroutineSuspendedScopedBorrowEmission =
@@ -1717,6 +1798,9 @@ internal class CodeGeneratorVisitor(
         currentOwnedResultHeapStoreEmission = (declaration as? IrSimpleFunction)?.let {
             arcOwnership.ownedResultHeapStoreSelections[it]
         }?.let(::OwnedResultHeapStoreEmission)
+        currentFreshOwnedFieldStoreEmission = (declaration as? IrSimpleFunction)?.let {
+            arcOwnership.freshOwnedFieldStorePlans[it]
+        }?.takeIf { it.isNotEmpty() }?.let(::FreshOwnedFieldStoreEmission)
         currentCoroutineEmptyContextImmortalReturnEmission = (declaration as? IrSimpleFunction)?.let {
             arcOwnership.coroutineEmptyContextImmortalReturns[it]
         }?.let(::CoroutineEmptyContextImmortalReturnEmission)
@@ -1773,6 +1857,7 @@ internal class CodeGeneratorVisitor(
                                 currentBranchGuaranteedPhiEmission?.verifyConsumed()
                                 currentStringBuilderBackingArrayProjectionEmission?.verifyConsumed()
                                 currentOwnedResultHeapStoreEmission?.verifyConsumed()
+                                currentFreshOwnedFieldStoreEmission?.verifyConsumed()
                                 currentCoroutineEmptyContextImmortalReturnEmission?.verifyConsumed()
                                 currentCoroutineSuspendedScopedBorrowEmission?.verifyConsumed()
                             }
@@ -1791,6 +1876,7 @@ internal class CodeGeneratorVisitor(
             currentStringBuilderBackingArrayProjectionEmission =
                     previousStringBuilderBackingArrayProjectionEmission
             currentOwnedResultHeapStoreEmission = previousOwnedResultHeapStoreEmission
+            currentFreshOwnedFieldStoreEmission = previousFreshOwnedFieldStoreEmission
             currentCoroutineEmptyContextImmortalReturnEmission =
                     previousCoroutineEmptyContextImmortalReturnEmission
             currentCoroutineSuspendedScopedBorrowEmission =
@@ -3083,6 +3169,7 @@ internal class CodeGeneratorVisitor(
         val ownedResultHeapStore = currentOwnedResultHeapStoreEmission?.takeIf {
             value === it.selection.store
         }
+        val freshOwnedFieldStore = currentFreshOwnedFieldStoreEmission?.planForStore(value)
         if (immortalCompletionInitializer != null) {
             require(context.memoryModel == MemoryModel.ARC && context.config.optimizationsEnabled &&
                     !context.shouldContainDebugInfo() && !context.config.arcDiagnosticsEnabled &&
@@ -3099,6 +3186,23 @@ internal class CodeGeneratorVisitor(
                 "owned Result-box move escaped its exact Ref.element production boundary"
             }
             ownedResultHeapStore.moveIntoStore(value, valueToAssign, address)
+        } else if (freshOwnedFieldStore != null) {
+            require(context.memoryModel == MemoryModel.ARC && context.config.optimizationsEnabled &&
+                    context.config.target == KonanTarget.LINUX_X64 && context.config.isFinalBinary &&
+                    !context.shouldContainAnyDebugInfo() && !context.config.arcDiagnosticsEnabled &&
+                    context.config.sanitizer == null && !context.config.undefinedBehaviorSanitizer &&
+                    !generationState.coverage.enabled && thisPtr != null &&
+                    value.receiver === freshOwnedFieldStore.receiverRead &&
+                    value.value === freshOwnedFieldStore.producer &&
+                    value.symbol.owner === freshOwnedFieldStore.field &&
+                    !freshOwnedFieldStore.function.isArcSuspendLike() &&
+                    !freshOwnedFieldStore.function.isExternal &&
+                    !value.symbol.owner.hasAnnotation(KonanFqNames.volatile) &&
+                    !value.symbol.owner.hasAnnotation(KonanFqNames.arcWeak) &&
+                    !value.symbol.owner.hasAnnotation(KonanFqNames.arcUnowned)) {
+                "fresh owned field move escaped its exact production boundary"
+            }
+            currentFreshOwnedFieldStoreEmission!!.moveIntoStore(value, valueToAssign, address)
         } else {
             functionGenerationContext.storeAny(
                     valueToAssign, address, false,
@@ -3678,13 +3782,29 @@ internal class CodeGeneratorVisitor(
             }
             functionGenerationContext.vars.createAnonymousSlot()
         }
+        val freshOwnedFieldStoreSlot = currentFreshOwnedFieldStoreEmission
+            ?.takeIf { it.isProducer(value) }
+            ?.let {
+                require(resultSlot == null && scopedPromotionSlot == null && effectiveResultSlot == null &&
+                        discardedReturnedReceiverSeedSlot == null && returnedReceiverSlot == null &&
+                        returnedReceiverSeedSlot == null && ownedResultHeapStoreSlot == null &&
+                        value is IrConstructorCall) {
+                    "fresh owned field producer collided with another result-slot ownership plan"
+                }
+                functionGenerationContext.vars.createAnonymousSlot()
+            }
         val callResultSlot = discardedReturnedReceiverSeedSlot ?: returnedReceiverSlot ?:
-                returnedReceiverSeedSlot ?: ownedResultHeapStoreSlot ?: effectiveResultSlot
+                returnedReceiverSeedSlot ?: ownedResultHeapStoreSlot ?: freshOwnedFieldStoreSlot ?:
+                effectiveResultSlot
 
         updateBuilderDebugLocation(value)
         val result = when (value) {
             is IrDelegatingConstructorCall -> delegatingConstructorCall(value.symbol.owner, args)
-            is IrConstructorCall -> evaluateConstructorCall(value, args, effectiveResultSlot)
+            is IrConstructorCall -> evaluateConstructorCall(
+                value,
+                args,
+                freshOwnedFieldStoreSlot ?: effectiveResultSlot,
+            )
             else -> evaluateFunctionCall(
                     value as IrCall,
                     args,
@@ -3706,6 +3826,13 @@ internal class CodeGeneratorVisitor(
                 value,
                 result,
                 ownedResultHeapStoreSlot,
+            )
+        }
+        if (freshOwnedFieldStoreSlot != null) {
+            currentFreshOwnedFieldStoreEmission?.bindProducer(
+                value as IrConstructorCall,
+                result,
+                freshOwnedFieldStoreSlot,
             )
         }
         (value as? IrCall)?.let { call ->
