@@ -23,6 +23,7 @@ import org.jetbrains.kotlin.backend.konan.llvm.coverage.runCoveragePass
 import org.jetbrains.kotlin.backend.konan.llvm.verifyModule
 import org.jetbrains.kotlin.backend.konan.optimizations.RemoveRedundantSafepointsPass
 import org.jetbrains.kotlin.backend.konan.optimizations.coalesceAdjacentArcReturnUpdates
+import org.jetbrains.kotlin.backend.konan.optimizations.expandArcReferenceUpdates
 import org.jetbrains.kotlin.backend.konan.optimizations.prepareArcFrameElision
 import org.jetbrains.kotlin.backend.konan.optimizations.removeMultipleThreadDataLoads
 import org.jetbrains.kotlin.backend.konan.optimizations.removeEmptyArcFrames
@@ -30,6 +31,7 @@ import org.jetbrains.kotlin.backend.konan.optimizations.restoreArcFrameElision
 import org.jetbrains.kotlin.backend.konan.optimizations.sealArcFrameElisionForLTO
 import org.jetbrains.kotlin.backend.konan.optimizations.inlineArcSelectiveCalls
 import org.jetbrains.kotlin.backend.konan.optimizations.shouldRunArcSelectiveInlining
+import org.jetbrains.kotlin.backend.konan.optimizations.shouldExpandArcReferenceUpdates
 import org.jetbrains.kotlin.konan.target.SanitizerKind
 import org.jetbrains.kotlin.konan.target.KonanTarget
 import java.io.File
@@ -101,6 +103,22 @@ internal val SelectiveArcGeneratedInliningPhase = createSimpleNamedCompilerPhase
         "ARC selective inlining: tagged=${result.tagged}, inlined=${result.inlined}, " +
                 "rejected=${result.rejected}, missingBody=${result.missingBody}, " +
                 "budgetSkipped=${result.budgetSkipped}, failures=${result.inlineFailures}"
+    }
+}
+
+internal val ExpandArcReferenceUpdatesPhase = createSimpleNamedCompilerPhase<OptimizationState, LLVMModuleRef>(
+        name = "ExpandArcReferenceUpdates",
+        description = "Elide ARC self-assignment while preserving exact runtime barriers",
+        postactions = getDefaultLlvmModuleActions(),
+) { context, module ->
+    val result = expandArcReferenceUpdates(module)
+    check(result.rejected == 0 && result.missingRuntime == 0) {
+        "ARC reference update expansion rejected the linked runtime shape: " +
+                "candidates=${result.candidates}, rejected=${result.rejected}, " +
+                "missingRuntime=${result.missingRuntime}"
+    }
+    context.log {
+        "ARC reference update expansion: candidates=${result.candidates}, expanded=${result.expanded}"
     }
 }
 
@@ -222,6 +240,11 @@ internal fun <T : BitcodePostProcessingContext> PhaseEngine<T>.runBitcodePostPro
                 disable = !context.shouldRunArcSelectiveInlining(),
         )
         it.runPhase(MandatoryBitcodeLLVMPostprocessingPhase, module)
+        it.runPhase(
+                ExpandArcReferenceUpdatesPhase,
+                module,
+                disable = !context.shouldExpandArcReferenceUpdates(),
+        )
         var arcFrameElisionActive = arcFrameElisionRequested && prepareArcFrameElision(module)
         var removedArcFrames = 0
         var arcFrameInlineFailures = 0

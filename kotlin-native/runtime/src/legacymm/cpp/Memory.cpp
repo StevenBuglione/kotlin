@@ -3903,6 +3903,21 @@ bool TryAddHeapRef(const ObjHeader* object) {
   return tryAddHeapRef(object);
 }
 
+#if defined(KONAN_ARC_MEMORY_MANAGER) && KONAN_ARC_MEMORY_MANAGER
+// The final-module reference-update expansion requires UPDATE_REF_EVENT to be
+// unobservable. This marker is deliberately absent from traced/statistics
+// runtimes, making the compiler transform fail closed if either facility is
+// enabled in a future ARC runtime build.
+#if !TRACE_MEMORY && !COLLECT_STATISTIC && !KONAN_ARC_DIAGNOSTICS
+// This versioned value authenticates the uninstrumented runtime flavor and the
+// exact original barriers delegated to by compiler-generated self guards.
+RUNTIME_NOTHROW uint32_t ArcReferenceUpdateExpansionContractV1() {
+  return 0x4B415201u;
+}
+#endif
+
+#endif
+
 RUNTIME_NOTHROW void ReleaseHeapRefStrict(const ObjHeader* object) {
   releaseHeapRef<true>(const_cast<ObjHeader*>(object));
 }

@@ -1,0 +1,86 @@
+{
+  "schemaVersion": 1,
+  "wave": "23-self-assignment-guard",
+  "status": "accepted",
+  "candidate": {
+    "snapshot": "b2baa87b71ac307579e334a2fea8cd4a96531bb7",
+    "parent": "52d223b393afb0a7c91ddd6e0aeb5d8a42e91f78",
+    "tree": "cc06a01b57f3cab9a382b45ac116cf920ec60e9d",
+    "runtimeTree": "5e717aea271aa9c74f60c35cd92dc7cf67388d53",
+    "arcRuntimeSha256": "ef29454b2a70e70ad6feb47fed8f272b0248a679caa55cb4f189db8d9dc4d376",
+    "compileHost": "olfa@10.10.10.8"
+  },
+  "oracle": {
+    "commit": "214fd78c135af95fedc6c029011c41502dab7e21",
+    "runtimeTree": "d6cc567c18e7efa890dbbc2d61f2c0e3611353fd",
+    "arcRuntimeSha256": "6c7aefc6cbfa20b248cbc6c8d095f622850ffa1e764343a8759742e488085780",
+    "description": "clean Wave 22 detached worktree"
+  },
+  "execution": {
+    "host": "posidon",
+    "address": "olfa@10.10.10.12",
+    "cpu": 0,
+    "samplesPerModel": 25,
+    "models": ["candidate", "wave22", "strict"],
+    "pairing": "three-position Latin rotation",
+    "outputVerifiedEqual": true
+  },
+  "scenarios": {
+    "coroutines": {
+      "medianMs": {"candidate": 161.462905, "wave22": 161.385290, "strict": 148.205299},
+      "candidateVsWave22ThroughputPercent": 99.95193013528402,
+      "candidateVsStrictThroughputPercent": 91.7890700653503,
+      "medianPairedCandidateVsWave22Percent": 100.14346421069244
+    },
+    "fields": {
+      "medianMs": {"candidate": 157.662011, "wave22": 156.085222, "strict": 149.308970},
+      "candidateVsWave22ThroughputPercent": 98.99989287844362,
+      "candidateVsStrictThroughputPercent": 94.70193171644881,
+      "medianPairedCandidateVsWave22Percent": 98.97781431475185
+    },
+    "call-arguments": {
+      "medianMs": {"candidate": 101.942666, "wave22": 122.862416, "strict": 133.487181},
+      "candidateVsWave22ThroughputPercent": 120.52109369005515,
+      "candidateVsStrictThroughputPercent": 130.9433883159383,
+      "medianPairedCandidateVsWave22Percent": 121.25046035612463
+    },
+    "direct-non-final-rc": {
+      "medianMs": {"candidate": 230.251524, "wave22": 238.467101, "strict": 149.131849},
+      "candidateVsWave22ThroughputPercent": 103.5680880010158,
+      "candidateVsStrictThroughputPercent": 64.76910398213043,
+      "medianPairedCandidateVsWave22Percent": 103.40476176514579
+    }
+  },
+  "binaries": {
+    "standard": {
+      "candidate": {"bytes": 514408, "sha256": "985f46b11bdf42da3ac6ab38d3e46a259ee82f7eca35c79d1c36191b1776cae1"},
+      "wave22": {"bytes": 513552, "sha256": "dfe5db69be4f15ca1a4c5ea8539ec3835e6c9ff9ab5342e88812a10ef6342f72"},
+      "strict": {"bytes": 511536, "sha256": "d5e024c3d129cd8071d556d48264393f10f41de7d7dccc690bdb76bca628b15c"}
+    },
+    "directRc": {
+      "candidate": {"bytes": 375264, "sha256": "0e095bc561f723ce115e0567239bf10244d6a8212dbcd8baf53454f00f878792"},
+      "wave22": {"bytes": 374728, "sha256": "909fd7fcc6b40adf7a1203b358b422546fc45044f8872691e8dc036434133b8c"},
+      "strict": {"bytes": 382288, "sha256": "be322a09a4cd0398ea00fe6416b5db3c420ee267966e859b14fad17f2c121524"}
+    }
+  },
+  "verification": {
+    "cppStructuralTests": {"passed": 3, "failed": 0},
+    "fileChecks": ["EXPAND", "FINAL", "DEBUG", "ASSERTS", "STRICT", "DIAGNOSTICS"],
+    "optimizedSmoke": "ARC_SMOKE_OK model=ARC frames=2080 atomics=ok",
+    "optimizedStress": "ARC_STRESS_OK model=ARC allocations=5000000 checksum=12499997500000 strongCycle=retained frames=8256",
+    "asan": "PASS",
+    "ubsan": "PASS",
+    "strictBcSha256": "ee435386dad30b49234b13bfe660ee9289f09d6d85b6183bf4da1367c2d1d979",
+    "strictUbsanBcSha256": "bd65a383860388b9f6c55629f7508db78588a0e6e84a8e8a861fe21258c0bcc9",
+    "strictExecutableSha256": "06d2b74960d101385e4a8f539d50c9138ebdbad2c5e1ac3f2ebdbfd4f8c981b8",
+    "strictExecutableByteIdenticalToOracle": true,
+    "strictRuntimeByteIdenticalToWave22": true,
+    "diagnosticRuntimeContractMarkerAbsent": true
+  },
+  "rejectedPrototypes": {
+    "splitRetainReleaseDirectVsWave22Percent": 76.777,
+    "combinedReplacementLeafDirectVsWave21PercentOnAmd": 91.433,
+    "combinedReplacementLeafExactWave22Run": false,
+    "reason": "changed-value paths must preserve the exact original runtime barrier on Intel"
+  }
+}

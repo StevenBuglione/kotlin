@@ -47,6 +47,7 @@ endif ()
 
 add_library(libllvmext
         ${SRC_DIR}/main/cpp/ArcFrameElision.cpp
+        ${SRC_DIR}/main/cpp/ArcReferenceUpdateExpansion.cpp
         ${SRC_DIR}/main/cpp/ArcReturnUpdateCoalescing.cpp
         ${SRC_DIR}/main/cpp/ArcSelectiveInlining.cpp
         ${SRC_DIR}/main/cpp/CoverageMappingC.cpp
@@ -57,6 +58,8 @@ if (KONAN_LLVMEXT_BUILD_TESTS)
     enable_testing()
     add_executable(ArcReturnUpdateCoalescingTest
             ${SRC_DIR}/test/cpp/ArcReturnUpdateCoalescingTest.cpp)
+    add_executable(ArcReferenceUpdateExpansionTest
+            ${SRC_DIR}/test/cpp/ArcReferenceUpdateExpansionTest.cpp)
     add_executable(ArcSelectiveInliningTest
             ${SRC_DIR}/test/cpp/ArcSelectiveInliningTest.cpp)
     llvm_map_components_to_libnames(LLVM_TEST_LIBS core asmparser support transformutils ipo analysis)
@@ -73,7 +76,9 @@ if (KONAN_LLVMEXT_BUILD_TESTS)
         set_property(TARGET LLVMSupport PROPERTY INTERFACE_LINK_LIBRARIES ${LLVM_SUPPORT_LIBS})
     endif ()
     target_link_libraries(ArcReturnUpdateCoalescingTest PRIVATE libllvmext ${LLVM_TEST_LIBS})
+    target_link_libraries(ArcReferenceUpdateExpansionTest PRIVATE libllvmext ${LLVM_TEST_LIBS})
     target_link_libraries(ArcSelectiveInliningTest PRIVATE libllvmext ${LLVM_TEST_LIBS})
     add_test(NAME ArcReturnUpdateCoalescingTest COMMAND ArcReturnUpdateCoalescingTest)
+    add_test(NAME ArcReferenceUpdateExpansionTest COMMAND ArcReferenceUpdateExpansionTest)
     add_test(NAME ArcSelectiveInliningTest COMMAND ArcSelectiveInliningTest)
 endif ()
