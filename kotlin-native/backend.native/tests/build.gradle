@@ -3408,6 +3408,12 @@ standaloneTest("arc_coroutine_spill_move") {
     source = "codegen/arc/coroutineSpillMove.kt"
 }
 
+standaloneTest("arc_base_continuation_param_borrow") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    flags = ["-opt"]
+    source = "codegen/arc/baseContinuationParamBorrow.kt"
+}
+
 standaloneTest("arc_coroutine_locked_read_spill") {
     enabled = project.target.name == "linux_x64" && isArcMM
     flags = ["-opt"]
@@ -7064,6 +7070,29 @@ fileCheckTest("filecheck_arc_borrowed_mutable_call_argument") {
     phaseToCheck = "Codegen"
 }
 
+fileCheckTest("filecheck_arc_base_continuation_param_borrow") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('codegen/arc/baseContinuationParamBorrow.kt')
+    extraOpts = ["-opt"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_base_continuation_param_borrow_debug") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('codegen/arc/baseContinuationParamBorrow.kt')
+    checkPrefix = "DEBUG"
+    extraOpts = ["-opt", "-g"]
+    phaseToCheck = "Codegen"
+}
+
+fileCheckTest("filecheck_arc_base_continuation_param_borrow_strict") {
+    enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
+    annotatedSource = project.file('codegen/arc/baseContinuationParamBorrow.kt')
+    checkPrefix = "STRICT"
+    extraOpts = ["-opt", "-memory-model", "strict"]
+    phaseToCheck = "Codegen"
+}
+
 fileCheckTest("filecheck_arc_borrowed_array_element") {
     enabled = project.target.name == "linux_x64" && isArcMM && cacheTesting == null
     annotatedSource = project.file('filecheck/arc_borrowed_array_element.kt')
@@ -7488,3 +7517,4 @@ project.afterEvaluate {
         outputs.upToDateWhen { false }
     }
 }
+
