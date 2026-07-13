@@ -1,0 +1,9 @@
+model,sample,update_stack_ref_relaxed,update_heap_ref_relaxed,update_return_ref_relaxed,add_heap_ref
+parent,0,0,3,6,9
+candidate,0,0,3,6,9
+parent,1,1,26,22,51
+candidate,1,1,26,22,51
+parent,2,2,37,32,75
+candidate,2,2,37,32,75
+parent,steady_state_1_to_2,1,11,10,24
+candidate,steady_state_1_to_2,1,11,10,24

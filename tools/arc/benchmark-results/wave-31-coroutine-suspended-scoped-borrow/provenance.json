@@ -1,0 +1,84 @@
+{
+  "schemaVersion": 1,
+  "wave": "wave-31-coroutine-suspended-scoped-borrow",
+  "recordedAtUtc": "2026-07-13T11:26:52.0802404Z",
+  "source": {
+    "branch": "codex/kotlin-native-arc-1.9.10",
+    "candidateCommit": "03a2cc99d8e7c18da99da4904efc26d48dc34526",
+    "candidateTree": "50718a6d912e26c9aba7f6ed5834ca290de9893d",
+    "candidateSubject": "[K/N] Borrow coroutine suspended markers in identity checks",
+    "immediateParentCommit": "4a7efb59c3695e5f8892bcca3c90b1982a507c9d",
+    "immediateParentTree": "217ad199223a8c819b32de6d7d9021968d535283",
+    "emittedSemanticParentCommit": "549bf6efe1fce63db8eee0d1364ada8ed3169ccd",
+    "emittedSemanticParentTree": "188fe117d6d0eeda63bf88e9a1f17bd097009f1d",
+    "parentEquivalence": "The diff from 549bf6efe through 4a7efb59c contains benchmark evidence only and no compiler, runtime, or stdlib files."
+  },
+  "host": {
+    "ssh": "olfa@10.10.10.8",
+    "hostname": "venus",
+    "kernel": "Linux 6.18.6-061806-generic x86_64",
+    "cpu": "AMD RYZEN AI MAX+ 395 w/ Radeon 8060S",
+    "logicalCpus": 32
+  },
+  "remoteWorktree": "/home/olfa/codex-kotlin-arc-suspended-borrow",
+  "candidateCompilerEmbeddableJarSha256": "b6cf5ce8a662e3b726bb27a3a4985ba8bbe9fbca4694d86534dec93738f21219",
+  "inputs": {
+    "profileSource": "/tmp/coroutine-profile.kt",
+    "profileSourceSha256": "8ed04c22f7bca2a0965b1b6ee0b09fa6cc5a07f813886d9f96a0d9aed78b3fa2",
+    "gdbScript": "/tmp/count-coroutine.gdb",
+    "gdbScriptSha256": "165387ecab90b2f16eb35e839b9f71858a0a0f4eecb69e20dec6b9b29c528288",
+    "compileCommand": "./kotlin-native/dist/bin/konanc /tmp/coroutine-profile.kt -o /tmp/coroutine-suspended-borrow-profile -opt -memory-model arc",
+    "counterCommand": "gdb -q -batch -x /tmp/count-coroutine.gdb --args <binary> <0|1|2> int",
+    "linkedCountCommand": "objdump -d -C <binary> | grep -c 'call.*<symbol>'"
+  },
+  "binaries": {
+    "parent": {
+      "path": "/tmp/coroutine-empty-context-profile.kexe",
+      "sha256": "ac49be932c70077c8aea623ead350b0e5b146f9d7b3b05d2c3f63393478b128f",
+      "bytes": 447664
+    },
+    "candidate": {
+      "path": "/tmp/coroutine-suspended-borrow-profile.kexe",
+      "sha256": "aacab5ef14cd4b716d06061c92af6dbbc219adc2857d71996ccd4f5a6a08f1ff",
+      "bytes": 447672
+    }
+  },
+  "candidateRelevantFilesSha256": {
+    "kotlin-native/backend.native/compiler/ir/backend.native/src/org/jetbrains/kotlin/backend/konan/arc/ArcCoroutineSuspendedScopedBorrow.kt": "c4167e69810916c7d85905c4df348fa5d350ee23fd15a6acd070439d48709b61",
+    "kotlin-native/backend.native/compiler/ir/backend.native/src/org/jetbrains/kotlin/backend/konan/arc/ArcCoroutineSuspendedScopedBorrowIRSelector.kt": "5d85499fbd3fc4a5f96b0a9e199fd5059688205ce984d93e12404109007323fe",
+    "kotlin-native/backend.native/compiler/ir/backend.native/src/org/jetbrains/kotlin/backend/konan/arc/ArcOwnershipPlanning.kt": "40d7db36d9d31e301b9f1c35af078970b2a1d54eeb6ffe35b73e0ede3dc079cf",
+    "kotlin-native/backend.native/compiler/ir/backend.native/src/org/jetbrains/kotlin/backend/konan/llvm/IrToBitcode.kt": "4eb0c44cc6351f7b3c6e386c4a4398d517f268c2ba8278c68fbf2ecd6b0142ef",
+    "kotlin-native/backend.native/tests/codegen/arc/coroutineSuspendedScopedBorrow.kt": "4f3c23d3d88eea94db2329ad3918eade300b5856b5c41afcf07420dfcdfbb6c3"
+  },
+  "dynamicCounters": {
+    "parent": {
+      "0": { "stack": 0, "heap": 3, "return": 6, "addHeapRef": 9 },
+      "1": { "stack": 1, "heap": 26, "return": 22, "addHeapRef": 51 },
+      "2": { "stack": 2, "heap": 37, "return": 32, "addHeapRef": 75 }
+    },
+    "candidate": {
+      "0": { "stack": 0, "heap": 3, "return": 6, "addHeapRef": 9 },
+      "1": { "stack": 1, "heap": 26, "return": 22, "addHeapRef": 51 },
+      "2": { "stack": 2, "heap": 37, "return": 32, "addHeapRef": 75 }
+    }
+  },
+  "finalLinkedCallsites": {
+    "parent": { "UpdateReturnRefRelaxed": 276, "addHeapRef": 8 },
+    "candidate": { "UpdateReturnRefRelaxed": 276, "addHeapRef": 8 }
+  },
+  "semanticGates": {
+    "selectedScopedBorrowSites": 2,
+    "focusedUnits": "PASS",
+    "optimizedFileCheck": "PASS",
+    "ownedResultFileCheck": "PASS",
+    "publicOwnedAbiFileCheck": "PASS",
+    "debugFallback": "PASS",
+    "noOptFallback": "PASS",
+    "diagnosticsFallback": "PASS",
+    "asanFallback": "PASS",
+    "ubsanFallback": "PASS",
+    "strictFallback": "PASS",
+    "runtimeChecksum42": "PASS"
+  },
+  "interpretation": "The scoped borrow is proven and emitted at Codegen, but final LLVM already removes/canonicalizes the equivalent parent ownership traffic. This wave is reusable ownership infrastructure and has no attributable performance delta."
+}

@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "wave": "wave-31-coroutine-suspended-scoped-borrow",
+  "candidateCommit": "03a2cc99d8e7c18da99da4904efc26d48dc34526",
+  "immediateParentCommit": "4a7efb59c3695e5f8892bcca3c90b1982a507c9d",
+  "emittedSemanticParentCommit": "549bf6efe1fce63db8eee0d1364ada8ed3169ccd",
+  "selectedScopedBorrowSites": 2,
+  "semanticGates": "PASS",
+  "runtimeChecksum": 42,
+  "dynamicSteadyStatePerCoroutine": {
+    "parent": { "updateStackRefRelaxed": 1, "updateHeapRefRelaxed": 11, "updateReturnRefRelaxed": 10, "addHeapRef": 24 },
+    "candidate": { "updateStackRefRelaxed": 1, "updateHeapRefRelaxed": 11, "updateReturnRefRelaxed": 10, "addHeapRef": 24 },
+    "delta": { "updateStackRefRelaxed": 0, "updateHeapRefRelaxed": 0, "updateReturnRefRelaxed": 0, "addHeapRef": 0 }
+  },
+  "finalLinkedCallsites": {
+    "parent": { "updateReturnRefRelaxed": 276, "addHeapRef": 8 },
+    "candidate": { "updateReturnRefRelaxed": 276, "addHeapRef": 8 },
+    "delta": { "updateReturnRefRelaxed": 0, "addHeapRef": 0 }
+  },
+  "binaryBytes": { "parent": 447664, "candidate": 447672, "delta": 8 },
+  "verdict": {
+    "semanticSlice": "PASS",
+    "performanceDirection": "ZERO_DELTA",
+    "timingAB": "NOT_RUN",
+    "reason": "Final LLVM already canonicalized the parent path; ownership traffic and linked ARC callsites are identical, so timing would measure noise."
+  }
+}
