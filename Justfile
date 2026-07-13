@@ -166,6 +166,14 @@ ci2-arc-bench-shard shard count scenarios:
     {{python}} tools/arc/arc.py --machine ci2-cstring run arc-bench-baseline --shard-id "{{shard}}" --shard-count {{count}} --scenarios "{{scenarios}}"
     status=0; {{python}} tools/arc/arc.py --machine ci2-cstring run arc-bench --shard-id "{{shard}}" --shard-count {{count}} --scenarios "{{scenarios}}" || status=$?; exit "$status"
 
+# Create one immutable snapshot, run disjoint same-host A/B shards concurrently on both
+# Linux benchmark hosts, verify exact runtime provenance, and merge compatible manifests.
+parallel-arc-bench wave primary_scenarios secondary_scenarios:
+    {{python}} tools/arc/benchmark_parallel.py {{wave}} --primary-scenarios "{{primary_scenarios}}" --secondary-scenarios "{{secondary_scenarios}}"
+
+parallel-arc-bench-dry-run wave primary_scenarios secondary_scenarios:
+    {{python}} tools/arc/benchmark_parallel.py {{wave}} --primary-scenarios "{{primary_scenarios}}" --secondary-scenarios "{{secondary_scenarios}}" --dry-run
+
 # Dedicated parallel lanes. These never reset the compiler or benchmark worktrees.
 ci2-runtime-init:
     {{python}} tools/arc/arc.py --machine ci2-runtime remote-init

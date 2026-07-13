@@ -424,17 +424,40 @@ class ArcProfileTest(unittest.TestCase):
                 source.mkdir()
                 sources.append(source)
                 metadata = {
-                    "schemaVersion": 1,
+                    "schemaVersion": 2,
                     "shardId": shard_id,
                     "shardCount": 2,
                     "scenarios": ["strings"],
+                    "candidateCommit": "candidate-commit",
                     "candidateTree": "candidate-tree",
+                    "candidateRuntimeTree": "runtime-tree",
+                    "candidateRuntimePatchBase": "runtime-base",
+                    "candidateRuntimePatchSha256": "a" * 64,
                     "baselineTree": "baseline-tree",
                     "baselineCommit": "baseline",
+                    "hostname": "test-host",
                 }
                 (source / "shard.json").write_text(__import__("json").dumps(metadata))
-                (source / "inputs.json").write_text("{}")
-                for name in benchmark_shards.REQUIRED - {"shard.json", "inputs.json"}:
+                inputs = {
+                    "candidateCommit": "candidate-commit",
+                    "candidateTree": "candidate-tree",
+                    "candidateRuntimeTree": "runtime-tree",
+                    "candidateRuntimePatchBase": "runtime-base",
+                    "candidateRuntimePatchSha256": "a" * 64,
+                    "baselineCommit": "baseline",
+                }
+                (source / "inputs.json").write_text(__import__("json").dumps(inputs))
+                (source / "hardware.json").write_text('{"hostname":"test-host"}')
+                (source / "candidate-provenance.json").write_text(
+                    '{"role":"candidate","commit":"candidate-commit","tree":"candidate-tree"}'
+                )
+                (source / "baseline-provenance.json").write_text(
+                    '{"role":"baseline-strict","commit":"baseline","tree":"baseline-tree"}'
+                )
+                for name in benchmark_shards.REQUIRED - {
+                    "shard.json", "inputs.json", "hardware.json",
+                    "candidate-provenance.json", "baseline-provenance.json",
+                }:
                     (source / name).write_text("{}")
                 (source / "raw.tsv").write_text(
                     "model\tscenario\trepetition\telapsed_seconds\tthroughput_ops_per_second\tmax_rss_kib\toperations\tlogical_allocations\n"

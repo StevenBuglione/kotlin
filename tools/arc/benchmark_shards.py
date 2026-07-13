@@ -18,7 +18,8 @@ REQUIRED = {
     "raw.tsv", "compile-raw.tsv", "static.tsv", "summary.tsv", "summary.json", "shard.json",
 }
 COMPATIBLE_INPUT_KEYS = (
-    "baselineCommit", "baselineTag", "baselineMemoryModel", "candidateMemoryModel",
+    "candidateCommit", "candidateTree", "candidateRuntimeTree", "candidateRuntimePatchBase",
+    "candidateRuntimePatchSha256", "baselineCommit", "baselineTag", "baselineMemoryModel", "candidateMemoryModel",
     "commonCompilerFlags", "fixture", "fixtureSha256", "interopDefinition",
     "interopDefinitionSha256", "interopHeader", "interopHeaderSha256", "repetitions",
     "warmups", "compileRepetitions", "quickDiagnostic", "logicalAllocationDefinition",
@@ -51,6 +52,42 @@ def write_tsv(path: Path, fieldnames: list[str], rows: list[dict[str, str]]) -> 
         writer.writerows(rows)
 
 
+def validate_shard_identity(metadata: dict[str, object], source: Path) -> None:
+    required_metadata = (
+        "candidateCommit", "candidateTree", "candidateRuntimeTree",
+        "candidateRuntimePatchBase", "candidateRuntimePatchSha256",
+        "baselineCommit", "baselineTree", "hostname",
+    )
+    missing = [key for key in required_metadata if not isinstance(metadata.get(key), str) or not metadata[key]]
+    if missing:
+        raise SystemExit(f"invalid shard identity in {source}: missing {missing}")
+    if len(str(metadata["candidateRuntimePatchSha256"])) != 64:
+        raise SystemExit(f"invalid runtime patch digest in {source}")
+
+    candidate = read_json(source / "candidate-provenance.json")
+    candidate_identity = (candidate.get("role"), candidate.get("commit"), candidate.get("tree"))
+    expected_candidate = ("candidate", metadata["candidateCommit"], metadata["candidateTree"])
+    if candidate_identity != expected_candidate:
+        raise SystemExit(f"candidate provenance does not match shard identity in {source}")
+
+    baseline = read_json(source / "baseline-provenance.json")
+    baseline_identity = (baseline.get("role"), baseline.get("commit"), baseline.get("tree"))
+    expected_baseline = ("baseline-strict", metadata["baselineCommit"], metadata["baselineTree"])
+    if baseline_identity != expected_baseline:
+        raise SystemExit(f"baseline provenance does not match shard identity in {source}")
+
+    inputs = read_json(source / "inputs.json")
+    for key in (
+        "candidateCommit", "candidateTree", "candidateRuntimeTree",
+        "candidateRuntimePatchBase", "candidateRuntimePatchSha256", "baselineCommit",
+    ):
+        if inputs.get(key) != metadata[key]:
+            raise SystemExit(f"input {key!r} does not match shard identity in {source}")
+    hardware = read_json(source / "hardware.json")
+    if hardware.get("hostname") != metadata["hostname"]:
+        raise SystemExit(f"hardware hostname does not match shard identity in {source}")
+
+
 def merge(destination: Path, sources: list[Path]) -> int:
     if destination.exists():
         raise SystemExit(f"merge destination already exists: {destination}")
@@ -63,8 +100,9 @@ def merge(destination: Path, sources: list[Path]) -> int:
         if missing:
             raise SystemExit(f"invalid shard {source}: missing {sorted(missing)}")
         metadata = read_json(source / "shard.json")
-        if metadata.get("schemaVersion") != 1:
+        if metadata.get("schemaVersion") != 2:
             raise SystemExit(f"unsupported shard schema in {source}")
+        validate_shard_identity(metadata, source)
         shards.append((metadata, source))
     shards.sort(key=lambda item: str(item[0].get("shardId", "")))
 
@@ -75,11 +113,19 @@ def merge(destination: Path, sources: list[Path]) -> int:
     if counts != {len(shards)}:
         raise SystemExit(f"shard count metadata {sorted(counts)} does not match {len(shards)} inputs")
 
+    candidate_commits = {str(metadata.get("candidateCommit", "")) for metadata, _ in shards}
     candidate_trees = {str(metadata.get("candidateTree", "")) for metadata, _ in shards}
+    runtime_trees = {str(metadata.get("candidateRuntimeTree", "")) for metadata, _ in shards}
+    runtime_patch_bases = {str(metadata.get("candidateRuntimePatchBase", "")) for metadata, _ in shards}
+    runtime_patch_hashes = {str(metadata.get("candidateRuntimePatchSha256", "")) for metadata, _ in shards}
     baseline_trees = {str(metadata.get("baselineTree", "")) for metadata, _ in shards}
     baseline_commits = {str(metadata.get("baselineCommit", "")) for metadata, _ in shards}
-    if len(candidate_trees) != 1 or "" in candidate_trees:
-        raise SystemExit(f"candidate trees differ across shards: {sorted(candidate_trees)}")
+    if len(candidate_commits) != 1 or "" in candidate_commits or len(candidate_trees) != 1 or "" in candidate_trees:
+        raise SystemExit("candidate commit/tree identity differs across shards")
+    if (len(runtime_trees) != 1 or "" in runtime_trees or
+            len(runtime_patch_bases) != 1 or "" in runtime_patch_bases or
+            len(runtime_patch_hashes) != 1 or "" in runtime_patch_hashes):
+        raise SystemExit("candidate runtime tree/patch identity differs across shards")
     if len(baseline_trees) != 1 or "" in baseline_trees or len(baseline_commits) != 1:
         raise SystemExit("baseline identity differs across shards")
 
@@ -121,6 +167,8 @@ def merge(destination: Path, sources: list[Path]) -> int:
     canonical_source = shards[0][1]
     shutil.copy2(canonical_source / "compile-raw.tsv", destination / "compile-raw.tsv")
     shutil.copy2(canonical_source / "static.tsv", destination / "static.tsv")
+    shutil.copy2(canonical_source / "candidate-provenance.json", destination / "candidate-provenance.json")
+    shutil.copy2(canonical_source / "baseline-provenance.json", destination / "baseline-provenance.json")
 
     merged_inputs = dict(canonical_inputs)
     merged_inputs["scenarios"] = sorted(scenario_owner)
@@ -138,11 +186,15 @@ def merge(destination: Path, sources: list[Path]) -> int:
         json.dumps(hardware, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     shard_payload = {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "shardId": "merged",
         "shardCount": len(shards),
         "scenarios": sorted(scenario_owner),
+        "candidateCommit": next(iter(candidate_commits)),
         "candidateTree": next(iter(candidate_trees)),
+        "candidateRuntimeTree": next(iter(runtime_trees)),
+        "candidateRuntimePatchBase": next(iter(runtime_patch_bases)),
+        "candidateRuntimePatchSha256": next(iter(runtime_patch_hashes)),
         "baselineCommit": next(iter(baseline_commits)),
         "baselineTree": next(iter(baseline_trees)),
         "pairing": "same-host-interleaved-baseline-candidate-per-shard",

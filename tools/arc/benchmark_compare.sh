@@ -70,8 +70,30 @@ baseline_compiler="$baseline_dist/bin/konanc"
 
 candidate_head=$(git -C "$root" rev-parse HEAD)
 candidate_tree=$(git -C "$root" rev-parse HEAD^{tree})
+candidate_runtime_tree=$(git -C "$root" rev-parse HEAD:kotlin-native/runtime)
+candidate_runtime_patch_base=$(git -C "$root" rev-parse HEAD^)
+candidate_runtime_patch_sha256=$(
+    git -C "$root" diff --binary --no-ext-diff "$candidate_runtime_patch_base" HEAD -- kotlin-native/runtime |
+        sha256sum | awk '{print $1}'
+)
 baseline_head=$(git -C "$baseline_source" rev-parse HEAD)
 baseline_tree=$(git -C "$baseline_source" rev-parse HEAD^{tree})
+[[ -z "${ARC_BENCH_EXPECTED_COMMIT:-}" || "$candidate_head" == "${ARC_BENCH_EXPECTED_COMMIT:-}" ]] || {
+    echo "candidate commit differs from parallel benchmark snapshot: $candidate_head != ${ARC_BENCH_EXPECTED_COMMIT:-}" >&2
+    exit 1
+}
+[[ -z "${ARC_BENCH_EXPECTED_TREE:-}" || "$candidate_tree" == "${ARC_BENCH_EXPECTED_TREE:-}" ]] || {
+    echo "candidate tree differs from parallel benchmark snapshot: $candidate_tree != ${ARC_BENCH_EXPECTED_TREE:-}" >&2
+    exit 1
+}
+[[ -z "${ARC_BENCH_EXPECTED_RUNTIME_TREE:-}" || "$candidate_runtime_tree" == "${ARC_BENCH_EXPECTED_RUNTIME_TREE:-}" ]] || {
+    echo "candidate runtime tree differs from parallel benchmark snapshot" >&2
+    exit 1
+}
+[[ -z "${ARC_BENCH_EXPECTED_RUNTIME_PATCH_SHA256:-}" || "$candidate_runtime_patch_sha256" == "${ARC_BENCH_EXPECTED_RUNTIME_PATCH_SHA256:-}" ]] || {
+    echo "candidate runtime patch differs from parallel benchmark snapshot" >&2
+    exit 1
+}
 [[ "$baseline_head" == "$expected_baseline" ]] || {
     echo "baseline HEAD is $baseline_head; exact v1.9.10 $expected_baseline is required" >&2
     exit 1
@@ -280,7 +302,8 @@ done
 
 python3 - "$artifacts/inputs.json" "$artifacts/hardware.json" "$source" "$interop_def" \
     "$interop_include/benchmark_cinterop.h" "$candidate_head" "$baseline_head" \
-    "$repetitions" "$warmups" "$compile_repetitions" "${run_prefix[*]}" "${common_flags[*]}" "${scenarios[*]}" <<'PY'
+    "$repetitions" "$warmups" "$compile_repetitions" "${run_prefix[*]}" "${common_flags[*]}" "${scenarios[*]}" \
+    "$candidate_tree" "$candidate_runtime_tree" "$candidate_runtime_patch_base" "$candidate_runtime_patch_sha256" <<'PY'
 import hashlib
 import json
 import os
@@ -288,12 +311,17 @@ from pathlib import Path
 import platform
 import sys
 
-inputs_path, hardware_path, source_path, interop_def_path, interop_header_path, candidate, baseline, repetitions, warmups, compile_repetitions, affinity, flags, scenarios = sys.argv[1:]
+inputs_path, hardware_path, source_path, interop_def_path, interop_header_path, candidate, baseline, repetitions, warmups, compile_repetitions, affinity, flags, scenarios, candidate_tree, runtime_tree, runtime_patch_base, runtime_patch_sha256 = sys.argv[1:]
 source = Path(source_path)
 interop_def = Path(interop_def_path)
 interop_header = Path(interop_header_path)
 inputs = {
     "candidateCommit": candidate,
+    "candidateTree": candidate_tree,
+    "candidateRuntimeTree": runtime_tree,
+    "candidateRuntimePatchBase": runtime_patch_base,
+    "candidateRuntimePatchSha256": runtime_patch_sha256,
+    "machineProfile": os.environ.get("ARC_BENCH_MACHINE_PROFILE", "unspecified"),
     "baselineCommit": baseline,
     "baselineTag": "v1.9.10",
     "candidateMemoryModel": "arc",
@@ -359,23 +387,28 @@ Path(hardware_path).write_text(json.dumps(hardware, indent=2, sort_keys=True) + 
 PY
 
 python3 - "$artifacts/shard.json" "$shard_id" "$shard_count" "$candidate_head" "$candidate_tree" \
-    "$baseline_head" "$baseline_tree" "${scenarios[*]}" <<'PY'
+    "$baseline_head" "$baseline_tree" "${scenarios[*]}" "$candidate_runtime_tree" \
+    "$candidate_runtime_patch_base" "$candidate_runtime_patch_sha256" "${ARC_BENCH_MACHINE_PROFILE:-unspecified}" <<'PY'
 import json
 from pathlib import Path
 import platform
 import sys
 
-path, shard_id, shard_count, candidate_commit, candidate_tree, baseline_commit, baseline_tree, scenarios = sys.argv[1:]
+path, shard_id, shard_count, candidate_commit, candidate_tree, baseline_commit, baseline_tree, scenarios, runtime_tree, runtime_patch_base, runtime_patch_sha256, machine_profile = sys.argv[1:]
 payload = {
-    "schemaVersion": 1,
+    "schemaVersion": 2,
     "shardId": shard_id,
     "shardCount": int(shard_count),
     "scenarios": scenarios.split(),
     "candidateCommit": candidate_commit,
     "candidateTree": candidate_tree,
+    "candidateRuntimeTree": runtime_tree,
+    "candidateRuntimePatchBase": runtime_patch_base,
+    "candidateRuntimePatchSha256": runtime_patch_sha256,
     "baselineCommit": baseline_commit,
     "baselineTree": baseline_tree,
     "hostname": platform.node(),
+    "machineProfile": machine_profile,
     "pairing": "same-host-interleaved-baseline-candidate",
 }
 Path(path).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
