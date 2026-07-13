@@ -227,7 +227,7 @@ class ArcRCIdentityTest {
         val result = ArcRCIdentityAnalysis.analyze(ArcRCIdentityInput(cfg, emptyList()))
 
         assertEquals(
-            setOf(ArcRCIdentityIssueKind.UnresolvedCycle, ArcRCIdentityIssueKind.MissingDefinition),
+            setOf(ArcRCIdentityIssueKind.InvalidSSADominance, ArcRCIdentityIssueKind.MissingDefinition),
             result.issues.mapTo(mutableSetOf()) { it.kind },
         )
         assertNull(result.identity(first))
@@ -706,6 +706,296 @@ class ArcRCIdentityTest {
 
         assertEquals(listOf(ArcRCBarrierKind.Consume), result.barriers.map { it.kind })
         assertTrue(ArcRCLifetimeFrontier.BeforeBarrier(result.barriers.single()) in result.liveness.lifetimeFrontier(root))
+    }
+
+    @Test
+    fun loopCarriedForwardPhiClosesToItsDominatingRCIdentityRoot() {
+        val root = ArcSSAValue("loop.root")
+        val phi = ArcSSAValue("loop.phi")
+        val backedge = ArcSSAValue("loop.backedge")
+        val header = ArcBlockId("loop.header")
+        val latch = ArcBlockId("loop.latch")
+        val cfg = ArcOwnershipSSAInput(
+            entry,
+            linkedMapOf(
+                entry to ArcSSABlock(entry, listOf(ArcSSAOperation.Introduce(root, ArcOwnership.Owned))),
+                header to ArcSSABlock(header, listOf(
+                    ArcSSAOperation.Join(phi, linkedMapOf(entry to root, latch to backedge)),
+                    ArcSSAOperation.Use(phi, ArcSSAUseKind.Borrow),
+                )),
+                latch to ArcSSABlock(latch, listOf(ArcSSAOperation.Forward(phi, backedge))),
+            ),
+            setOf(ArcSSAEdge(entry, header), ArcSSAEdge(header, latch), ArcSSAEdge(latch, header)),
+        )
+
+        val result = ArcRCIdentityAnalysis.analyze(ArcRCIdentityInput(cfg, emptyList()))
+
+        assertTrue(result.issues.toString(), result.issues.isEmpty())
+        assertEquals(root, result.identity(phi)?.singleRoot)
+        assertEquals(root, result.identity(backedge)?.singleRoot)
+        assertFalse(result.emitted)
+        assertNull(result.physicalRCPairsEliminated)
+    }
+
+    @Test
+    fun loopCarriedReborrowPhiConservativelyClosesAnchorDependencies() {
+        val root = ArcSSAValue("reborrow.root")
+        val owner = ArcSSAValue("reborrow.owner")
+        val phi = ArcSSAValue("reborrow.phi")
+        val backedge = ArcSSAValue("reborrow.backedge")
+        val header = ArcBlockId("reborrow.header")
+        val latch = ArcBlockId("reborrow.latch")
+        val cfg = ArcOwnershipSSAInput(
+            entry,
+            linkedMapOf(
+                entry to ArcSSABlock(entry, listOf(
+                    ArcSSAOperation.Introduce(root, ArcOwnership.Owned),
+                    ArcSSAOperation.Introduce(owner, ArcOwnership.Owned),
+                )),
+                header to ArcSSABlock(header, listOf(
+                    ArcSSAOperation.Join(phi, linkedMapOf(entry to root, latch to backedge)),
+                    ArcSSAOperation.Use(phi, ArcSSAUseKind.Borrow),
+                )),
+                latch to ArcSSABlock(latch, listOf(
+                    ArcSSAOperation.Reborrow(phi, backedge, setOf(owner)),
+                )),
+            ),
+            setOf(ArcSSAEdge(entry, header), ArcSSAEdge(header, latch), ArcSSAEdge(latch, header)),
+        )
+
+        val result = ArcRCIdentityAnalysis.analyze(ArcRCIdentityInput(cfg, emptyList()))
+
+        assertTrue(result.issues.toString(), result.issues.isEmpty())
+        assertEquals(root, result.identity(phi)?.singleRoot)
+        assertEquals(setOf(owner), result.identity(phi)?.anchorRoots)
+        assertEquals(setOf(owner), result.identity(backedge)?.anchorRoots)
+    }
+
+    @Test
+    fun rootedIncomingCannotMaskAnUnresolvedIdentityCycle() {
+        val root = ArcSSAValue("masked.root")
+        val phi = ArcSSAValue("masked.phi")
+        val rootless = ArcSSAValue("masked.rootless")
+        val header = ArcBlockId("masked.header")
+        val latch = ArcBlockId("masked.latch")
+        val cfg = ArcOwnershipSSAInput(
+            entry,
+            linkedMapOf(
+                entry to ArcSSABlock(entry, listOf(ArcSSAOperation.Introduce(root, ArcOwnership.Owned))),
+                header to ArcSSABlock(header, listOf(
+                    ArcSSAOperation.Join(phi, linkedMapOf(entry to root, latch to rootless)),
+                )),
+                latch to ArcSSABlock(latch, listOf(ArcSSAOperation.Forward(rootless, rootless))),
+            ),
+            setOf(ArcSSAEdge(entry, header), ArcSSAEdge(header, latch), ArcSSAEdge(latch, header)),
+        )
+
+        val result = ArcRCIdentityAnalysis.analyze(ArcRCIdentityInput(cfg, emptyList()))
+
+        assertTrue(result.issues.any { it.kind === ArcRCIdentityIssueKind.InvalidSSADominance })
+        assertNull(result.identity(rootless))
+        assertNull(result.identity(phi))
+    }
+
+    @Test
+    fun loopPhiRequiresAnExactClosedNormalPredecessorSet() {
+        val root = ArcSSAValue("incomplete.root")
+        val phi = ArcSSAValue("incomplete.phi")
+        val header = ArcBlockId("incomplete.header")
+        val latch = ArcBlockId("incomplete.latch")
+        val cfg = ArcOwnershipSSAInput(
+            entry,
+            linkedMapOf(
+                entry to ArcSSABlock(entry, listOf(ArcSSAOperation.Introduce(root, ArcOwnership.Owned))),
+                header to ArcSSABlock(header, listOf(ArcSSAOperation.Join(phi, mapOf(entry to root)))),
+                latch to ArcSSABlock(latch, emptyList()),
+            ),
+            setOf(ArcSSAEdge(entry, header), ArcSSAEdge(header, latch), ArcSSAEdge(latch, header)),
+        )
+
+        val result = ArcRCIdentityAnalysis.analyze(ArcRCIdentityInput(cfg, emptyList()))
+
+        assertEquals(setOf(ArcRCIdentityIssueKind.IncompleteJoin), result.issues.mapTo(mutableSetOf()) { it.kind })
+        assertNull(result.identity(phi))
+    }
+
+    @Test
+    fun exceptionalPhiPredecessorFailsClosed() {
+        val root = ArcSSAValue("exception.root")
+        val phi = ArcSSAValue("exception.phi")
+        val handler = ArcBlockId("exception.handler")
+        val cfg = ArcOwnershipSSAInput(
+            entry,
+            linkedMapOf(
+                entry to ArcSSABlock(entry, listOf(ArcSSAOperation.Introduce(root, ArcOwnership.Owned))),
+                handler to ArcSSABlock(handler, listOf(ArcSSAOperation.Join(phi, emptyMap()))),
+            ),
+            setOf(ArcSSAEdge(entry, handler, ArcSSAEdgeKind.Exceptional)),
+        )
+
+        val result = ArcRCIdentityAnalysis.analyze(ArcRCIdentityInput(cfg, emptyList()))
+
+        assertEquals(setOf(ArcRCIdentityIssueKind.IncompleteJoin), result.issues.mapTo(mutableSetOf()) { it.kind })
+        assertNull(result.identity(phi))
+    }
+
+    @Test
+    fun joinRejectsAnIncomingRootThatDoesNotDominateItsNamedPredecessor() {
+        val root = ArcSSAValue("sibling.root")
+        val other = ArcSSAValue("sibling.other")
+        val joined = ArcSSAValue("sibling.joined")
+        val cfg = ArcOwnershipSSAInput(
+            entry,
+            linkedMapOf(
+                entry to ArcSSABlock(entry, emptyList()),
+                leftBlock to ArcSSABlock(leftBlock, listOf(ArcSSAOperation.Introduce(root, ArcOwnership.Owned))),
+                rightBlock to ArcSSABlock(rightBlock, listOf(ArcSSAOperation.Introduce(other, ArcOwnership.Owned))),
+                merge to ArcSSABlock(merge, listOf(
+                    ArcSSAOperation.Join(joined, linkedMapOf(leftBlock to root, rightBlock to root)),
+                )),
+            ),
+            setOf(
+                ArcSSAEdge(entry, leftBlock), ArcSSAEdge(entry, rightBlock),
+                ArcSSAEdge(leftBlock, merge), ArcSSAEdge(rightBlock, merge),
+            ),
+        )
+
+        val result = ArcRCIdentityAnalysis.analyze(ArcRCIdentityInput(cfg, emptyList()))
+
+        assertTrue(result.issues.any { it.kind === ArcRCIdentityIssueKind.InvalidSSADominance })
+        assertNull(result.identity(joined))
+    }
+
+    @Test
+    fun phiCannotBeSeededByARootIntroducedAfterThePhi() {
+        val lateRoot = ArcSSAValue("phi.late.root")
+        val joined = ArcSSAValue("phi.late.joined")
+        val header = ArcBlockId("phi.late.header")
+        val cfg = ArcOwnershipSSAInput(
+            entry,
+            linkedMapOf(
+                entry to ArcSSABlock(entry, emptyList()),
+                header to ArcSSABlock(header, listOf(
+                    ArcSSAOperation.Join(joined, mapOf(entry to lateRoot)),
+                    ArcSSAOperation.Introduce(lateRoot, ArcOwnership.Owned),
+                )),
+            ),
+            setOf(ArcSSAEdge(entry, header)),
+        )
+
+        val result = ArcRCIdentityAnalysis.analyze(ArcRCIdentityInput(cfg, emptyList()))
+
+        assertTrue(result.issues.any { it.kind === ArcRCIdentityIssueKind.InvalidSSADominance })
+        assertNull(result.identity(joined))
+    }
+
+    @Test
+    fun ordinaryOperandsMustBeDefinedAndDominatingBeforeTheirUse() {
+        val root = ArcSSAValue("late.root")
+        val forwarded = ArcSSAValue("late.forwarded")
+        val cfg = linear(listOf(
+            ArcSSAOperation.Forward(root, forwarded),
+            ArcSSAOperation.Introduce(root, ArcOwnership.Owned),
+            ArcSSAOperation.Use(root, ArcSSAUseKind.Borrow),
+        ))
+
+        val result = ArcRCIdentityAnalysis.analyze(ArcRCIdentityInput(cfg, emptyList()))
+
+        assertTrue(result.issues.any { it.kind === ArcRCIdentityIssueKind.InvalidSSADominance })
+        assertNull(result.identity(forwarded))
+    }
+
+    @Test
+    fun evenNonDefiningUsesCannotReadAnIdentityIntroducedLater() {
+        val root = ArcSSAValue("late.use.root")
+        val cfg = linear(listOf(
+            ArcSSAOperation.Use(root, ArcSSAUseKind.Borrow),
+            ArcSSAOperation.Introduce(root, ArcOwnership.Owned),
+        ))
+
+        val result = ArcRCIdentityAnalysis.analyze(ArcRCIdentityInput(cfg, emptyList()))
+
+        assertTrue(result.issues.any { it.kind === ArcRCIdentityIssueKind.InvalidSSADominance })
+        assertNull(result.identity(root))
+    }
+
+    @Test
+    fun unreachableRootCannotSeedAReachablePhi() {
+        val entryRoot = ArcSSAValue("reachable.root")
+        val unreachableRoot = ArcSSAValue("unreachable.root")
+        val joined = ArcSSAValue("unreachable.joined")
+        val unreachable = ArcBlockId("unreachable")
+        val header = ArcBlockId("reachable.header")
+        val cfg = ArcOwnershipSSAInput(
+            entry,
+            linkedMapOf(
+                entry to ArcSSABlock(entry, listOf(ArcSSAOperation.Introduce(entryRoot, ArcOwnership.Owned))),
+                unreachable to ArcSSABlock(unreachable, listOf(
+                    ArcSSAOperation.Introduce(unreachableRoot, ArcOwnership.Owned),
+                )),
+                header to ArcSSABlock(header, listOf(
+                    ArcSSAOperation.Join(joined, linkedMapOf(entry to entryRoot, unreachable to unreachableRoot)),
+                )),
+            ),
+            setOf(ArcSSAEdge(entry, header), ArcSSAEdge(unreachable, header)),
+        )
+
+        val result = ArcRCIdentityAnalysis.analyze(ArcRCIdentityInput(cfg, emptyList()))
+
+        assertTrue(result.issues.any { it.kind === ArcRCIdentityIssueKind.UnreachableDefinition })
+        assertTrue(result.issues.any { it.kind === ArcRCIdentityIssueKind.InvalidSSADominance })
+        assertNull(result.identity(unreachableRoot))
+        assertNull(result.identity(joined))
+    }
+
+    @Test
+    fun reverseOrderedRootUnionChainConvergesWithinTheExplicitBudget() {
+        val leftRoot = ArcSSAValue("stress.left")
+        val rightRoot = ArcSSAValue("stress.right")
+        val joined = ArcSSAValue("stress.joined")
+        val stressEntry = ArcBlockId("stress.entry")
+        val stressLeft = ArcBlockId("stress.left")
+        val stressRight = ArcBlockId("stress.right")
+        val stressMerge = ArcBlockId("stress.merge")
+        val chainLength = 96
+        val chainBlocks = (1..chainLength).map { ArcBlockId("stress.chain.$it") }
+        val chainValues = (1..chainLength).map { ArcSSAValue("stress.value.$it") }
+        val naturalBlocks = buildList {
+            add(ArcSSABlock(stressEntry, emptyList()))
+            add(ArcSSABlock(stressLeft, listOf(ArcSSAOperation.Introduce(leftRoot, ArcOwnership.Owned))))
+            add(ArcSSABlock(stressRight, listOf(ArcSSAOperation.Introduce(rightRoot, ArcOwnership.Owned))))
+            add(ArcSSABlock(stressMerge, listOf(
+                ArcSSAOperation.Join(joined, linkedMapOf(stressLeft to leftRoot, stressRight to rightRoot)),
+            )))
+            chainBlocks.forEachIndexed { index, block ->
+                add(ArcSSABlock(block, listOf(ArcSSAOperation.Forward(
+                    if (index == 0) joined else chainValues[index - 1], chainValues[index],
+                ))))
+            }
+        }
+        val edges = buildSet {
+            add(ArcSSAEdge(stressEntry, stressLeft))
+            add(ArcSSAEdge(stressEntry, stressRight))
+            add(ArcSSAEdge(stressLeft, stressMerge))
+            add(ArcSSAEdge(stressRight, stressMerge))
+            add(ArcSSAEdge(stressMerge, chainBlocks.first()))
+            chainBlocks.zipWithNext().forEach { (from, to) -> add(ArcSSAEdge(from, to)) }
+        }
+        val cfg = ArcOwnershipSSAInput(
+            stressEntry,
+            naturalBlocks.asReversed().associateTo(linkedMapOf()) { it.id to it },
+            edges,
+        )
+
+        val result = ArcRCIdentityAnalysis.analyze(ArcRCIdentityInput(cfg, emptyList()))
+
+        assertTrue(result.issues.toString(), result.issues.isEmpty())
+        assertTrue(result.fixedPointConverged)
+        assertTrue("rounds=${result.fixedPointRounds}", result.fixedPointRounds >= chainLength)
+        assertEquals(setOf(leftRoot, rightRoot), result.identity(chainValues.last())?.provenanceRoots)
+        assertNull(result.identity(chainValues.last())?.singleRoot)
+        assertFalse(result.emitted)
+        assertNull(result.physicalRCPairsEliminated)
     }
 
     private fun linear(operations: List<ArcSSAOperation>): ArcOwnershipSSAInput = ArcOwnershipSSAInput(

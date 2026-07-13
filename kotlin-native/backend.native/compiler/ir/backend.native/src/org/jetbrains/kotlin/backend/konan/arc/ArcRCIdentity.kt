@@ -35,6 +35,11 @@ internal sealed class ArcRCLifetimeFrontier {
 }
 
 internal enum class ArcRCIdentityIssueKind {
+    MalformedCFG,
+    IncompleteJoin,
+    UnreachableDefinition,
+    InvalidSSADominance,
+    FixedPointBudgetExhausted,
     DuplicateDefinition,
     UnresolvedCycle,
     MissingDefinition,
@@ -78,7 +83,13 @@ internal data class ArcRCIdentityResult(
     val barriers: List<ArcRCBarrier>,
     val liveness: ArcRCPrunedLiveness,
     val issues: List<ArcRCIdentityIssue>,
+    val fixedPointRounds: Int = 0,
+    val fixedPointConverged: Boolean = false,
 ) {
+    /** This analysis is an authenticated query only; it never claims emitted ARC savings. */
+    val emitted: Boolean get() = false
+    val physicalRCPairsEliminated: Int? get() = null
+
     fun identity(value: ArcSSAValue): ArcRCIdentity? = identities[value]
 
     /**
@@ -316,6 +327,10 @@ internal class ArcRCPrunedLiveness internal constructor(
 
 internal object ArcRCIdentityAnalysis {
     private data class Definition(val position: ArcRCPosition, val operation: ArcSSAOperation)
+    private data class CFGFacts(
+        val reachable: Set<ArcBlockId>,
+        val dominators: Map<ArcBlockId, Set<ArcBlockId>>,
+    )
 
     fun analyze(input: ArcRCIdentityInput): ArcRCIdentityResult {
         val definitions = linkedMapOf<ArcSSAValue, Definition>()
@@ -335,6 +350,39 @@ internal object ArcRCIdentityAnalysis {
                     }
                 }
             }
+        }
+
+        val malformedCFG = input.cfg.entry !in input.cfg.blocks ||
+                input.cfg.blocks.any { (id, block) -> id != block.id } ||
+                input.cfg.edges.any { it.from !in input.cfg.blocks || it.to !in input.cfg.blocks }
+        if (malformedCFG) {
+            definitions.keys.forEach { value ->
+                invalidValues += value
+                issues += ArcRCIdentityIssue(
+                    ArcRCIdentityIssueKind.MalformedCFG,
+                    value,
+                    "RC identity requires a closed CFG with exact block identities",
+                )
+            }
+        }
+        val cfgFacts = if (malformedCFG) null else computeCFGFacts(input.cfg)
+        definitions.forEach { (value, definition) ->
+            val join = definition.operation as? ArcSSAOperation.Join ?: return@forEach
+            val incomingEdges = input.cfg.edges.filter { it.to == definition.position.block }
+            val expectedPredecessors = incomingEdges.filter { it.kind == ArcSSAEdgeKind.Normal }.mapTo(linkedSetOf()) { it.from }
+            val hasExceptionalPredecessor = incomingEdges.any { it.kind == ArcSSAEdgeKind.Exceptional }
+            if (hasExceptionalPredecessor || join.incoming.keys != expectedPredecessors) {
+                invalidValues += value
+                issues += ArcRCIdentityIssue(
+                    ArcRCIdentityIssueKind.IncompleteJoin,
+                    value,
+                    "join incoming blocks ${join.incoming.keys} do not exactly match normal predecessors " +
+                            "$expectedPredecessors or include an unsupported exceptional predecessor",
+                )
+            }
+        }
+        if (cfgFacts != null) {
+            validateReachabilityAndSSA(input.cfg, definitions, cfgFacts, invalidValues, issues)
         }
 
         val webByMember = linkedMapOf<ArcSSAValue, ArcOwnershipSSAWeb>()
@@ -359,11 +407,16 @@ internal object ArcRCIdentityAnalysis {
             val missing = definition.operation.dependencies().filter { it !in definitions }
             if (missing.isNotEmpty()) {
                 invalidValues += value
-                issues += ArcRCIdentityIssue(
-                    ArcRCIdentityIssueKind.MissingDefinition,
-                    value,
-                    "identity dependencies have no definition: ${missing.joinToString()}",
-                )
+                if (issues.none {
+                        it.kind === ArcRCIdentityIssueKind.MissingDefinition && it.value.name == value.name
+                    }
+                ) {
+                    issues += ArcRCIdentityIssue(
+                        ArcRCIdentityIssueKind.MissingDefinition,
+                        value,
+                        "identity dependencies have no definition: ${missing.joinToString()}",
+                    )
+                }
             }
         }
         input.ownershipWebs.flatMap { it.members }.filter { it !in definitions }.forEach { member ->
@@ -401,7 +454,14 @@ internal object ArcRCIdentityAnalysis {
             }
         }
         var changed = true
-        while (changed) {
+        var fixedPointRounds = 0
+        val definitionCount = definitions.size.toLong()
+        // Roots and anchors are monotone subsets of the finite definition set. The bound allows
+        // every element of both lattices to be discovered separately, plus a final no-change pass.
+        val maximumFixedPointRounds = (2L * definitionCount * definitionCount + 2L * definitionCount + 1L)
+            .coerceAtMost(Int.MAX_VALUE.toLong()).toInt().coerceAtLeast(1)
+        while (changed && fixedPointRounds < maximumFixedPointRounds) {
+            fixedPointRounds++
             changed = false
             definitions.forEach { (value, definition) ->
                 if (value in invalidValues) return@forEach
@@ -410,9 +470,20 @@ internal object ArcRCIdentityAnalysis {
                     is ArcSSAOperation.Forward -> roots[operation.source]
                     is ArcSSAOperation.Reborrow -> roots[operation.source]
                     is ArcSSAOperation.Borrow -> roots[operation.source]
-                    is ArcSSAOperation.Join -> operation.incoming.values.map { roots[it] }
-                        .takeIf { it.none { rootsForInput -> rootsForInput == null } }
-                        ?.filterNotNull()?.flatten()?.toCollection(linkedSetOf())
+                    // Seed a cyclic phi web from every root which is already known. Requiring all
+                    // incoming values to resolve at once leaves canonical loop-carried webs stuck:
+                    //
+                    //   root -> phi -> forward/reborrow -> phi
+                    //
+                    // Swift's RCIdentity analysis strips this shape to the dominating root. The
+                    // incomplete result is never published: after the fixed point below, an exact
+                    // dependency-closure audit invalidates the entire web unless every incoming
+                    // value resolved.
+                    is ArcSSAOperation.Join -> operation.incoming.values
+                        .mapNotNull { roots[it] }
+                        .flatten()
+                        .toCollection(linkedSetOf())
+                        .takeIf { it.isNotEmpty() }
                     else -> null
                 }
                 val resolvedAnchors = when (val operation = definition.operation) {
@@ -420,9 +491,14 @@ internal object ArcRCIdentityAnalysis {
                     is ArcSSAOperation.Forward -> anchors[operation.source]
                     is ArcSSAOperation.Reborrow -> canonicalKnownRoots(operation.anchorDependencies, roots)
                     is ArcSSAOperation.Borrow -> canonicalKnownRoots(setOf(operation.source), roots)
-                    is ArcSSAOperation.Join -> operation.incoming.values.map { anchors[it] }
-                        .takeIf { it.none { anchorsForInput -> anchorsForInput == null } }
-                        ?.filterNotNull()?.flatten()?.toCollection(linkedSetOf())
+                    // Anchor dependencies use the same monotone closure as provenance. Taking the
+                    // union is conservative: a reborrow introduced on any backedge extends, rather
+                    // than shortens, the lifetime required by the joined value.
+                    is ArcSSAOperation.Join -> operation.incoming.values
+                        .mapNotNull { anchors[it] }
+                        .flatten()
+                        .toCollection(linkedSetOf())
+                        .takeIf { it.isNotEmpty() || operation.incoming.values.any { it in anchors } }
                     else -> null
                 }
                 if (resolvedRoots != null && roots[value] != resolvedRoots) {
@@ -435,14 +511,45 @@ internal object ArcRCIdentityAnalysis {
                 }
             }
         }
+        val fixedPointConverged = !changed
+        if (!fixedPointConverged) {
+            definitions.keys.filter { it !in invalidValues }.forEach { value ->
+                invalidValues += value
+                issues += ArcRCIdentityIssue(
+                    ArcRCIdentityIssueKind.FixedPointBudgetExhausted,
+                    value,
+                    "RC identity did not converge within $maximumFixedPointRounds deterministic rounds",
+                )
+            }
+        }
 
-        definitions.keys.filter { it !in roots && it !in invalidValues }.forEach { value ->
+        val unresolvedValues = definitions.keys.filterTo(linkedSetOf()) { it !in roots && it !in invalidValues }
+        unresolvedValues.forEach { value ->
             val hasMissingDependency = definitions.getValue(value).operation.dependencies().any { it !in definitions }
             issues += ArcRCIdentityIssue(
                 if (hasMissingDependency) ArcRCIdentityIssueKind.MissingDefinition else ArcRCIdentityIssueKind.UnresolvedCycle,
                 value,
                 if (hasMissingDependency) "identity dependency has no definition" else "identity forwarding cycle has no canonical introducer",
             )
+        }
+        // Partial Join facts are an implementation detail of the loop fixed point. Fail closed if
+        // any dependency did not converge, and transitively withdraw every identity which depended
+        // on it. This prevents a rooted incoming edge from masking an unrelated rootless cycle.
+        invalidValues += unresolvedValues
+        invalidChanged = true
+        while (invalidChanged) {
+            invalidChanged = false
+            definitions.forEach { (value, definition) ->
+                if (value !in invalidValues && definition.operation.dependencies().any { it in invalidValues }) {
+                    invalidValues += value
+                    invalidChanged = true
+                }
+            }
+            input.ownershipWebs.forEach { web ->
+                if (web.members.any { it in invalidValues } && invalidValues.addAll(web.members)) {
+                    invalidChanged = true
+                }
+            }
         }
         val identities = roots.filterKeys { it !in invalidValues }.mapValues { (value, provenance) ->
             ArcRCIdentity(value, provenance, anchors[value].orEmpty(), webByMember[value])
@@ -451,7 +558,121 @@ internal object ArcRCIdentityAnalysis {
         issues += validateUnsupportedEffects(input.cfg, identities)
         val barriers = collectBarriers(input.cfg)
         val liveness = ArcRCPrunedLiveness(input.cfg, identities, barriers)
-        return ArcRCIdentityResult(identities, barriers, liveness, issues.distinct())
+        return ArcRCIdentityResult(
+            identities, barriers, liveness, issues.distinct(), fixedPointRounds, fixedPointConverged,
+        )
+    }
+
+    private fun computeCFGFacts(cfg: ArcOwnershipSSAInput): CFGFacts {
+        val successors = cfg.blocks.keys.associateWith { block ->
+            cfg.edges.filter { it.from == block }.map { it.to }
+        }
+        val reachable = linkedSetOf<ArcBlockId>()
+        val worklist = ArrayDeque<ArcBlockId>().apply { add(cfg.entry) }
+        while (worklist.isNotEmpty()) {
+            val block = worklist.removeFirst()
+            if (!reachable.add(block)) continue
+            successors.getValue(block).forEach { worklist.add(it) }
+        }
+
+        val predecessors = reachable.associateWith { block ->
+            cfg.edges.filter { it.to == block && it.from in reachable }.map { it.from }
+        }
+        val dominators = reachable.associateWithTo(linkedMapOf()) { block ->
+            if (block == cfg.entry) linkedSetOf(block) else reachable.toCollection(linkedSetOf())
+        }
+        var changed = true
+        while (changed) {
+            changed = false
+            reachable.filter { it != cfg.entry }.forEach { block ->
+                val incoming = predecessors.getValue(block)
+                val intersection: Set<ArcBlockId> = if (incoming.isEmpty()) {
+                    emptySet()
+                } else {
+                    incoming.drop(1).fold(dominators.getValue(incoming.first()).toSet()) { left, predecessor ->
+                        left intersect dominators.getValue(predecessor)
+                    }
+                }
+                val next = (intersection + block).toCollection(linkedSetOf())
+                if (dominators.getValue(block) != next) {
+                    dominators[block] = next
+                    changed = true
+                }
+            }
+        }
+        return CFGFacts(reachable, dominators)
+    }
+
+    private fun validateReachabilityAndSSA(
+        cfg: ArcOwnershipSSAInput,
+        definitions: Map<ArcSSAValue, Definition>,
+        facts: CFGFacts,
+        invalidValues: MutableSet<ArcSSAValue>,
+        issues: MutableList<ArcRCIdentityIssue>,
+    ) {
+        definitions.forEach { (value, definition) ->
+            if (definition.position.block !in facts.reachable) {
+                invalidValues += value
+                issues += ArcRCIdentityIssue(
+                    ArcRCIdentityIssueKind.UnreachableDefinition,
+                    value,
+                    "definition at ${definition.position} is unreachable from ${cfg.entry}",
+                )
+            }
+        }
+
+        fun availableBefore(definition: Definition, block: ArcBlockId, operationIndex: Int): Boolean =
+            definition.position.block in facts.dominators.getValue(block) &&
+                    (definition.position.block != block || definition.position.operationIndex < operationIndex)
+
+        fun availableAtPredecessorEnd(definition: Definition, predecessor: ArcBlockId): Boolean =
+            predecessor in facts.reachable && definition.position.block in facts.dominators.getValue(predecessor)
+
+        cfg.blocks.values.filter { it.id in facts.reachable }.forEach { block ->
+            block.operations.forEachIndexed { operationIndex, operation ->
+                val result = operation.resultOrNull()
+                if (operation is ArcSSAOperation.Join) {
+                    operation.incoming.forEach { (predecessor, operand) ->
+                        val operandDefinition = definitions[operand]
+                        val valid = operandDefinition != null &&
+                                availableAtPredecessorEnd(operandDefinition, predecessor)
+                        if (!valid) {
+                            val issueValue = result ?: operand
+                            invalidValues += issueValue
+                            val kind = if (operandDefinition == null) ArcRCIdentityIssueKind.MissingDefinition
+                            else ArcRCIdentityIssueKind.InvalidSSADominance
+                            if (issues.none { it.kind === kind && it.value.name == issueValue.name }) {
+                                issues += ArcRCIdentityIssue(
+                                    kind,
+                                    issueValue,
+                                    "join operand $operand is not available at the end of predecessor $predecessor",
+                                )
+                            }
+                        }
+                    }
+                    return@forEachIndexed
+                }
+
+                operation.dependencies().forEach { operand ->
+                    val operandDefinition = definitions[operand]
+                    val valid = operandDefinition != null &&
+                            availableBefore(operandDefinition, block.id, operationIndex)
+                    if (!valid) {
+                        val issueValue = result ?: operand
+                        invalidValues += issueValue
+                        val kind = if (operandDefinition == null) ArcRCIdentityIssueKind.MissingDefinition
+                        else ArcRCIdentityIssueKind.InvalidSSADominance
+                        if (issues.none { it.kind === kind && it.value.name == issueValue.name }) {
+                            issues += ArcRCIdentityIssue(
+                                kind,
+                                issueValue,
+                                "operand $operand is not available before ${ArcRCPosition(block.id, operationIndex)}",
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 
     private fun canonicalKnownRoots(values: Set<ArcSSAValue>, roots: Map<ArcSSAValue, Set<ArcSSAValue>>): Set<ArcSSAValue> =
