@@ -1,0 +1,79 @@
+{
+  "schemaVersion": 1,
+  "wave": "wave-30-scoped-cstring-loop-cache",
+  "host": {
+    "ssh": "olfa@10.10.10.12",
+    "hostname": "posidon",
+    "platform": "Linux-6.8.0-134-generic-x86_64-with-glibc2.39",
+    "cpu": "11th Gen Intel(R) Core(TM) i7-11700K @ 3.60GHz",
+    "logicalCpuCount": 16,
+    "memoryTotalKiB": 32697020,
+    "perfEventParanoid": 4
+  },
+  "protocol": {
+    "target": "linux_x64",
+    "compilerFlags": ["-target", "linux_x64", "-opt"],
+    "arcMemoryModel": "arc",
+    "baselineMemoryModel": "strict",
+    "repetitions": 9,
+    "warmups": 1,
+    "compileRepetitions": 3,
+    "executionPrefix": ["taskset", "-c", "0"],
+    "javaHome": "/usr/lib/jvm/java-17-openjdk-amd64",
+    "javaOpts": "-XX:ReservedCodeCacheSize=256m",
+    "scenarios": ["platform-c-interop", "platform-c-leaf", "platform-c-dynamic-cstring"]
+  },
+  "revisions": {
+    "optimized": {
+      "commit": "35c38259c0a1c6f12a08a507ef8e17ec1ec14273",
+      "tree": "1c31cf4bb25b455a00dd3a82a86ccd1902afbeff",
+      "parent": "81a8c912b7fe325b08f58081b0ecfaf19f9678c7",
+      "runtimeTree": "57e7347375d61866e06a4b6446999974e923f501",
+      "candidateCacheKey": "c4042f34352c29cae0cf2d74af8782817ce8a3305c0b22145696abc7ad15d957",
+      "compilerLauncherSha256": "5baa2f832ede18edd5933d8fe1f5327049e9a1b1ddb4a7d81998808b9cb460d8",
+      "compilerJarSha256": "4f1eef11659c89ae91b4e9271913fd515f8583a87e92fa3b7f0e6d001bb5b3fc",
+      "benchmarkBinarySha256": "c3318249284b5a575d1a76e16d793e3ceee92590252a7412d55f06b4d4a5c92a",
+      "benchmarkBinaryBytes": 526616
+    },
+    "parent": {
+      "commit": "81a8c912b7fe325b08f58081b0ecfaf19f9678c7",
+      "tree": "3a50c2efdaa9ac937a37c802cbebca4ba713d6c3",
+      "parent": "96be97abf9bde4f544f058c964210bdbbf81ad6d",
+      "runtimeTree": "57e7347375d61866e06a4b6446999974e923f501",
+      "candidateCacheKey": "70fe8b1219c99bfe77b619a94126b95cd2142095c7f95412c026db7135481fc4",
+      "compilerLauncherSha256": "5baa2f832ede18edd5933d8fe1f5327049e9a1b1ddb4a7d81998808b9cb460d8",
+      "compilerJarSha256": "9c0f744a9e4bf53dbb682a4890b9bde9e86ce5ccbb947753502cf56c813fae0b",
+      "benchmarkBinarySha256": "fba7143c07b26333e4d550fdfe53fa946d4acb1ed8e3712ea0a12422e86a11ad",
+      "benchmarkBinaryBytes": 526656
+    },
+    "strict": {
+      "tag": "v1.9.10",
+      "commit": "3db61efe5e892bf27115f1ebcab957d903067ed4",
+      "tree": "c1771ad840cc5e08506c522bf7ff8160d3537f39",
+      "compilerLauncherSha256": "5baa2f832ede18edd5933d8fe1f5327049e9a1b1ddb4a7d81998808b9cb460d8",
+      "compilerJarSha256": "dad6fdbbe38bd7ade35b10e205cc7f5ceb292887ee18d372031bb3e48350f138",
+      "benchmarkBinarySha256": "ea77292dd4890a248e3275ce4cd7f19802efb4cfec583d260e56e0a3299f617e",
+      "benchmarkBinaryBytes": 507200
+    }
+  },
+  "inputs": {
+    "benchmarkScriptSha256": "d144ab071d82b5ecf8f2d4a33da6c9fc1a2809c29b329c33b381979bf6a01f8f",
+    "benchmarkFixtureSha256": "e69a89cda9684c695a7dedd90808ab20375fe32c1e589fbe1d2ebf028142e35b",
+    "interopDefinitionSha256": "da598d7809b1271ee0183265c95e85e84de177d73501605ce3f34b845706c4b6",
+    "interopHeaderSha256": "3b7556fa9c4deab30cabb252aa1abf392d5c15d9fdc86e298edfccd8fb4e5eb2",
+    "allocationCounterSourceSha256": "4a4836a6d37fea3e8bf0b46325dc7a71a6842c59ffb317a879a66e195ba9b81e",
+    "optimizedRuntimePairsSha256": "0bf6c26dc699c01783a38d8518632ac92a16608e79955157198b4d1ca800b579",
+    "parentRuntimePairsSha256": "6a11aec53c3a709ec06156bee1769aa199e9943dc4e53ff6b7a041bf2e7802af"
+  },
+  "isolatedResult": {
+    "scenario": "platform-c-dynamic-cstring",
+    "parentMedianSeconds": 0.129061376,
+    "optimizedMedianSeconds": 0.006496735,
+    "throughputRatioPercent": 1986.557494,
+    "speedupX": 19.86557494,
+    "latencyReductionPercent": 94.966166,
+    "parentConversionAllocations": 1800000,
+    "optimizedConversionAllocations": 1758,
+    "conversionEliminationPercent": 99.902333
+  }
+}

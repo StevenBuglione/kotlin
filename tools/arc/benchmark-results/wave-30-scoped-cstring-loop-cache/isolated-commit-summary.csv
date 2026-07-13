@@ -1,0 +1,4 @@
+scenario,parent_arc_median_seconds,optimized_arc_median_seconds,optimized_latency_delta_percent,optimized_throughput_ratio_percent,parent_peak_rss_kib,optimized_peak_rss_kib,parent_binary_bytes,optimized_binary_bytes
+platform-c-dynamic-cstring,0.129061376,0.006496735,-94.966166,1986.557494,2688,2688,526656,526616
+platform-c-interop,0.001917163,0.001924151,0.364497,99.636827,2688,2688,526656,526616
+platform-c-leaf,0.142466284,0.145250615,1.954379,98.083085,2688,2688,526656,526616

@@ -1,0 +1,4 @@
+scenario,strict_median_seconds,arc_median_seconds,latency_delta_percent,throughput_ratio_percent,strict_peak_rss_kib,arc_peak_rss_kib,rss_delta_percent,logical_allocations,passed
+platform-c-dynamic-cstring,0.291177773,0.006496735,-97.769,4481.909,3200,2688,-16.000,3601758,true
+platform-c-interop,0.286293232,0.001924151,-99.328,14878.938,3200,2688,-16.000,0,true
+platform-c-leaf,0.144083763,0.145250615,0.810,99.197,2944,2688,-8.696,1,true

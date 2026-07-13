@@ -1,0 +1,5 @@
+revision,commit,scenario,operations,conversion_allocations,eliminated_vs_parent_percent,return_address,stdout,stderr
+parent,81a8c912b7fe325b08f58081b0ecfaf19f9678c7,platform-c-dynamic-cstring,1800000,1800000,0.0000,0x43a988,"ARC_BENCH_OK scenario=platform-c-dynamic-cstring checksum=34200000 operations=1800000 allocations=3601758",ARC_CSTRING_REFRESH_COUNT=1800000
+optimized,35c38259c0a1c6f12a08a507ef8e17ec1ec14273,platform-c-dynamic-cstring,1800000,1758,99.9023,0x431799,"ARC_BENCH_OK scenario=platform-c-dynamic-cstring checksum=34200000 operations=1800000 allocations=3601758",ARC_CSTRING_REFRESH_COUNT=1758
+parent,81a8c912b7fe325b08f58081b0ecfaf19f9678c7,platform-c-interop,1800000,0,not-applicable,0x43a988,"ARC_BENCH_OK scenario=platform-c-interop checksum=30600000 operations=1800000 allocations=0",ARC_CSTRING_REFRESH_COUNT=0
+optimized,35c38259c0a1c6f12a08a507ef8e17ec1ec14273,platform-c-interop,1800000,0,not-applicable,0x431799,"ARC_BENCH_OK scenario=platform-c-interop checksum=30600000 operations=1800000 allocations=0",ARC_CSTRING_REFRESH_COUNT=0
