@@ -25,9 +25,11 @@ namespace {
 
 constexpr const char* kModule = R"IR(
 declare void @UpdateReturnRefRelaxed(i8**, i8*)
+declare void @llvm.lifetime.start.p0i8(i64 immarg, i8* nocapture)
 declare void @llvm.lifetime.end.p0i8(i64 immarg, i8* nocapture)
 declare void @llvm.dbg.value(metadata, metadata, metadata)
 declare void @effect(i8*)
+declare i32 @readnoneEffect() readnone nounwind
 declare i32 @__gxx_personality_v0(...)
 
 define void @adjacent(i8** %slot, i8* %value) {
@@ -75,6 +77,32 @@ entry:
   ret void
 }
 
+define void @lifetimeStartSeparator(i8** %slot, i8* %value) {
+entry:
+  call void @UpdateReturnRefRelaxed(i8** %slot, i8* %value)
+  call void @llvm.lifetime.start.p0i8(i64 8, i8* %value)
+  call void @UpdateReturnRefRelaxed(i8** %slot, i8* %value)
+  ret void
+}
+
+define void @unrelatedLifetimeEndSeparator(i8** %slot, i8* %value) {
+entry:
+  %temporary = alloca i8
+  call void @UpdateReturnRefRelaxed(i8** %slot, i8* %value)
+  call void @llvm.lifetime.end.p0i8(i64 1, i8* %temporary)
+  call void @UpdateReturnRefRelaxed(i8** %slot, i8* %value)
+  ret void
+}
+
+define void @unrelatedLifetimeStartSeparator(i8** %slot, i8* %value) {
+entry:
+  %temporary = alloca i8
+  call void @UpdateReturnRefRelaxed(i8** %slot, i8* %value)
+  call void @llvm.lifetime.start.p0i8(i64 1, i8* %temporary)
+  call void @UpdateReturnRefRelaxed(i8** %slot, i8* %value)
+  ret void
+}
+
 define void @debugSeparator(i8** %slot, i8* %value) !dbg !4 {
 entry:
   call void @UpdateReturnRefRelaxed(i8** %slot, i8* %value)
@@ -103,6 +131,30 @@ define void @loadSeparator(i8** %slot, i8* %value, i8** %other) {
 entry:
   call void @UpdateReturnRefRelaxed(i8** %slot, i8* %value)
   %loaded = load i8*, i8** %other
+  call void @UpdateReturnRefRelaxed(i8** %slot, i8* %value)
+  ret void
+}
+
+define void @volatileLoadSeparator(i8** %slot, i8* %value, i8** %other) {
+entry:
+  call void @UpdateReturnRefRelaxed(i8** %slot, i8* %value)
+  %loaded = load volatile i8*, i8** %other
+  call void @UpdateReturnRefRelaxed(i8** %slot, i8* %value)
+  ret void
+}
+
+define void @fenceSeparator(i8** %slot, i8* %value) {
+entry:
+  call void @UpdateReturnRefRelaxed(i8** %slot, i8* %value)
+  fence seq_cst
+  call void @UpdateReturnRefRelaxed(i8** %slot, i8* %value)
+  ret void
+}
+
+define void @readnoneCallSeparator(i8** %slot, i8* %value) {
+entry:
+  call void @UpdateReturnRefRelaxed(i8** %slot, i8* %value)
+  %ignored = call i32 @readnoneEffect()
   call void @UpdateReturnRefRelaxed(i8** %slot, i8* %value)
   ret void
 }
@@ -204,19 +256,25 @@ int main() {
   LLVMContext context;
   auto module = parseModule(context);
   const int removed = LLVMKotlinCoalesceAdjacentArcReturnUpdates(wrap(module.get()));
-  if (removed != 4) fail("expected exactly four removed calls");
+  if (removed != 8) fail("expected exactly eight removed calls");
   if (verifyModule(*module, &errs())) fail("transformed module is invalid");
 
   requireCount(*module, "adjacent", 1);
   requireCount(*module, "run", 1);
   requireCount(*module, "differentSlot", 2);
   requireCount(*module, "differentValue", 2);
-  requireCount(*module, "intervening", 2);
+  requireCount(*module, "intervening", 1);
   requireCount(*module, "lifetimeSeparator", 2);
+  requireCount(*module, "lifetimeStartSeparator", 2);
+  requireCount(*module, "unrelatedLifetimeEndSeparator", 1);
+  requireCount(*module, "unrelatedLifetimeStartSeparator", 1);
   requireCount(*module, "debugSeparator", 1);
   requireCount(*module, "callSeparator", 2);
   requireCount(*module, "storeSeparator", 2);
-  requireCount(*module, "loadSeparator", 2);
+  requireCount(*module, "loadSeparator", 1);
+  requireCount(*module, "volatileLoadSeparator", 2);
+  requireCount(*module, "fenceSeparator", 2);
+  requireCount(*module, "readnoneCallSeparator", 2);
   requireCount(*module, "operandBundle", 2);
   requireCount(*module, "convergentCalls", 2);
   requireCount(*module, "noduplicateCalls", 2);

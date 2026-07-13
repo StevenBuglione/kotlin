@@ -1,0 +1,23 @@
+Focused emitted-code verification
+=================================
+
+Candidate artifact:
+  /home/olfa/codex-kotlin-arc-ci2-bench/.arc-runs/arc-bench/artifacts/candidate-arc-benchmark.kexe
+SHA-256:
+  0ab2fd68923f93b731299b7a454776ba932d530eec23affe9123a8bcb959e2cf
+
+Symbol:
+  0000000000433030 00000000000002b2 t kfun:$coroutinesWork$lambda$1$FUNCTION_REFERENCE$1.invoke#internal
+
+Post-fix callsites in the exact symbol disassembly:
+  MoveReferenceIntoReturnSlotArc: 1 (0x4330ba)
+  UpdateReturnRefRelaxed: 1 (0x4330e6)
+
+The terminal UpdateReturnRefRelaxed after compiler-generated frame cleanup is gone. The remaining
+UpdateReturnRefRelaxed is the pre-cleanup self-assignment guard immediately after the owned move;
+it preserves the root while local destruction runs. The symbol shrank from the pre-fix 0x2c2 bytes
+to 0x2b2 bytes, and static UpdateReturnRefRelaxed callsites fell from two to one.
+
+Verification command shape:
+  nm -S --defined-only candidate-arc-benchmark.kexe
+  objdump -d --start-address=0x433030 --stop-address=0x4332e2 candidate-arc-benchmark.kexe

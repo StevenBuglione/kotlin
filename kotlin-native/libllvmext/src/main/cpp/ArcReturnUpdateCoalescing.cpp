@@ -7,6 +7,7 @@
 
 #include <limits>
 
+#include <llvm/Analysis/ValueTracking.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/IntrinsicInst.h>
 #include <llvm/IR/Instructions.h>
@@ -43,8 +44,33 @@ bool isIdenticalReturnUpdate(const Instruction& first, const Instruction& second
          firstCall.getArgOperand(1) == secondCall.getArgOperand(1);
 }
 
-bool isTransparentSeparator(const Instruction& instruction) {
-  return isa<DbgInfoIntrinsic>(instruction);
+bool isTransparentSeparator(const Instruction& instruction,
+                            const Instruction* previousUpdate) {
+  if (isa<DbgInfoIntrinsic>(instruction)) return true;
+
+  // Lifetime markers describe stack-storage validity to LLVM but do not execute an
+  // ownership operation. Treat one as inert only when ValueTracking proves that it
+  // names a distinct local allocation rather than either update operand.
+  if (const auto* intrinsic = dyn_cast<IntrinsicInst>(&instruction)) {
+    if (intrinsic->getIntrinsicID() == Intrinsic::lifetime_start ||
+        intrinsic->getIntrinsicID() == Intrinsic::lifetime_end) {
+      const auto* update = dyn_cast_or_null<CallInst>(previousUpdate);
+      if (update == nullptr) return false;
+      const DataLayout& dataLayout = instruction.getModule()->getDataLayout();
+      const Value* lifetimeRoot =
+          GetUnderlyingObject(intrinsic->getArgOperand(1), dataLayout);
+      return isa<AllocaInst>(lifetimeRoot) &&
+             lifetimeRoot != GetUnderlyingObject(update->getArgOperand(0), dataLayout) &&
+             lifetimeRoot != GetUnderlyingObject(update->getArgOperand(1), dataLayout);
+    }
+  }
+
+  // Keep the proof local to one basic block, but do not discard it for SSA-only
+  // calculations or ordinary non-volatile reads. Neither can replace the result
+  // slot or perform an ARC operation. Calls remain barriers even when annotated
+  // readnone: their Kotlin ownership semantics are not encoded by LLVM attributes.
+  return !isa<CallBase>(instruction) && !instruction.mayWriteToMemory() &&
+         !instruction.mayHaveSideEffects();
 }
 
 } // namespace
@@ -72,7 +98,7 @@ int LLVMKotlinCoalesceAdjacentArcReturnUpdates(LLVMModuleRef moduleRef) {
           previousUpdate = current;
           continue;
         }
-        if (isTransparentSeparator(*current)) {
+        if (isTransparentSeparator(*current, previousUpdate)) {
           continue;
         }
         previousUpdate = nullptr;

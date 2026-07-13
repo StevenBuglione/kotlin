@@ -1,0 +1,17 @@
+{
+  "passed": true,
+  "policy": "exact-observable-output-before-warmup-or-timing",
+  "results": [
+    {
+      "model": "baseline-strict",
+      "output_sha256": "e07e18e0fdebd95ff68bd7bb71377edad3a313f470c1e2b77f901fc1751500f8",
+      "scenario": "coroutines"
+    },
+    {
+      "model": "candidate-arc",
+      "output_sha256": "e07e18e0fdebd95ff68bd7bb71377edad3a313f470c1e2b77f901fc1751500f8",
+      "scenario": "coroutines"
+    }
+  ],
+  "schemaVersion": 1
+}

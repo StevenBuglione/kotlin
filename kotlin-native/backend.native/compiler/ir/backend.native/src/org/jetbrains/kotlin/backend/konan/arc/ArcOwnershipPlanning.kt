@@ -45,6 +45,7 @@ import org.jetbrains.kotlin.ir.expressions.IrFunctionAccessExpression
 import org.jetbrains.kotlin.ir.expressions.IrFunctionReference
 import org.jetbrains.kotlin.ir.expressions.IrLoop
 import org.jetbrains.kotlin.ir.expressions.IrReturn
+import org.jetbrains.kotlin.ir.expressions.IrReturnableBlock
 import org.jetbrains.kotlin.ir.expressions.IrBreak
 import org.jetbrains.kotlin.ir.expressions.IrContinue
 import org.jetbrains.kotlin.ir.expressions.IrContainerExpression
@@ -60,6 +61,7 @@ import org.jetbrains.kotlin.ir.expressions.IrTypeOperatorCall
 import org.jetbrains.kotlin.ir.expressions.IrWhen
 import org.jetbrains.kotlin.ir.expressions.IrVararg
 import org.jetbrains.kotlin.ir.symbols.IrSimpleFunctionSymbol
+import org.jetbrains.kotlin.ir.symbols.IrReturnTargetSymbol
 import org.jetbrains.kotlin.ir.types.getClass
 import org.jetbrains.kotlin.ir.types.IrSimpleType
 import org.jetbrains.kotlin.ir.types.isBoolean
@@ -3446,7 +3448,7 @@ private fun selectVerifiedCoroutineResultSlotForwardingCalls(
         }
 
         override fun visitReturn(expression: IrReturn) {
-            val call = expression.value.unwrapExactCoroutineTailCall()
+            val call = expression.value.unwrapExactCoroutineTailCall(function.symbol)
             if (forbiddenBoundaryDepth == 0 && expression.returnTargetSymbol == function.symbol && call != null &&
                 call.isExactDirectLoweredSuspendAdapterCall(generationState) &&
                 (call.symbol.owner as? IrSimpleFunction)?.allNormalReturnsInitializeArcResultSlot() == true
@@ -4279,12 +4281,14 @@ internal fun IrExpression.unwrapExactArcCoroutineSpillRead(): IrGetValue? = when
     else -> null
 }
 
-private fun IrExpression.unwrapExactCoroutineTailCall(): IrCall? = when (this) {
+private fun IrExpression.unwrapExactCoroutineTailCall(expectedTarget: IrReturnTargetSymbol): IrCall? = when (this) {
     is IrCall -> this
-    is IrReturn -> value.unwrapExactCoroutineTailCall()
-    is IrTypeOperatorCall -> if (operator == IrTypeOperator.IMPLICIT_CAST) argument.unwrapExactCoroutineTailCall() else null
+    is IrReturn -> if (returnTargetSymbol == expectedTarget) value.unwrapExactCoroutineTailCall(expectedTarget) else null
+    is IrTypeOperatorCall -> if (operator == IrTypeOperator.IMPLICIT_CAST) {
+        argument.unwrapExactCoroutineTailCall(expectedTarget)
+    } else null
     is IrBlock -> if (origin == null && statements.size == 1) {
-        (statements.single() as? IrExpression)?.unwrapExactCoroutineTailCall()
+        (statements.single() as? IrExpression)?.unwrapExactCoroutineTailCall(expectedTarget)
     } else {
         null
     }
@@ -4336,6 +4340,10 @@ private fun IrExpression.unwrapNestedCoroutineReturnValue(): IrExpression = when
     } else {
         this
     }
+    // A lowered suspend returnable block carries the object-result ABI type even when its source
+    // expression is primitive. Crossing this boundary would reject a correctly initialized
+    // `Any`/`Any?` result slot after seeing the boxed source value inside the block.
+    is IrReturnableBlock -> this
     is IrBlock -> if (origin == null && statements.size == 1) {
         (statements.single() as? IrExpression)?.unwrapNestedCoroutineReturnValue() ?: this
     } else {

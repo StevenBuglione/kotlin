@@ -1,0 +1,114 @@
+{
+  "compilePairs": [
+    {
+      "order": [
+        "baseline-strict",
+        "candidate-arc"
+      ],
+      "repetition": 1
+    },
+    {
+      "order": [
+        "candidate-arc",
+        "baseline-strict"
+      ],
+      "repetition": 2
+    },
+    {
+      "order": [
+        "baseline-strict",
+        "candidate-arc"
+      ],
+      "repetition": 3
+    }
+  ],
+  "effectiveWarmupsIncludingCorrectness": 1,
+  "policy": "scenario-balanced-deterministic-paired-ab",
+  "requestedWarmups": 1,
+  "scenarios": [
+    {
+      "additionalWarmups": [],
+      "correctnessOrder": [
+        "baseline-strict",
+        "candidate-arc"
+      ],
+      "measurements": [
+        {
+          "order": [
+            "candidate-arc",
+            "baseline-strict"
+          ],
+          "pairOrdinal": 2,
+          "repetition": 1
+        },
+        {
+          "order": [
+            "baseline-strict",
+            "candidate-arc"
+          ],
+          "pairOrdinal": 3,
+          "repetition": 2
+        },
+        {
+          "order": [
+            "candidate-arc",
+            "baseline-strict"
+          ],
+          "pairOrdinal": 4,
+          "repetition": 3
+        },
+        {
+          "order": [
+            "baseline-strict",
+            "candidate-arc"
+          ],
+          "pairOrdinal": 5,
+          "repetition": 4
+        },
+        {
+          "order": [
+            "candidate-arc",
+            "baseline-strict"
+          ],
+          "pairOrdinal": 6,
+          "repetition": 5
+        },
+        {
+          "order": [
+            "baseline-strict",
+            "candidate-arc"
+          ],
+          "pairOrdinal": 7,
+          "repetition": 6
+        },
+        {
+          "order": [
+            "candidate-arc",
+            "baseline-strict"
+          ],
+          "pairOrdinal": 8,
+          "repetition": 7
+        },
+        {
+          "order": [
+            "baseline-strict",
+            "candidate-arc"
+          ],
+          "pairOrdinal": 9,
+          "repetition": 8
+        },
+        {
+          "order": [
+            "candidate-arc",
+            "baseline-strict"
+          ],
+          "pairOrdinal": 10,
+          "repetition": 9
+        }
+      ],
+      "scenario": "coroutines",
+      "scenarioIndex": 0
+    }
+  ],
+  "schemaVersion": 1
+}

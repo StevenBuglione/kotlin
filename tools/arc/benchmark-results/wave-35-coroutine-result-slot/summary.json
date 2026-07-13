@@ -1,0 +1,314 @@
+{
+  "aggregate": {
+    "allocationCallsitesDeltaPercent": -30.855018587360593,
+    "binaryBytesDeltaPercent": 2.8564668769716084,
+    "compileMaxRssKiBDeltaPercent": 9.78255308262983,
+    "compileSecondsDeltaPercent": 4.448742746615086,
+    "releaseCallsitesDeltaPercent": 58400.0,
+    "retainCallsitesDeltaPercent": 3833.3333333333335,
+    "throughputGeomeanPercent": 131.91461316229768
+  },
+  "baseline": {
+    "allocationCallsites": 269,
+    "binaryBytes": 507200,
+    "compileMaxRssKiB": 547260,
+    "compileSeconds": 10.34,
+    "compiler": "/home/olfa/codex-kotlin-arc-ci2-bench-baseline-v1.9.10/kotlin-native/dist/bin/konanc",
+    "compilerCommit": "3db61efe5e892bf27115f1ebcab957d903067ed4",
+    "memoryModel": "strict",
+    "model": "baseline-strict",
+    "releaseCallsites": 0,
+    "retainCallsites": 12
+  },
+  "candidate": {
+    "allocationCallsites": 186,
+    "binaryBytes": 521688,
+    "compileMaxRssKiB": 600796,
+    "compileSeconds": 10.8,
+    "compiler": "/home/olfa/codex-kotlin-rust/.git/codex-arc-benchmark-cache-v2/candidate/01531f695c40370a660662fd6867433e2e9c37a69a9d1557b66c0056b0defaed/dist/bin/konanc",
+    "compilerCommit": "3c0eba1d56a87e7e71d3d32b69b04f30f146e38a",
+    "memoryModel": "arc",
+    "model": "candidate-arc",
+    "releaseCallsites": 584,
+    "retainCallsites": 472
+  },
+  "failures": [],
+  "passed": true,
+  "raw": {
+    "compilation": [
+      {
+        "compileMaxRssKiB": 543260,
+        "compileSeconds": 10.37,
+        "model": "baseline-strict",
+        "repetition": 1
+      },
+      {
+        "compileMaxRssKiB": 689624,
+        "compileSeconds": 10.8,
+        "model": "candidate-arc",
+        "repetition": 1
+      },
+      {
+        "compileMaxRssKiB": 590648,
+        "compileSeconds": 10.86,
+        "model": "candidate-arc",
+        "repetition": 2
+      },
+      {
+        "compileMaxRssKiB": 547260,
+        "compileSeconds": 10.34,
+        "model": "baseline-strict",
+        "repetition": 2
+      },
+      {
+        "compileMaxRssKiB": 574768,
+        "compileSeconds": 10.29,
+        "model": "baseline-strict",
+        "repetition": 3
+      },
+      {
+        "compileMaxRssKiB": 600796,
+        "compileSeconds": 10.67,
+        "model": "candidate-arc",
+        "repetition": 3
+      }
+    ],
+    "runtime": [
+      {
+        "elapsedSeconds": 0.113059753,
+        "logicalAllocations": 900000,
+        "maxRssKiB": 2688,
+        "model": "candidate-arc",
+        "operations": 300000,
+        "repetition": 1,
+        "scenario": "coroutines",
+        "throughputOpsPerSecond": 2653464.137676
+      },
+      {
+        "elapsedSeconds": 0.147405372,
+        "logicalAllocations": 900000,
+        "maxRssKiB": 3712,
+        "model": "baseline-strict",
+        "operations": 300000,
+        "repetition": 1,
+        "scenario": "coroutines",
+        "throughputOpsPerSecond": 2035203.981575
+      },
+      {
+        "elapsedSeconds": 0.146357781,
+        "logicalAllocations": 900000,
+        "maxRssKiB": 3712,
+        "model": "baseline-strict",
+        "operations": 300000,
+        "repetition": 2,
+        "scenario": "coroutines",
+        "throughputOpsPerSecond": 2049771.44331
+      },
+      {
+        "elapsedSeconds": 0.111391704,
+        "logicalAllocations": 900000,
+        "maxRssKiB": 2688,
+        "model": "candidate-arc",
+        "operations": 300000,
+        "repetition": 2,
+        "scenario": "coroutines",
+        "throughputOpsPerSecond": 2693198.768196
+      },
+      {
+        "elapsedSeconds": 0.111039793,
+        "logicalAllocations": 900000,
+        "maxRssKiB": 2688,
+        "model": "candidate-arc",
+        "operations": 300000,
+        "repetition": 3,
+        "scenario": "coroutines",
+        "throughputOpsPerSecond": 2701734.143182
+      },
+      {
+        "elapsedSeconds": 0.147642327,
+        "logicalAllocations": 900000,
+        "maxRssKiB": 3712,
+        "model": "baseline-strict",
+        "operations": 300000,
+        "repetition": 3,
+        "scenario": "coroutines",
+        "throughputOpsPerSecond": 2031937.629918
+      },
+      {
+        "elapsedSeconds": 0.148104986,
+        "logicalAllocations": 900000,
+        "maxRssKiB": 3712,
+        "model": "baseline-strict",
+        "operations": 300000,
+        "repetition": 4,
+        "scenario": "coroutines",
+        "throughputOpsPerSecond": 2025590.144548
+      },
+      {
+        "elapsedSeconds": 0.120984772,
+        "logicalAllocations": 900000,
+        "maxRssKiB": 2688,
+        "model": "candidate-arc",
+        "operations": 300000,
+        "repetition": 4,
+        "scenario": "coroutines",
+        "throughputOpsPerSecond": 2479650.910116
+      },
+      {
+        "elapsedSeconds": 0.110598698,
+        "logicalAllocations": 900000,
+        "maxRssKiB": 2688,
+        "model": "candidate-arc",
+        "operations": 300000,
+        "repetition": 5,
+        "scenario": "coroutines",
+        "throughputOpsPerSecond": 2712509.328094
+      },
+      {
+        "elapsedSeconds": 0.150172531,
+        "logicalAllocations": 900000,
+        "maxRssKiB": 3712,
+        "model": "baseline-strict",
+        "operations": 300000,
+        "repetition": 5,
+        "scenario": "coroutines",
+        "throughputOpsPerSecond": 1997702.229578
+      },
+      {
+        "elapsedSeconds": 0.149924531,
+        "logicalAllocations": 900000,
+        "maxRssKiB": 3712,
+        "model": "baseline-strict",
+        "operations": 300000,
+        "repetition": 6,
+        "scenario": "coroutines",
+        "throughputOpsPerSecond": 2001006.759861
+      },
+      {
+        "elapsedSeconds": 0.112024102,
+        "logicalAllocations": 900000,
+        "maxRssKiB": 2560,
+        "model": "candidate-arc",
+        "operations": 300000,
+        "repetition": 6,
+        "scenario": "coroutines",
+        "throughputOpsPerSecond": 2677995.133583
+      },
+      {
+        "elapsedSeconds": 0.115317589,
+        "logicalAllocations": 900000,
+        "maxRssKiB": 2688,
+        "model": "candidate-arc",
+        "operations": 300000,
+        "repetition": 7,
+        "scenario": "coroutines",
+        "throughputOpsPerSecond": 2601511.205719
+      },
+      {
+        "elapsedSeconds": 0.150009968,
+        "logicalAllocations": 900000,
+        "maxRssKiB": 3712,
+        "model": "baseline-strict",
+        "operations": 300000,
+        "repetition": 7,
+        "scenario": "coroutines",
+        "throughputOpsPerSecond": 1999867.102165
+      },
+      {
+        "elapsedSeconds": 0.15484441,
+        "logicalAllocations": 900000,
+        "maxRssKiB": 3712,
+        "model": "baseline-strict",
+        "operations": 300000,
+        "repetition": 8,
+        "scenario": "coroutines",
+        "throughputOpsPerSecond": 1937428.674371
+      },
+      {
+        "elapsedSeconds": 0.111982818,
+        "logicalAllocations": 900000,
+        "maxRssKiB": 2688,
+        "model": "candidate-arc",
+        "operations": 300000,
+        "repetition": 8,
+        "scenario": "coroutines",
+        "throughputOpsPerSecond": 2678982.413177
+      },
+      {
+        "elapsedSeconds": 0.113561765,
+        "logicalAllocations": 900000,
+        "maxRssKiB": 2688,
+        "model": "candidate-arc",
+        "operations": 300000,
+        "repetition": 9,
+        "scenario": "coroutines",
+        "throughputOpsPerSecond": 2641734.213976
+      },
+      {
+        "elapsedSeconds": 0.149804563,
+        "logicalAllocations": 900000,
+        "maxRssKiB": 3712,
+        "model": "baseline-strict",
+        "operations": 300000,
+        "repetition": 9,
+        "scenario": "coroutines",
+        "throughputOpsPerSecond": 2002609.226262
+      }
+    ]
+  },
+  "scenarios": [
+    {
+      "baselineMedianSeconds": 0.149804563,
+      "baselineMedianThroughput": 2002609.226262,
+      "baselinePeakRssKiB": 3712,
+      "candidateMedianSeconds": 0.112024102,
+      "candidateMedianThroughput": 2677995.133583,
+      "candidatePeakRssKiB": 2688,
+      "latencyDeltaPercent": -24.193387220120933,
+      "logicalAllocations": 900000,
+      "pairedLatencyRatios": [
+        0.7669988648717633,
+        0.7610917796027531,
+        0.7520864460501222,
+        0.816885206011903,
+        0.7364775519432378,
+        0.747203284564552,
+        0.7687328418068858,
+        0.7231957421000862,
+        0.7580661277987907
+      ],
+      "pairedRssRatios": [
+        0.7241379310344828,
+        0.7241379310344828,
+        0.7241379310344828,
+        0.7241379310344828,
+        0.7241379310344828,
+        0.6896551724137931,
+        0.7241379310344828,
+        0.7241379310344828,
+        0.7241379310344828
+      ],
+      "pairedThroughputRatios": [
+        1.3037828943428766,
+        1.313901985016917,
+        1.3296343861159903,
+        1.2241622110919785,
+        1.3578146372029618,
+        1.3383238814090896,
+        1.3008420424050564,
+        1.3827515038956213,
+        1.319146131622977
+      ],
+      "passed": true,
+      "rssDeltaPercent": -27.586206896551722,
+      "scenario": "coroutines",
+      "throughputRatioPercent": 131.91461316229768
+    }
+  ],
+  "thresholds": {
+    "rssLimitPercent": 5.0,
+    "scenarioRegressionPercent": 5.0,
+    "sizeLimitPercent": 5.0,
+    "throughputFloorPercent": 100.0
+  }
+}

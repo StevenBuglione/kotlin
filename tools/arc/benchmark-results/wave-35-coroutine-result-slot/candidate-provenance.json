@@ -1,0 +1,19 @@
+{
+  "benchmarkJavaOpts": "-XX:ReservedCodeCacheSize=256m",
+  "benchmarkJvmEnvironment": {
+    "JAVA_HOME": "/usr/lib/jvm/java-17-openjdk-amd64",
+    "JAVA_OPTS": "-XX:ReservedCodeCacheSize=256m",
+    "JAVA_TOOL_OPTIONS": ""
+  },
+  "benchmarkJvmTools": [
+    "konanc",
+    "cinterop"
+  ],
+  "cacheKey": "01531f695c40370a660662fd6867433e2e9c37a69a9d1557b66c0056b0defaed",
+  "cacheLeaseId": "40571ecb1b909ab7233fc0e713c85f4c3afbe87d1fbcae7487ad8f7eb85d3225",
+  "cacheRoot": "/home/olfa/codex-kotlin-rust/.git/codex-arc-benchmark-cache-v2",
+  "commit": "3c0eba1d56a87e7e71d3d32b69b04f30f146e38a",
+  "role": "candidate",
+  "source": "/home/olfa/codex-kotlin-arc-ci2-bench",
+  "tree": "e9a11e2e89548f3c25cef353cc86aeb003ad9833"
+}

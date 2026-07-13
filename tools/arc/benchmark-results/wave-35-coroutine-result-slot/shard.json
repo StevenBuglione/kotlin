@@ -1,0 +1,19 @@
+{
+  "baselineCommit": "3db61efe5e892bf27115f1ebcab957d903067ed4",
+  "baselineTree": "c1771ad840cc5e08506c522bf7ff8160d3537f39",
+  "candidateCommit": "3c0eba1d56a87e7e71d3d32b69b04f30f146e38a",
+  "candidateRuntimePatchBase": "0a2965b6e7a56f3bb074712d37e3cf455812a2e3",
+  "candidateRuntimePatchSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "candidateRuntimeTree": "57e7347375d61866e06a4b6446999974e923f501",
+  "candidateTree": "e9a11e2e89548f3c25cef353cc86aeb003ad9833",
+  "correctnessGate": "exact-output-before-warmup-or-timing",
+  "hostname": "posidon",
+  "machineProfile": "unspecified",
+  "pairing": "same-host-scenario-balanced-deterministic-paired-ab",
+  "scenarios": [
+    "coroutines"
+  ],
+  "schemaVersion": 2,
+  "shardCount": 1,
+  "shardId": "full"
+}
