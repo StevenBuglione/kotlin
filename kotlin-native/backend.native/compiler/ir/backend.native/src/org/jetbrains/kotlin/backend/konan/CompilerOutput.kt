@@ -8,6 +8,9 @@ import llvm.*
 import org.jetbrains.kotlin.backend.konan.driver.PhaseContext
 import org.jetbrains.kotlin.backend.konan.llvm.*
 import org.jetbrains.kotlin.backend.konan.llvm.objc.patchObjCRuntimeModule
+import org.jetbrains.kotlin.backend.konan.ir.konanLibrary
+import org.jetbrains.kotlin.backend.konan.optimizations.countArcSelectiveInlineTags
+import org.jetbrains.kotlin.backend.konan.optimizations.shouldRunArcSelectiveInlining
 import org.jetbrains.kotlin.konan.file.isBitcode
 import org.jetbrains.kotlin.konan.library.KONAN_STDLIB_NAME
 import org.jetbrains.kotlin.konan.target.CompilerOutputKind
@@ -126,9 +129,23 @@ private fun collectLlvmModules(generationState: NativeGenerationState, generated
                     .takeIf { generationState.shouldLinkRuntimeNativeLibraries }.orEmpty()
     )
     val additionalModules = parseBitcodeFiles(additionalBitcodeFiles)
+    val arcSelectiveInlineCompanion = if (
+        generationState.shouldRunArcSelectiveInlining() &&
+        countArcSelectiveInlineTags(generationState.llvm.module) > 0
+    ) {
+        val stdlib = requireNotNull(generationState.context.stdlibModule.konanLibrary) {
+            "ARC selective inlining requires the Kotlin/Native stdlib"
+        }
+        generationState.config.cachedLibraries.getLibraryCache(stdlib)?.let { cache ->
+            val path = requireNotNull(cache.arcSelectiveInlineCompanionPath) {
+                "The ARC stdlib cache has no selective-inline companion; rebuild the ARC cache"
+            }
+            parseBitcodeFiles(listOf(path)).single()
+        }
+    } else null
     return LlvmModules(
             runtimeModules.ifNotEmpty { this + generationState.generateRuntimeConstantsModule() } ?: emptyList(),
-            additionalModules + listOfNotNull(patchObjCRuntimeModule(generationState))
+            additionalModules + listOfNotNull(arcSelectiveInlineCompanion, patchObjCRuntimeModule(generationState))
     )
 }
 

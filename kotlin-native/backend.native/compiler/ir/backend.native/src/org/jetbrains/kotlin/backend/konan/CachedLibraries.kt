@@ -42,12 +42,14 @@ class CachedLibraries(
         val serializedInlineFunctionBodies by lazy { computeSerializedInlineFunctionBodies() }
         val serializedClassFields by lazy { computeSerializedClassFields() }
         val serializedEagerInitializedFiles by lazy { computeSerializedEagerInitializedFiles() }
+        val arcSelectiveInlineCompanionPath by lazy { computeArcSelectiveInlineCompanionPath() }
 
         protected abstract fun computeBitcodeDependencies(): List<DependenciesTracker.UnresolvedDependency>
         protected abstract fun computeBinariesPaths(): List<String>
         protected abstract fun computeSerializedInlineFunctionBodies(): List<SerializedInlineFunctionReference>
         protected abstract fun computeSerializedClassFields(): List<SerializedClassFields>
         protected abstract fun computeSerializedEagerInitializedFiles(): List<SerializedEagerInitializedFile>
+        protected abstract fun computeArcSelectiveInlineCompanionPath(): String?
 
         protected fun Kind.toCompilerOutputKind(): CompilerOutputKind = when (this) {
             Kind.DYNAMIC -> CompilerOutputKind.DYNAMIC_CACHE
@@ -81,6 +83,11 @@ class CachedLibraries(
                 val directory = File(path).absoluteFile.parentFile.parentFile
                 val data = directory.child(PER_FILE_CACHE_IR_LEVEL_DIR_NAME).child(EAGER_INITIALIZED_PROPERTIES_FILE_NAME).readBytes()
                 EagerInitializedPropertySerializer.deserializeTo(data, it)
+            }
+
+            override fun computeArcSelectiveInlineCompanionPath(): String? {
+                val file = File(path).absoluteFile.parentFile.child(ARC_SELECTIVE_INLINE_COMPANION_FILE_NAME)
+                return file.absolutePath.takeIf { file.exists }
             }
         }
 
@@ -129,6 +136,8 @@ class CachedLibraries(
                     EagerInitializedPropertySerializer.deserializeTo(data, it)
                 }
             }
+
+            override fun computeArcSelectiveInlineCompanionPath(): String? = null
         }
     }
 
@@ -233,6 +242,7 @@ class CachedLibraries(
         const val PER_FILE_CACHE_BINARY_LEVEL_DIR_NAME = "bin"
 
         const val BITCODE_DEPENDENCIES_FILE_NAME = "bitcode_deps"
+        const val ARC_SELECTIVE_INLINE_COMPANION_FILE_NAME = "arc_selective_inline_v1.bc"
         const val INLINE_FUNCTION_BODIES_FILE_NAME = "inline_bodies"
         const val CLASS_FIELDS_FILE_NAME = "class_fields"
         const val EAGER_INITIALIZED_PROPERTIES_FILE_NAME = "eager_init"

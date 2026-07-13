@@ -261,6 +261,7 @@ internal fun PhaseEngine<NativeGenerationState>.compileModule(module: IrModuleFr
     }
     if (context.config.produce.isCache) {
         runPhase(SaveAdditionalCacheInfoPhase)
+        runPhase(SaveArcSelectiveInlineCompanionPhase)
     }
     runPhase(WriteBitcodeFilePhase, WriteBitcodeFileInput(context.llvm.module, bitcodeFile))
 }

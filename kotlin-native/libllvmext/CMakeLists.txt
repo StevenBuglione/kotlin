@@ -40,10 +40,15 @@ endif ()
 set(SRC_DIR ${CMAKE_SOURCE_DIR}/src)
 include_directories(${LLVM_INCLUDE_DIRS})
 include_directories(${SRC_DIR}/main/include)
+add_definitions(${LLVM_DEFINITIONS})
+if (NOT LLVM_ENABLE_RTTI)
+    add_compile_options(-fno-rtti)
+endif ()
 
 add_library(libllvmext
         ${SRC_DIR}/main/cpp/ArcFrameElision.cpp
         ${SRC_DIR}/main/cpp/ArcReturnUpdateCoalescing.cpp
+        ${SRC_DIR}/main/cpp/ArcSelectiveInlining.cpp
         ${SRC_DIR}/main/cpp/CoverageMappingC.cpp
         ${SRC_DIR}/main/cpp/CAPIExtensions.cpp)
 
@@ -52,7 +57,9 @@ if (KONAN_LLVMEXT_BUILD_TESTS)
     enable_testing()
     add_executable(ArcReturnUpdateCoalescingTest
             ${SRC_DIR}/test/cpp/ArcReturnUpdateCoalescingTest.cpp)
-    llvm_map_components_to_libnames(LLVM_TEST_LIBS core asmparser support)
+    add_executable(ArcSelectiveInliningTest
+            ${SRC_DIR}/test/cpp/ArcSelectiveInliningTest.cpp)
+    llvm_map_components_to_libnames(LLVM_TEST_LIBS core asmparser support transformutils ipo analysis)
     if (CMAKE_SYSTEM_NAME MATCHES Linux)
         # The prebuilt LLVM package names zlib as `z`, but minimal Linux builders
         # may expose only the versioned runtime library. Preserve every other
@@ -66,5 +73,7 @@ if (KONAN_LLVMEXT_BUILD_TESTS)
         set_property(TARGET LLVMSupport PROPERTY INTERFACE_LINK_LIBRARIES ${LLVM_SUPPORT_LIBS})
     endif ()
     target_link_libraries(ArcReturnUpdateCoalescingTest PRIVATE libllvmext ${LLVM_TEST_LIBS})
+    target_link_libraries(ArcSelectiveInliningTest PRIVATE libllvmext ${LLVM_TEST_LIBS})
     add_test(NAME ArcReturnUpdateCoalescingTest COMMAND ArcReturnUpdateCoalescingTest)
+    add_test(NAME ArcSelectiveInliningTest COMMAND ArcSelectiveInliningTest)
 endif ()

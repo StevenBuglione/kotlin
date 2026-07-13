@@ -30,6 +30,7 @@ native {
     val llvmDir = project.findProperty("llvmDir")
     val cxxflags = mutableListOf(
         "--std=c++17",
+        "-fno-rtti",
         "-I${llvmDir}/include",
         "-Isrc/main/include"
     )

@@ -28,6 +28,8 @@ import org.jetbrains.kotlin.backend.konan.optimizations.removeMultipleThreadData
 import org.jetbrains.kotlin.backend.konan.optimizations.removeEmptyArcFrames
 import org.jetbrains.kotlin.backend.konan.optimizations.restoreArcFrameElision
 import org.jetbrains.kotlin.backend.konan.optimizations.sealArcFrameElisionForLTO
+import org.jetbrains.kotlin.backend.konan.optimizations.inlineArcSelectiveCalls
+import org.jetbrains.kotlin.backend.konan.optimizations.shouldRunArcSelectiveInlining
 import org.jetbrains.kotlin.konan.target.SanitizerKind
 import org.jetbrains.kotlin.konan.target.KonanTarget
 import java.io.File
@@ -88,6 +90,19 @@ internal val MandatoryBitcodeLLVMPostprocessingPhase = optimizationPipelinePass(
         description = "Mandatory bitcode llvm postprocessing",
         pipeline = ::MandatoryOptimizationPipeline,
 )
+
+internal val SelectiveArcGeneratedInliningPhase = createSimpleNamedCompilerPhase<OptimizationState, LLVMModuleRef>(
+        name = "SelectiveArcGeneratedInlining",
+        description = "Inline explicitly tagged ARC calls from private stdlib companion bodies",
+        postactions = getDefaultLlvmModuleActions(),
+) { context, module ->
+    val result = inlineArcSelectiveCalls(module)
+    context.log {
+        "ARC selective inlining: tagged=${result.tagged}, inlined=${result.inlined}, " +
+                "rejected=${result.rejected}, missingBody=${result.missingBody}, " +
+                "budgetSkipped=${result.budgetSkipped}, failures=${result.inlineFailures}"
+    }
+}
 
 internal val ModuleBitcodeOptimizationPhase = optimizationPipelinePass(
         name = "ModuleBitcodeOptimization",
@@ -201,6 +216,11 @@ internal fun <T : BitcodePostProcessingContext> PhaseEngine<T>.runBitcodePostPro
             context.config.optimizationsEnabled
     useContext(OptimizationState(context.config, optimizationConfig)) {
         val module = this@runBitcodePostProcessing.context.llvmModule
+        it.runPhase(
+                SelectiveArcGeneratedInliningPhase,
+                module,
+                disable = !context.shouldRunArcSelectiveInlining(),
+        )
         it.runPhase(MandatoryBitcodeLLVMPostprocessingPhase, module)
         var arcFrameElisionActive = arcFrameElisionRequested && prepareArcFrameElision(module)
         var removedArcFrames = 0
